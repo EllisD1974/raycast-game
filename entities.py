@@ -52,8 +52,24 @@ class Entities:
                 self.items.append(Item(e, world.floor_of(e.span, e.x, e.y) + e.lift))
 
     def sprites(self):
-        """(x, y, z, size, tile) of every item that is there, for the renderer."""
-        return [(i.entity.x, i.entity.y, i.z, i.entity.size, i.entity.tile) for i in self.items if i.present]
+        """(x, y, z, size, tile, spin) of every item that is there, for the renderer. Animations are
+        applied here: a float adds a bob to the height, a rotate sets the spin angle in radians."""
+        out = []
+        for item in self.items:
+            if not item.present:
+                continue
+            e = item.entity
+            z, spin = item.z, 0.0
+            # (a phase from the position keeps neighbouring items from moving in lockstep)
+            phase = (e.x * 7.13 + e.y * 3.71) % 1.0
+            for a in e.animations:
+                t = (self.clock * a.speed + phase) * math.tau
+                if a.kind == "float":
+                    z += a.amount * (1.0 + math.sin(t))     # 0 .. 2*amount above its rest height
+                elif a.kind == "rotate":
+                    spin += t
+            out.append((e.x, e.y, z, e.size, e.tile, spin))
+        return out
 
     @staticmethod
     def _touched(item, player):

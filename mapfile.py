@@ -39,7 +39,7 @@ touches a neighbouring cell's room on the higher floor, which is how you step ac
 """
 import json
 import os
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 
 from constants import PLAYER_HEIGHT
 
@@ -62,6 +62,27 @@ _UPPER_DEFAULTS = {"floor_tex": 3, "ceil_tex": 6, "floor_h": 0.0, "ceil_h": 0.0,
 ENTITY_MODES = ("once", "respawn", "persistent")
 ENTITY_EFFECTS = ("none", "score", "health")
 MODE_LABELS = {"once": "Pick up once", "respawn": "Respawns", "persistent": "Stays"}
+EFFECT_LABELS = {"none": "None", "score": "Score", "health": "Health"}
+ANIMATION_KINDS = ("float", "rotate")
+ANIMATION_LABELS = {"float": "Float", "rotate": "Rotate"}
+
+
+@dataclass
+class Animation:
+    """One motion an item plays all the time. An item has a list of them, and each has its own settings.
+
+    float    bobs gently up and down: `speed` is bobs per second, `amount` how far it rises (in cells)
+    rotate   spins around its vertical axis: `speed` is turns per second (`amount` is not used)"""
+    kind: str = "float"
+    speed: float = 0.5
+    amount: float = 0.1
+
+    @classmethod
+    def from_dict(cls, data):
+        base = cls()
+        kind = data.get("kind") if data.get("kind") in ANIMATION_KINDS else base.kind
+        return cls(kind, max(0.0, float(data.get("speed", base.speed))),
+                   max(0.0, float(data.get("amount", base.amount))))
 
 
 @dataclass
@@ -80,7 +101,8 @@ class Entity:
     amount   size of the effect
     respawn  seconds until a respawning item comes back
     size     sprite height in world units (it is as wide as it is tall)
-    lift     height of the sprite's bottom above the floor"""
+    lift     height of the sprite's bottom above the floor
+    animations  list of Animation (none by default): float and / or rotate, each with its own speed"""
     x: float
     y: float
     span: int = 0
@@ -91,6 +113,12 @@ class Entity:
     respawn: float = 10.0
     size: float = 0.4
     lift: float = 0.0
+    animations: list = field(default_factory=list)
+
+    def clone(self, **changes):
+        """A copy that shares nothing with this entity (its animations are copied too)."""
+        changes.setdefault("animations", [replace(a) for a in self.animations])
+        return replace(self, **changes)
 
     @classmethod
     def from_dict(cls, data):
@@ -104,7 +132,9 @@ class Entity:
                        amount=float(data.get("amount", base.amount)),
                        respawn=max(0.0, float(data.get("respawn", base.respawn))),
                        size=max(0.05, float(data.get("size", base.size))),
-                       lift=float(data.get("lift", base.lift)))
+                       lift=float(data.get("lift", base.lift)),
+                       animations=[Animation.from_dict(a) for a in data.get("animations", [])
+                                   if isinstance(a, dict)])
 
 
 def grid_name(layer, floor):
@@ -170,7 +200,7 @@ class Level:
     def copy(self):
         return Level({k: [row[:] for row in g] for k, g in self.grids.items()},
                      self.start_x, self.start_y, self.start_angle, self.start_span, self.names,
-                     [replace(e) for e in self.entities])
+                     [e.clone() for e in self.entities])
 
     # ----------------------------------------------------------- floors
 
@@ -215,7 +245,7 @@ class Level:
         for layer in SPAN_LAYERS:
             del self.grids[grid_name(layer, self.floor_count - 1)]
         del self.names[floor]
-        self.entities = [replace(e, span=e.span - 1 if e.span > floor else e.span)
+        self.entities = [e.clone(span=e.span - 1 if e.span > floor else e.span)
                          for e in self.entities if e.span != floor]
         wall_floor = self.grids["wall_floor"]
         for row in wall_floor:                      # walls that began above the removed floor follow it down
@@ -414,7 +444,7 @@ class Level:
             ]
         self.start_x = min(max(self.start_x + left, 0.5), width - 0.5)
         self.start_y = min(max(self.start_y + top, 0.5), height - 0.5)
-        self.entities = [replace(e, x=e.x + left, y=e.y + top) for e in self.entities
+        self.entities = [e.clone(x=e.x + left, y=e.y + top) for e in self.entities
                          if 0 <= e.x + left < width and 0 <= e.y + top < height]
         return left, top
 

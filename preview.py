@@ -152,6 +152,8 @@ class Preview:
         Called every frame, even with no keys, so the camera falls and settles like a player."""
         if not self.ready:
             return
+        if self.items is not None:
+            self.items.clock += dt                      # items animate in the editor's 3D view too
         jump, self.jump_pending = self.jump_pending, False
         physics.step(self.world, self.player, forward, strafe, turn, jump, min(dt, 0.05), sprint)
 

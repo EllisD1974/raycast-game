@@ -55,13 +55,17 @@ editing; click it again to rotate), T stairs (drag a line on the FloorH layer: h
 the Step each cell, starting at the brush value). Ctrl+Z / Ctrl+Y undo / redo, Ctrl+S save,
 F5 save and play, Home reset view, Tab / Shift+Tab switch floor, F2 rename floor.
 
-Items (the Entity tool, N): pick a sprite tile in the atlas, set the Item buttons in the second
-row, and click a cell to put an item in the middle of it on the floor you are editing (right click
-removes one; clicking an occupied cell replaces it). Mode: "Pick up once" (touching it gives the
-effect and it is gone), "Respawns" (gone, then back after the set seconds) or "Stays" (touching
-gives the effect each visit but it is never removed). Effect: none, score or health, with an
-amount; Size and Lift set how big the sprite is and how far it floats above the floor. Items show
-on the map ringed white / cyan / green by mode, and in the 3D view as sprites that face you.
+Items (the Entity tool, N): click an empty cell to add an item there (in the middle of the cell, on
+the floor you are editing), or click an existing item to select it. A selected item opens the
+Details pane, docked beside the map, where you change it in place: Sprite (or click a tile in the
+atlas), Mode ("Pick up once": touching it gives the effect and it is gone; "Respawns": gone, then
+back after the set seconds; "Stays": the effect counts each visit but it is never removed),
+Effect (a drop-down list: none, score or health) and its Amount, Size, and Lift (how far it floats
+above the floor). "+ Add animation" adds a Float and / or Rotate animation; each one in the list
+has its own speed (and Float its height) and an x to remove it. Values step with - / +, the wheel
+over a row, or by clicking the number and typing. Esc closes the pane, Delete or the Delete button
+removes the item (so does right click on it). Items show on the map ringed white / cyan / green by
+mode, and in the 3D view as sprites that face you.
 
 The 3D view (V or the 3D button shows and hides it) is a live picture of the level at the right of
 the window, drawn by the game's own renderer, and it follows every edit as you make it, even
@@ -77,7 +81,6 @@ ring when the start is on another floor), red outlines on problem cells, faded f
 ramp arrows and height colours.
 """
 import math
-from dataclasses import replace
 import os
 import subprocess
 import sys
@@ -87,8 +90,9 @@ import pygame
 
 from atlas import ATLAS_PATH, atlas_array, transparent_tiles, unpack_atlas
 from constants import HEIGHT, MOUSE_SENSITIVITY, PLAYER_HEIGHT, TILE, WIDTH
-from mapfile import (DEFAULTS, EDIT_LAYERS, ENTITY_EFFECTS, ENTITY_MODES, MAP_PATH, MAX_NAME_LENGTH, MIN_WALL_GAP,
-                     MODE_LABELS, Entity, Level, default_level,
+from mapfile import (ANIMATION_KINDS, ANIMATION_LABELS, DEFAULTS, EDIT_LAYERS, EFFECT_LABELS, ENTITY_EFFECTS,
+                     ENTITY_MODES, MAP_PATH, MAX_NAME_LENGTH, MIN_WALL_GAP, MODE_LABELS, Animation, Entity, Level,
+                     default_level,
                      grid_name, load_level, save_level, split_grid_name)
 import details
 from details import PANE_WIDTH, Field
@@ -266,6 +270,7 @@ class Editor:
         self.entity_brush = Entity(0.0, 0.0, tile=ENTITY_FIRST_TILE)   # settings new items start with
         self.selected = None                    # index in level.entities of the selected item, or None
         self.field_edit = None                  # [field key, text] while a number is typed in the Details pane
+        self.menu_open = None                   # key of the Details field whose drop-down list is open
         self.selection = {0}                    # selected atlas tile indices (0-based)
         self.value = {}                         # height brush per stored grid; see brush()
         self.ramp_dir = 1
@@ -392,13 +397,29 @@ class Editor:
 
         fields = [field("tile", "Sprite", "tile", low=0, high=len(self.tiles) - 1),
                   field("mode", "Mode", "enum", choices=ENTITY_MODES, labels=MODE_LABELS),
-                  field("effect", "Effect", "enum", choices=ENTITY_EFFECTS)]
+                  field("effect", "Effect", "enum", choices=ENTITY_EFFECTS, labels=EFFECT_LABELS)]
         if e.effect != "none":
             fields.append(field("amount", "Amount", "num", step=5.0, low=0.0, high=1000.0))
         if e.mode == "respawn":
             fields.append(field("respawn", "Respawn", "num", step=1.0, low=0.0, high=600.0, unit="s"))
         fields += [field("size", "Size", "num", step=0.1, low=0.1, high=3.0),
                    field("lift", "Lift", "num", step=0.1, low=-2.0, high=5.0)]
+        fields.append(Field("animations", "Animations (none)" if not e.animations else "Animations",
+                            "header", None, None))
+        for i, a in enumerate(e.animations):
+            fields.append(Field(f"a{i}", ANIMATION_LABELS[a.kind], "header", None, None,
+                                action=(lambda i=i: self.remove_animation(i))))
+            fields.append(Field(f"a{i}_speed", "Speed", "num", (lambda i=i: e.animations[i].speed),
+                                (lambda v, i=i: self.set_animation(i, "speed", v)),
+                                step=0.1, low=0.0, high=10.0, unit="/s"))
+            if a.kind == "float":
+                fields.append(Field(f"a{i}_amount", "Height", "num", (lambda i=i: e.animations[i].amount),
+                                    (lambda v, i=i: self.set_animation(i, "amount", v)),
+                                    step=0.05, low=0.0, high=2.0))
+        unused = tuple(k for k in ANIMATION_KINDS if k not in {a.kind for a in e.animations})
+        if unused:
+            fields.append(Field("add_animation", "Add animation", "menu", None, self.add_animation,
+                                choices=unused, labels=ANIMATION_LABELS, text_override="+ Add animation"))
         return fields
 
     def details_rows(self):
@@ -414,6 +435,24 @@ class Editor:
         setattr(e, name, value)
         setattr(self.entity_brush, name, value)
 
+    def add_animation(self, kind):
+        e = self.selected_entity()
+        if e is not None and kind in ANIMATION_KINDS and all(a.kind != kind for a in e.animations):
+            self.begin_edit()
+            e.animations.append(Animation(kind))
+
+    def remove_animation(self, index):
+        e = self.selected_entity()
+        if e is not None and 0 <= index < len(e.animations):
+            self.begin_edit()
+            del e.animations[index]
+
+    def set_animation(self, index, name, value):
+        e = self.selected_entity()
+        if e is not None and 0 <= index < len(e.animations) and getattr(e.animations[index], name) != value:
+            self.begin_edit()
+            setattr(e.animations[index], name, value)
+
     def select_entity(self, entity):
         self.field_edit = None
         self.selected = None
@@ -422,7 +461,7 @@ class Editor:
                 self.selected = i
 
     def deselect(self):
-        self.selected, self.field_edit = None, None
+        self.selected, self.field_edit, self.menu_open = None, None, None
 
     def delete_selected(self):
         e = self.selected_entity()
@@ -440,19 +479,37 @@ class Editor:
             return
         for row in rows:
             f = row.field
-            if row.minus.collidepoint(pos):
+            if f.kind == "header":
+                if f.action is not None and row.plus.collidepoint(pos):
+                    f.action()
+            elif f.kind == "menu":
+                if details.menu_anchor(row).collidepoint(pos):
+                    self.menu_open = f.key
+            elif row.minus.collidepoint(pos):
                 f.set(f.stepped(-1))
             elif row.plus.collidepoint(pos):
                 f.set(f.stepped(1))
             elif row.value.collidepoint(pos):
                 if f.kind == "num":
                     self.field_edit = [f.key, f"{f.get():g}"]
+                elif f.kind == "enum":
+                    self.menu_open = f.key              # a drop-down list of the choices
                 else:
                     f.set(f.stepped(1))
 
+    def menu_click(self, pos):
+        """A click while a drop-down list is open: pick the choice under it; any click closes the list."""
+        key, self.menu_open = self.menu_open, None
+        for row in self.details_rows():
+            if row.field.key == key:
+                for rect, choice in details.menu_rects(row):
+                    if rect.collidepoint(pos):
+                        row.field.set(choice)
+                        return
+
     def details_wheel(self, pos, notches):
         for row in self.details_rows():
-            if row.rect.collidepoint(pos):
+            if row.rect.collidepoint(pos) and row.field.kind in ("num", "enum", "tile"):
                 row.field.set(row.field.stepped(1 if notches > 0 else -1, abs(notches)))
                 return
 
@@ -858,7 +915,8 @@ class Editor:
             self.say("An item needs an open floor to stand on: no room in this cell on this floor")
             return
         self.begin_edit()
-        level.entities.append(replace(self.entity_brush, x=cell[0] + 0.5, y=cell[1] + 0.5, span=self.floor))
+        level.entities.append(self.entity_brush.clone(x=cell[0] + 0.5, y=cell[1] + 0.5, span=self.floor,
+                                                      animations=[]))
         self.select_entity(level.entities[-1])
         self.say("Added an item: change its settings in the Details pane")
 
@@ -997,7 +1055,7 @@ class Editor:
         """Keep the edited floor valid after the level changed (undo, reload, new map)."""
         self.floor = max(0, min(self.floor, self.level.floor_count - 1))
         self.rename = None
-        self.field_edit = None
+        self.field_edit = self.menu_open = None
         if self.selected_entity() is None:
             self.selected = None
         self.dropdown_open = False
@@ -1274,6 +1332,8 @@ class Editor:
         if e.key == pygame.K_ESCAPE:
             if self.dropdown_open:
                 self.dropdown_open = False
+            elif self.menu_open is not None:
+                self.menu_open = None
             elif self.selected_entity() is not None:
                 self.deselect()
             else:
@@ -1324,6 +1384,12 @@ class Editor:
             return
         if self.field_edit is not None:                 # ... and the typed number
             self.finish_field_edit(True)
+        if self.menu_open is not None:                  # an open drop-down list takes the next click
+            if e.button == 1:
+                self.menu_click(e.pos)
+            else:
+                self.menu_open = None
+            return
         pane = self.details_rect()
         if pane is not None and pane.collidepoint(e.pos) and e.pos[1] >= TOOLBAR_H:
             if e.button == 1:
@@ -1564,7 +1630,7 @@ class Editor:
                  "Click an atlas tile: sets the sprite.",
                  "Esc closes this; Del removes the item.")
         details.draw(screen, rect, "Item", self.details_rows(), theme, (self.font, self.small),
-                     editing=self.field_edit, hover=self.mouse, tile_surface=lambda i: self.tiles[max(0, min(i, len(self.tiles) - 1))],
+                     editing=self.field_edit, hover=self.mouse, open_menu=self.menu_open, tile_surface=lambda i: self.tiles[max(0, min(i, len(self.tiles) - 1))],
                      notes=notes)
 
     def draw_entities(self, screen):

@@ -28,7 +28,18 @@ editor use the Entity tool (N); each item has a mode and an effect:
 | Respawns | gives its effect, disappears, and comes back after a set time |
 | Stays | gives its effect and stays; it counts again only after you step away and return |
 
-Effects are none, score or health. Score and health show in the corner of the game view.
+Effects are none, score or health, picked from a drop-down list. Score and health show in the corner
+of the game view.
+
+Items can also move. An item has a list of animations (none by default); add one from the
+Details pane's "+ Add animation" list and each one has its own settings:
+
+| Animation | Settings |
+|---|---|
+| Float | speed (bobs per second) and height (how far it rises) |
+| Rotate | speed (turns per second) |
+
+Add both for an item that floats and spins.
 `maps/items.json` is a small example.
 
 ## Layout

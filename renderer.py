@@ -27,7 +27,7 @@ class Renderer:
 
     def draw(self, world, player, sprites=()):
         """Render the view from `player` and return the WIDTH x HEIGHT picture. `sprites` are
-        (x, y, z, size, tile) items drawn as flat pictures that face the player."""
+        (x, y, z, size, tile[, spin]) items drawn as flat pictures that face the player."""
         dir_x, dir_y = math.cos(player.angle), math.sin(player.angle)
         plane_x, plane_y = -dir_y * self.half_fov_tan, dir_x * self.half_fov_tan
         render_scene_depth(
@@ -39,12 +39,13 @@ class Renderer:
             self.textures, MAX_DEPTH, FOG_DIST, BACKGROUND)
         if sprites:
             far_first = sorted(sprites, key=lambda s: -((s[0] - player.x) ** 2 + (s[1] - player.y) ** 2))
-            cols = np.array(far_first, np.float64).reshape(-1, 5)
+            cols = np.array([tuple(s) + (0.0,) * (6 - len(s)) for s in far_first], np.float64).reshape(-1, 6)
             draw_sprites(self.framebuffer, self.depth, player.x, player.y, player.eye_z, dir_x, dir_y,
                          plane_x, plane_y, self.horizon(player), self.focal,
                          np.ascontiguousarray(cols[:, 0]), np.ascontiguousarray(cols[:, 1]),
                          np.ascontiguousarray(cols[:, 2]), np.ascontiguousarray(cols[:, 3]),
-                         np.clip(cols[:, 4], 0, len(self.textures) - 1).astype(np.int64), self.textures, MAX_DEPTH, FOG_DIST)
+                         np.clip(cols[:, 4], 0, len(self.textures) - 1).astype(np.int64),
+                         np.ascontiguousarray(cols[:, 5]), self.textures, MAX_DEPTH, FOG_DIST)
         pygame.surfarray.blit_array(self.surface, self.framebuffer)
         return self.surface
 

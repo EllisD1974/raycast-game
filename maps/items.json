@@ -5,10 +5,10 @@
   "floors": ["Floor 1"],
   "start": {"x": 1.5, "y": 4.5, "angle": 0.0, "span": 0},
   "entities": [
-    {"x": 4.5, "y": 4.5, "span": 0, "tile": 10, "mode": "once", "effect": "score", "amount": 10, "respawn": 10.0, "size": 0.4, "lift": 0.0},
-    {"x": 6.5, "y": 4.5, "span": 0, "tile": 11, "mode": "respawn", "effect": "health", "amount": 25, "respawn": 10, "size": 0.35, "lift": 0.0},
-    {"x": 5.5, "y": 6.5, "span": 0, "tile": 12, "mode": "persistent", "effect": "score", "amount": 1, "respawn": 10.0, "size": 0.4, "lift": 0.1},
-    {"x": 7.5, "y": 2.5, "span": 0, "tile": 13, "mode": "once", "effect": "none", "amount": 10.0, "respawn": 10.0, "size": 0.4, "lift": 0.0}
+    {"x": 4.5, "y": 4.5, "span": 0, "tile": 10, "mode": "once", "effect": "score", "amount": 10.0, "respawn": 10.0, "size": 0.4, "lift": 0.0, "animations": [{"kind": "float", "speed": 0.6, "amount": 0.08}, {"kind": "rotate", "speed": 0.4, "amount": 0.1}]},
+    {"x": 6.5, "y": 4.5, "span": 0, "tile": 11, "mode": "respawn", "effect": "health", "amount": 25.0, "respawn": 10.0, "size": 0.35, "lift": 0.0, "animations": [{"kind": "float", "speed": 0.8, "amount": 0.05}]},
+    {"x": 5.5, "y": 6.5, "span": 0, "tile": 12, "mode": "persistent", "effect": "score", "amount": 1.0, "respawn": 10.0, "size": 0.4, "lift": 0.1, "animations": [{"kind": "rotate", "speed": 1.0, "amount": 0.1}]},
+    {"x": 7.5, "y": 2.5, "span": 0, "tile": 13, "mode": "once", "effect": "none", "amount": 10.0, "respawn": 10.0, "size": 0.4, "lift": 0.0, "animations": []}
   ],
   "grids": {
     "walls": [

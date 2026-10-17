@@ -14,7 +14,7 @@ import map_editor
 import physics
 from constants import HEIGHT, WIDTH
 from entities import Entities, PlayerStats
-from mapfile import Entity, Level, load_level, save_level
+from mapfile import Animation, Entity, Level, load_level, save_level
 from renderer import Renderer
 from world import World
 
@@ -218,6 +218,19 @@ def pane_row(ed, key):
     return next(r for r in ed.details_rows() if r.field.key == key)
 
 
+def choose(ed, key, choice):
+    """Open a field's drop-down list and click one of its choices."""
+    import details
+    row = pane_row(ed, key)
+    pane_click(ed, details.menu_anchor(row))
+    assert ed.menu_open == key
+    for rect, option in details.menu_rects(row):
+        if option == choice:
+            pane_click(ed, rect)
+            return
+    raise AssertionError(f"{choice} is not in the list for {key}")
+
+
 def pane_click(ed, rect):
     ed.on_mouse_down(pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=rect.center, button=1))
     ed.on_mouse_up(pygame.event.Event(pygame.MOUSEBUTTONUP, pos=rect.center, button=1))
@@ -234,9 +247,9 @@ def test_the_pane_edits_the_selected_item_in_place(ed):
     ed.map_click((6, 6), 1)
     ed.map_click((4, 4), 1)                                     # select the first one again
     first, second = ed.level.entities
-    pane_click(ed, pane_row(ed, "mode").value)                  # clicking an enum value goes to the next choice
+    pane_click(ed, pane_row(ed, "mode").plus)                   # + steps to the next choice
     assert first.mode == "respawn" and second.mode == "once"
-    pane_click(ed, pane_row(ed, "effect").plus)
+    choose(ed, "effect", "health")                              # the effect is picked from a drop-down list
     assert first.effect == "health"
     pane_click(ed, pane_row(ed, "amount").plus)
     pane_click(ed, pane_row(ed, "respawn").plus)                # only shown for respawning items
@@ -252,7 +265,7 @@ def test_the_pane_only_shows_the_fields_that_apply(ed):
     ed.do("tool:entity")
     ed.map_click((4, 4), 1)
     keys = [r.field.key for r in ed.details_rows()]
-    assert keys == ["tile", "mode", "effect", "amount", "size", "lift"]
+    assert keys == ["tile", "mode", "effect", "amount", "size", "lift", "animations", "add_animation"]
     ed.level.entities[0].effect = "none"
     ed.level.entities[0].mode = "respawn"
     keys = [r.field.key for r in ed.details_rows()]
@@ -344,3 +357,142 @@ def test_the_3d_preview_shows_items(ed):
     preview.sync(ed.level, ed.revision, force=True)
     assert len(preview.items.sprites()) == 1
     preview.render()
+
+
+# ------------------------------------------------------------------ drop-downs and animations
+
+def test_a_drop_down_opens_lists_the_choices_and_closes_without_choosing(ed):
+    import details
+    ed.do("tool:entity")
+    ed.map_click((4, 4), 1)
+    row = pane_row(ed, "effect")
+    pane_click(ed, row.value)
+    assert ed.menu_open == "effect" and [c for _r, c in details.menu_rects(row)] == ["none", "score", "health"]
+    ed.draw(pygame.display.get_surface())                       # the open list draws
+    pane_click(ed, pygame.Rect(700, 700, 4, 4))                 # click away: closed, nothing changed
+    assert ed.menu_open is None and ed.level.entities[0].effect == "score"
+    pane_click(ed, row.value)
+    ed.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE, mod=0, unicode=""))
+    assert ed.menu_open is None and ed.selected_entity() is not None      # Esc closes the list first
+    choose(ed, "effect", "none")
+    assert ed.level.entities[0].effect == "none"
+    assert "amount" not in [r.field.key for r in ed.details_rows()]
+
+
+def test_animations_are_none_by_default_and_added_from_a_list(ed):
+    ed.do("tool:entity")
+    ed.map_click((4, 4), 1)
+    e = ed.level.entities[0]
+    assert e.animations == []
+    choose(ed, "add_animation", "float")
+    assert [a.kind for a in e.animations] == ["float"]
+    assert {"a0_speed", "a0_amount"} <= {r.field.key for r in ed.details_rows()}
+    choose(ed, "add_animation", "rotate")
+    assert [a.kind for a in e.animations] == ["float", "rotate"]
+    keys = [r.field.key for r in ed.details_rows()]
+    assert "a1_speed" in keys and "a1_amount" not in keys       # rotating has no height
+    assert "add_animation" not in keys                          # both are in use: nothing left to add
+
+
+def test_each_animation_has_its_own_settings_and_can_be_removed(ed):
+    ed.do("tool:entity")
+    ed.map_click((4, 4), 1)
+    e = ed.level.entities[0]
+    choose(ed, "add_animation", "float")
+    choose(ed, "add_animation", "rotate")
+    pane_click(ed, pane_row(ed, "a0_speed").plus)               # float speed 0.5 -> 0.6
+    pane_click(ed, pane_row(ed, "a1_speed").plus)
+    pane_click(ed, pane_row(ed, "a1_speed").plus)               # rotate speed 0.5 -> 0.7
+    pane_click(ed, pane_row(ed, "a0_amount").plus)
+    assert (e.animations[0].speed, e.animations[1].speed) == (pytest.approx(0.6), pytest.approx(0.7))
+    assert e.animations[0].amount == pytest.approx(0.15)
+    ed.mouse = pane_row(ed, "a1_speed").rect.center
+    ed.handle_event(pygame.event.Event(pygame.MOUSEWHEEL, x=0, y=-3))
+    assert e.animations[1].speed == pytest.approx(0.4) and e.animations[0].speed == pytest.approx(0.6)
+    header = next(r for r in ed.details_rows() if r.field.key == "a0")
+    pane_click(ed, header.plus)                                 # the x on the Float heading
+    assert [a.kind for a in e.animations] == ["rotate"]
+    assert "add_animation" in [r.field.key for r in ed.details_rows()]    # float can be added again
+    ed.do("undo")
+    assert [a.kind for a in ed.level.entities[0].animations] == ["float", "rotate"]
+
+
+def test_animations_are_not_shared_between_items_or_with_undo_copies(ed):
+    ed.do("tool:entity")
+    ed.map_click((4, 4), 1)
+    choose(ed, "add_animation", "float")
+    ed.map_click((7, 7), 1)                                     # a new item does not inherit the animations
+    assert ed.level.entities[1].animations == []
+    ed.map_click((4, 4), 1)
+    pane_click(ed, pane_row(ed, "a0_speed").plus)
+    ed.do("undo")
+    assert ed.level.entities[0].animations[0].speed == pytest.approx(0.5)
+    copy = ed.level.copy()
+    copy.entities[0].animations[0].speed = 9
+    assert ed.level.entities[0].animations[0].speed == pytest.approx(0.5)
+
+
+def test_animations_survive_save_and_load_and_bad_ones_are_dropped(tmp_path):
+    level = level_with(Entity(3.5, 4.5, animations=[Animation("float", 0.8, 0.2), Animation("rotate", 1.5)]))
+    save_level(str(tmp_path / "m.json"), level)
+    again = load_level(str(tmp_path / "m.json"))
+    assert again.entities[0].animations == level.entities[0].animations
+    entity = Entity.from_dict({"x": 1.5, "y": 1.5, "animations": [{"kind": "wobble", "speed": -4}, "junk"]})
+    assert [(a.kind, a.speed) for a in entity.animations] == [("float", 0.0)]
+
+
+def test_a_floating_item_bobs_up_and_down_and_a_rotating_one_spins():
+    level = level_with(Entity(5.5, 5.5, animations=[Animation("float", 1.0, 0.2)]),
+                       Entity(7.5, 7.5, animations=[Animation("rotate", 0.5)]),
+                       Entity(9.5, 9.5))
+    items = Entities(level, World(level, 16))
+    base = items.sprites()
+    assert [s[5] for s in base][2] == 0.0
+    heights, spins = [], []
+    for _ in range(120):
+        items.clock += 1 / 60
+        a, b, c = items.sprites()
+        heights.append(a[2])
+        spins.append(b[5])
+        assert c[2] == base[2][2] and c[5] == 0.0               # a plain item does not move
+    assert min(heights) >= 0.0 - 1e-9 and max(heights) - min(heights) > 0.3      # bobs about 0.4 (2 x 0.2)
+    assert max(heights) <= 0.4 + 1e-9
+    assert spins[-1] - spins[0] > 2.5                           # it keeps turning (0.5 turns a second)
+
+
+def test_the_preview_advances_the_animation_clock(ed):
+    ed.do("tool:entity")
+    ed.map_click((5, 1), 1)
+    choose(ed, "add_animation", "rotate")
+    preview = ed.ensure_preview()
+    preview.sync(ed.level, ed.revision, force=True)
+    before = preview.items.sprites()[0][5]
+    preview.update(0.2)
+    assert preview.items.sprites()[0][5] != before
+
+
+def test_a_spinning_sprite_narrows_edge_on_and_is_mirrored_from_behind():
+    world = World(Level.blank(12, 12), 16)
+    textures = np.zeros((16, 32, 32, 4), np.uint8)
+    textures[..., :3] = 90
+    textures[..., 3] = 255
+    textures[7, :, :16, :3] = (255, 0, 0)                       # tile 7: red left half, blue right half
+    textures[7, :, 16:, :3] = (0, 0, 255)
+
+    def look(spin):
+        renderer = Renderer(textures)
+        renderer.draw(world, physics.Player(3.5, 5.5, 0.0, 0.0), [(7.5, 5.5, 0.0, 0.6, 7, spin)])
+        fb = np.array(renderer.framebuffer).astype(int)
+        red = (fb[..., 0] > fb[..., 2] + 30) & (fb[..., 0] > 60)
+        blue = (fb[..., 2] > fb[..., 0] + 30) & (fb[..., 2] > 60)
+        cols_r, cols_b = np.nonzero(red.any(axis=1))[0], np.nonzero(blue.any(axis=1))[0]
+        return cols_r, cols_b
+
+    r0, b0 = look(0.0)
+    assert r0.max() < b0.min()                                  # facing us: red on the left, blue on the right
+    width_front = b0.max() - r0.min()
+    r1, b1 = look(math.pi)
+    assert b1.max() < r1.min()                                  # turned round: mirrored
+    r2, b2 = look(math.pi / 2)
+    assert (max(r2.max() if len(r2) else 0, b2.max() if len(b2) else 0)
+            - min(r2.min() if len(r2) else 999, b2.min() if len(b2) else 999)) < width_front * 0.2   # edge-on: a sliver

@@ -341,12 +341,13 @@ def render_scene(fb, px, py, eye_z, eye_span, dir_x, dir_y, plane_x, plane_y, ho
 
 @njit(cache=True, parallel=True)
 def draw_sprites(fb, zb, px, py, eye_z, dir_x, dir_y, plane_x, plane_y, horizon, focal,
-                 sp_x, sp_y, sp_z, sp_size, sp_tex, textures, max_dist, fog_dist):
+                 sp_x, sp_y, sp_z, sp_size, sp_tex, sp_spin, textures, max_dist, fog_dist):
     """Draw flat sprites that always face the camera, over a picture already drawn by
     render_scene_depth. The sprites must be sorted farthest first. sp_z is the height of a sprite's
     bottom, sp_size its height and width in world units. A sprite pixel shows only where it is
     nearer than what is already there (zb), so walls, ledges and floors hide it; texture alpha
-    blends it (0 is see-through, 255 opaque)."""
+    blends it (0 is see-through, 255 opaque). sp_spin is an angle in radians: the sprite turns around
+    its vertical axis, so it narrows to a sliver edge-on and shows mirrored once it has turned its back."""
     width, height = fb.shape[0], fb.shape[1]
     tsize = textures.shape[1]
     det = dir_x * plane_y - dir_y * plane_x
@@ -358,10 +359,14 @@ def draw_sprites(fb, zb, px, py, eye_z, dir_x, dir_y, plane_x, plane_y, horizon,
             if depth < 0.05 or depth > max_dist:
                 continue
             centre = ((dir_x * dy - dir_y * dx) / det / depth + 1.0) * 0.5 * width
-            half = sp_size[i] * focal / depth * 0.5
+            turn = math.cos(sp_spin[i])
+            half = sp_size[i] * focal / depth * 0.5 * max(abs(turn), 0.03)
             if x + 0.5 < centre - half or x + 0.5 >= centre + half:
                 continue
-            tx = min(tsize - 1, int((x + 0.5 - (centre - half)) / (2.0 * half) * tsize))
+            across = (x + 0.5 - (centre - half)) / (2.0 * half)
+            if turn < 0.0:
+                across = 1.0 - across                       # seen from behind
+            tx = min(tsize - 1, int(across * tsize))
             ytop = _proj(sp_z[i] + sp_size[i], depth, eye_z, horizon, focal)
             ybot = _proj(sp_z[i], depth, eye_z, horizon, focal)
             if ybot <= ytop:
