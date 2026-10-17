@@ -1,0 +1,17 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.numba_cache/
+
+# Build output (PyInstaller etc.)
+build/
+dist/
+*.spec
+
+# Editors
+.idea/
+
+# Scratch prototype, not part of the project
+initial_test_impl/

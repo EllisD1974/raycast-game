@@ -1,0 +1,19 @@
+[project]
+name = "raycast-game"
+version = "0.1.0"
+description = "A raycaster with stacked floors, ramps and a built-in map editor"
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "numba>=0.60",
+    "numpy>=2.0",
+    "pygame-ce>=2.5",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
