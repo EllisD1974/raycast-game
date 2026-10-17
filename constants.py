@@ -20,6 +20,6 @@ MOVE_SPEED = 3.0                # cells per second
 SPRINT_MULTIPLIER = 1.6         # holding Shift with a movement key: MOVE_SPEED * this
 TURN_SPEED = 2.0                # radians per second (keyboard turning)
 MOUSE_SENSITIVITY = 0.0025      # radians of turning per screen pixel the mouse moves
-MAX_PITCH_DEG = 60.0            # how far up or down you can look
+MAX_PITCH_DEG = 90.0            # how far up or down you can look (90 = straight up / down)
 GRAVITY = 9.0
 JUMP_SPEED = 2.6                # peak jump height = JUMP_SPEED^2 / (2 * GRAVITY), about 0.37

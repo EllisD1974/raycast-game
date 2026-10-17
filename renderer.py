@@ -7,8 +7,10 @@ import pygame
 from atlas import ensure_rgba
 from constants import FOG_DIST, FOV_DEG, HEIGHT, MAX_DEPTH, WIDTH
 from raykernel import draw_sprites, render_scene_depth
+from raypitch import render_scene_pitch
 
 BACKGROUND = np.array((18, 18, 26), np.uint8)       # shown only where the view distance ends
+LEVEL_PITCH = 1e-4                                  # radians: a view this close to level uses the faster column renderer
 
 
 class Renderer:
@@ -21,27 +23,33 @@ class Renderer:
         self.focal = (WIDTH / 2) / self.half_fov_tan                 # focal length in pixels
 
     def horizon(self, player):
-        """Screen row of the horizon. Looking up moves it down the screen and looking down moves
-        it up (the view is sheared, as in classic raycasters, not tilted)."""
+        """Screen row of the horizon: where the level ground meets the sky. Looking up moves it down the
+        screen and looking down moves it up."""
         return HEIGHT / 2 + math.tan(player.pitch) * self.focal
 
     def draw(self, world, player, sprites=()):
         """Render the view from `player` and return the WIDTH x HEIGHT picture. `sprites` are
-        (x, y, z, size, tile[, spin]) items drawn as flat pictures that face the player."""
+        (x, y, z, size, tile[, spin]) items drawn as flat pictures that face the player.
+
+        A level view is drawn a column at a time (fast). A tilted view is drawn with one real 3D ray
+        per pixel (raypitch.py), so looking up and down is a true rotation, not a shear."""
         dir_x, dir_y = math.cos(player.angle), math.sin(player.angle)
-        plane_x, plane_y = -dir_y * self.half_fov_tan, dir_x * self.half_fov_tan
-        render_scene_depth(
-            self.framebuffer, self.depth, player.x, player.y, player.eye_z, player.span, dir_x, dir_y,
-            plane_x, plane_y,                                        # camera plane: right vector
-            self.horizon(player), self.focal,
-            world.floor_plane, world.ceil_plane, world.span_on, world.solid_from, world.pane_tex,
-            world.pane_top, world.wall_tex, world.floor_tex, world.ceil_tex,
-            self.textures, MAX_DEPTH, FOG_DIST, BACKGROUND)
+        scene = (world.floor_plane, world.ceil_plane, world.span_on, world.solid_from, world.pane_tex,
+                 world.pane_top, world.wall_tex, world.floor_tex, world.ceil_tex)
+        if abs(player.pitch) < LEVEL_PITCH:
+            render_scene_depth(
+                self.framebuffer, self.depth, player.x, player.y, player.eye_z, player.span, dir_x, dir_y,
+                -dir_y * self.half_fov_tan, dir_x * self.half_fov_tan,   # camera plane: right vector
+                HEIGHT / 2, self.focal, *scene, self.textures, MAX_DEPTH, FOG_DIST, BACKGROUND)
+        else:
+            render_scene_pitch(
+                self.framebuffer, self.depth, player.x, player.y, player.eye_z, player.span, dir_x, dir_y,
+                player.pitch, self.focal, *scene, self.textures, MAX_DEPTH, FOG_DIST, BACKGROUND)
         if sprites:
             far_first = sorted(sprites, key=lambda s: -((s[0] - player.x) ** 2 + (s[1] - player.y) ** 2))
             cols = np.array([tuple(s) + (0.0,) * (6 - len(s)) for s in far_first], np.float64).reshape(-1, 6)
             draw_sprites(self.framebuffer, self.depth, player.x, player.y, player.eye_z, dir_x, dir_y,
-                         plane_x, plane_y, self.horizon(player), self.focal,
+                         player.pitch, self.focal,
                          np.ascontiguousarray(cols[:, 0]), np.ascontiguousarray(cols[:, 1]),
                          np.ascontiguousarray(cols[:, 2]), np.ascontiguousarray(cols[:, 3]),
                          np.clip(cols[:, 4], 0, len(self.textures) - 1).astype(np.int64),

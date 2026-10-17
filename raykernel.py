@@ -14,6 +14,9 @@ rows and never fight over pixels. A column ends when it has no branches left or 
 too long. Floors/ceilings are planes (flat or sloped); 1/distance is linear in screen y
 across a plane, which gives perspective-correct texturing without per-pixel ray casting.
 
+This is the renderer for a level view. A camera tilted up or down is drawn by raypitch.py instead
+(one real 3D ray per pixel), because the column approach can only fake tilting by shifting the picture.
+
 Transparent walls (fences, windows, glass) are cells the ray passes straight through. Each face the
 ray passes is remembered, and after the column is drawn the faces are blended over it, farthest
 first, using the texture's alpha channel. Floor and ceiling textures ignore alpha.
@@ -340,35 +343,41 @@ def render_scene(fb, px, py, eye_z, eye_span, dir_x, dir_y, plane_x, plane_y, ho
 
 
 @njit(cache=True, parallel=True)
-def draw_sprites(fb, zb, px, py, eye_z, dir_x, dir_y, plane_x, plane_y, horizon, focal,
+def draw_sprites(fb, zb, px, py, eye_z, dir_x, dir_y, pitch, focal,
                  sp_x, sp_y, sp_z, sp_size, sp_tex, sp_spin, textures, max_dist, fog_dist):
     """Draw flat sprites that always face the camera, over a picture already drawn by
-    render_scene_depth. The sprites must be sorted farthest first. sp_z is the height of a sprite's
-    bottom, sp_size its height and width in world units. A sprite pixel shows only where it is
-    nearer than what is already there (zb), so walls, ledges and floors hide it; texture alpha
+    render_scene_depth (or raypitch.render_scene_pitch). The camera looks along (dir_x, dir_y),
+    tilted up by `pitch` radians. The sprites must be sorted farthest first. sp_z is the height of a
+    sprite's bottom, sp_size its height and width in world units. A sprite pixel shows only where it
+    is nearer than what is already there (zb), so walls, ledges and floors hide it; texture alpha
     blends it (0 is see-through, 255 opaque). sp_spin is an angle in radians: the sprite turns around
     its vertical axis, so it narrows to a sliver edge-on and shows mirrored once it has turned its back."""
     width, height = fb.shape[0], fb.shape[1]
     tsize = textures.shape[1]
-    det = dir_x * plane_y - dir_y * plane_x
+    cp, sp = math.cos(pitch), math.sin(pitch)
     n = sp_x.shape[0]
     for x in prange(width):
         for i in range(n):
             dx, dy = sp_x[i] - px, sp_y[i] - py
-            depth = (dx * plane_y - dy * plane_x) / det
+            ahead = dx * dir_x + dy * dir_y                      # distance along the view direction on the map
+            right = -dx * dir_y + dy * dir_x
+            dz_mid = sp_z[i] + sp_size[i] * 0.5 - eye_z
+            depth = ahead * cp + dz_mid * sp                     # distance along the camera's axis
             if depth < 0.05 or depth > max_dist:
                 continue
-            centre = ((dir_x * dy - dir_y * dx) / det / depth + 1.0) * 0.5 * width
+            centre = width * 0.5 + right / depth * focal
             turn = math.cos(sp_spin[i])
             half = sp_size[i] * focal / depth * 0.5 * max(abs(turn), 0.03)
             if x + 0.5 < centre - half or x + 0.5 >= centre + half:
                 continue
             across = (x + 0.5 - (centre - half)) / (2.0 * half)
             if turn < 0.0:
-                across = 1.0 - across                       # seen from behind
+                across = 1.0 - across                            # seen from behind
             tx = min(tsize - 1, int(across * tsize))
-            ytop = _proj(sp_z[i] + sp_size[i], depth, eye_z, horizon, focal)
-            ybot = _proj(sp_z[i], depth, eye_z, horizon, focal)
+            dz_top = sp_z[i] + sp_size[i] - eye_z
+            dz_bot = sp_z[i] - eye_z
+            ytop = height * 0.5 - (dz_top * cp - ahead * sp) / max(ahead * cp + dz_top * sp, 0.05) * focal
+            ybot = height * 0.5 - (dz_bot * cp - ahead * sp) / max(ahead * cp + dz_bot * sp, 0.05) * focal
             if ybot <= ytop:
                 continue
             shade = _shade(depth, fog_dist)

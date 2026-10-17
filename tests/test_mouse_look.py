@@ -196,7 +196,7 @@ def test_sensitivity_does_not_depend_on_the_window_size():
 def test_looking_up_and_down_is_clipped_to_the_maximum_angle():
     player = physics.Player(1.5, 1.5, 0.0)
     limit = math.radians(MAX_PITCH_DEG)
-    assert limit == physics.MAX_PITCH and MAX_PITCH_DEG == 60.0
+    assert limit == physics.MAX_PITCH and MAX_PITCH_DEG == 90.0
     physics.look(player, 0.3)
     assert player.pitch == pytest.approx(0.3)
     physics.look(player, 0.3)
@@ -260,23 +260,6 @@ def room_world():
 def render(renderer, world, pitch):
     player = physics.Player(8.5, 8.5, 0.0, angle=0.7, pitch=pitch)
     return renderer.draw(world, player), np.array(renderer.framebuffer)
-
-
-def test_looking_up_slides_the_picture_down_by_exactly_the_horizon_shift(renderer):
-    """The view is sheared: tilting it up moves every row down by the horizon's shift, and nothing
-    else about the picture changes. That is what 'looking up and down' means here."""
-    world = room_world()
-    shift = 60
-    pitch = math.atan(shift / renderer.focal)
-    _s, level_frame = render(renderer, world, 0.0)
-    _s, up_frame = render(renderer, world, pitch)
-    _s, down_frame = render(renderer, world, -pitch)
-    interior = slice(0, HEIGHT - shift - 4)
-    same_up = np.mean(up_frame[:, shift:HEIGHT - 4, :] == level_frame[:, interior, :])
-    same_down = np.mean(down_frame[:, 0:HEIGHT - shift - 4, :] == level_frame[:, shift:HEIGHT - 4, :])
-    assert same_up > 0.99, f"looking up should shift the picture down ({same_up:.3f} of pixels match)"
-    assert same_down > 0.99, f"looking down should shift the picture up ({same_down:.3f} of pixels match)"
-    assert not np.array_equal(up_frame, level_frame)
 
 
 def test_the_view_at_the_pitch_limit_is_all_ceiling_or_all_floor_with_no_gaps(renderer):
