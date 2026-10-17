@@ -397,6 +397,18 @@ class Level:
             return top
         return top if top < ceiling - MIN_WALL_GAP else None
 
+    def wall_top_at(self, x, y, span=0):
+        """Height of the top of the wall in this cell as seen from a floor, or None if there is no
+        wall there on that floor. A short wall's top is its height; a full-height wall reaches the
+        ceiling beside it. (Things such as items can stand on top of a wall.)"""
+        if not self.in_bounds(x, y) or not self.is_solid(x, y, span):
+            return None
+        if self.grids["wall_floor"][y][x]:
+            top = self.upper_wall_top(x, y)
+            return top if top is not None else self.upper_wall_full_top(x, y)
+        top = self.short_wall_top(x, y)
+        return top if top is not None else self.wall_ceiling(x, y)
+
     def span_present(self, span, x, y):
         """True if the cell has an open room on that floor."""
         if not self.in_bounds(x, y) or not 0 <= span < self.floor_count or self.is_solid(x, y, span):

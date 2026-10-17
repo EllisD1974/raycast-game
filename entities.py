@@ -47,8 +47,12 @@ class Entities:
         self.items = []
         for e in level.entities:
             cx, cy = math.floor(e.x), math.floor(e.y)
-            if e.span < world.floors and 0 <= cx < world.width and 0 <= cy < world.height \
-                    and world.span_on[e.span, cy, cx]:
+            if e.span >= world.floors or not (0 <= cx < world.width and 0 <= cy < world.height):
+                continue
+            wall_top = level.wall_top_at(cx, cy, e.span)
+            if wall_top is not None:                    # standing on top of a wall
+                self.items.append(Item(e, wall_top + e.lift))
+            elif world.span_on[e.span, cy, cx]:
                 self.items.append(Item(e, world.floor_of(e.span, e.x, e.y) + e.lift))
 
     def sprites(self):

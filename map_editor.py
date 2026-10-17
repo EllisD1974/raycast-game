@@ -910,9 +910,9 @@ class Editor:
         if found:
             self.select_entity(found[0])
             return
-        if not level.span_present(self.floor, *cell):
+        if not level.span_present(self.floor, *cell) and not level.is_solid(*cell, self.floor):
             self.deselect()
-            self.say("An item needs an open floor to stand on: no room in this cell on this floor")
+            self.say("An item needs an open floor or the top of a wall to stand on: no room in this cell on this floor")
             return
         self.begin_edit()
         level.entities.append(self.entity_brush.clone(x=cell[0] + 0.5, y=cell[1] + 0.5, span=self.floor,

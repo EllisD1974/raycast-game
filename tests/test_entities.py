@@ -496,3 +496,33 @@ def test_a_spinning_sprite_narrows_edge_on_and_is_mirrored_from_behind():
     r2, b2 = look(math.pi / 2)
     assert (max(r2.max() if len(r2) else 0, b2.max() if len(b2) else 0)
             - min(r2.min() if len(r2) else 999, b2.min() if len(b2) else 999)) < width_front * 0.2   # edge-on: a sliver
+
+
+# ------------------------------------------------------------------ standing on top of walls
+
+def test_items_can_be_placed_on_top_of_walls(ed):
+    ed.level.set("walls", 4, 4, 1)
+    ed.level.set("wall_h", 4, 4, 0.5)                           # a low wall
+    ed.level.set("walls", 6, 6, 1)                              # a full-height wall
+    ed.do("tool:entity")
+    ed.map_click((4, 4), 1)
+    ed.map_click((6, 6), 1)
+    assert len(ed.level.entities) == 2
+    world = World(ed.level, 16)
+    items = Entities(ed.level, world)
+    assert [round(i.z, 2) for i in items.items] == [0.5, ed.level.wall_ceiling(6, 6)]    # at the top of each wall
+    ed.map_click((4, 4), 1)                                     # clicking it selects it like any other item
+    assert ed.selected_entity() is ed.level.entities[0]
+
+
+def test_an_item_on_a_low_wall_is_drawn_above_it_and_can_be_picked_up_from_its_top():
+    level = Level.blank(12, 12)
+    level.set("walls", 5, 5, 1)
+    level.set("wall_h", 5, 5, 0.25)
+    level.entities.append(Entity(5.5, 5.5, effect="score", amount=3, lift=0.0))
+    world = World(level, 16)
+    items = Entities(level, world)
+    assert items.items[0].z == pytest.approx(0.25)
+    stats = PlayerStats()
+    assert items.update(at(5.5, 3.0, 0.0), stats, 0.1) == []                    # nowhere near
+    assert items.update(at(5.5, 5.3, 0.25), stats, 0.1) == ["+3 score"]       # standing on the wall's top
