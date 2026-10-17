@@ -7,6 +7,7 @@ os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
+from constants import MAX_PITCH_DEG
 import pygame
 import pytest
 
@@ -185,7 +186,7 @@ def test_dragging_in_the_view_looks_around_and_clamps_the_pitch(ed):
     assert p.pitch == pytest.approx(pitch + 20 * MOUSE_SENSITIVITY)       # up on screen looks up
     for _ in range(200):
         move(ed, start, rel=(0, -50))
-    assert p.pitch == pytest.approx(np.radians(45), abs=0.02)
+    assert p.pitch == pytest.approx(np.radians(MAX_PITCH_DEG), abs=0.02)
     release(ed, start)
     assert not ed.look_drag
 

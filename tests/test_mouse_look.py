@@ -196,7 +196,7 @@ def test_sensitivity_does_not_depend_on_the_window_size():
 def test_looking_up_and_down_is_clipped_to_the_maximum_angle():
     player = physics.Player(1.5, 1.5, 0.0)
     limit = math.radians(MAX_PITCH_DEG)
-    assert limit == physics.MAX_PITCH and MAX_PITCH_DEG == 45.0
+    assert limit == physics.MAX_PITCH and MAX_PITCH_DEG == 60.0
     physics.look(player, 0.3)
     assert player.pitch == pytest.approx(0.3)
     physics.look(player, 0.3)
