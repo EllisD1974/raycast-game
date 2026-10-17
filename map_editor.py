@@ -67,6 +67,14 @@ over a row, or by clicking the number and typing. Esc closes the pane, Delete or
 removes the item (so does right click on it). Items show on the map ringed white / cyan / green by
 mode, and in the 3D view as sprites that face you.
 
+The Prefabs section (P or the Prefabs button) is where you make reusable items: "+ Add prefab", then
+set its name, Icon (click a tile in the atlas), mode, effect, size and animations in the Details pane,
+exactly as for a placed item. With the Entity tool and nothing selected, the pane on the right lists
+"Plain item" and every prefab: pick one and click cells to place it. An item placed from a prefab
+follows it: change the prefab and every copy changes. Selecting a placed copy lets you point it at
+another prefab or choose (none) to detach it, which keeps its settings and makes it editable on its
+own. A plain item's pane has "Save as a new prefab" to turn it into one.
+
 The Guns section (G or the Guns button) replaces the map with the list of the map's guns: add one
 with "+ Add gun", click one to edit it in the Details pane (name, picture and its size, fire mode,
 damage, fire rate, magazine, spare ammunition, reload time, spread and its ammo type). Ammunition
@@ -104,6 +112,7 @@ from mapfile import (ANIMATION_KINDS, ANIMATION_LABELS, DEFAULTS, EDIT_LAYERS, E
                      grid_name, load_level, save_level, split_grid_name)
 import details
 import hud
+from entities import describe
 from details import PANE_WIDTH, Field
 from inventory import GunState
 from preview import Preview
@@ -284,6 +293,9 @@ class Editor:
         self.guns_mode = False                  # the Guns section is showing instead of the map
         self.gun_selected = None                # index in level.guns of the gun being edited
         self.ammo_selected = None               # index in level.ammo_types of the ammo type being edited
+        self.prefabs_mode = False               # the Prefabs section is showing instead of the map
+        self.prefab_selected = None             # index in level.prefabs of the prefab being edited
+        self.place_prefab = ""                  # the prefab the Entity tool places ("" = a plain item)
         self.tile_target = "tile"               # the tile field the atlas sets while a pane is open
         self.selection = {0}                    # selected atlas tile indices (0-based)
         self.value = {}                         # height brush per stored grid; see brush()
@@ -371,7 +383,7 @@ class Editor:
 
     def preview_width(self):
         """Width of the 3D view's column at the window's right; 0 while the view is hidden."""
-        if not self.show_preview or self.guns_mode:        # the Guns section has no use for the 3D view
+        if not self.show_preview or self.section_open():    # the Guns and Prefabs sections have no use for the 3D view
             return 0
         return int(min(PREVIEW_MAX_W, max(PREVIEW_MIN_W, (self._size()[0] - PANEL_W) * 0.4)))
 
@@ -394,17 +406,40 @@ class Editor:
             return self.level.ammo_types[self.ammo_selected]
         return None
 
+    def section_open(self):
+        """True while a section (Guns, Prefabs) is showing in place of the map."""
+        return self.guns_mode or self.prefabs_mode
+
+    def selected_prefab(self):
+        """The prefab being edited in the Prefabs section, or None."""
+        if self.prefabs_mode and self.prefab_selected is not None and 0 <= self.prefab_selected < len(self.level.prefabs):
+            return self.level.prefabs[self.prefab_selected]
+        return None
+
+    def editing_entity(self):
+        """The thing whose item settings the pane edits: the selected prefab, or the selected item if it
+        is a plain one (an item placed from a prefab takes its settings from the prefab)."""
+        prefab = self.selected_prefab()
+        if prefab is not None:
+            return prefab
+        e = self.selected_entity()
+        return e if e is not None and not e.prefab else None
+
+    def palette_active(self):
+        """The Entity tool with nothing selected shows the list of prefabs to place."""
+        return self.tool == "entity" and not self.section_open() and self.selected_entity() is None
+
     def selected_entity(self):
         """The selected item, or None (nothing selected, or the selection no longer exists)."""
-        if self.guns_mode:
+        if self.section_open():
             return None
         if self.selected is not None and 0 <= self.selected < len(self.level.entities):
             return self.level.entities[self.selected]
         return None
 
     def details_width(self):
-        chosen = self.selected_entity() or self.selected_gun() or self.selected_ammo()
-        return PANE_WIDTH if chosen is not None else 0
+        chosen = self.selected_entity() or self.selected_gun() or self.selected_ammo() or self.selected_prefab()
+        return PANE_WIDTH if chosen is not None or self.palette_active() else 0
 
     def details_rect(self):
         """The docked Details pane, or None while nothing is selected."""
@@ -422,17 +457,43 @@ class Editor:
         ammo = self.selected_ammo()
         if ammo is not None:
             return self.ammo_fields(ammo)
+        prefab = self.selected_prefab()
+        if prefab is not None:
+            return self.entity_fields(prefab, is_prefab=True)
         e = self.selected_entity()
         if e is None:
-            return []
+            return self.palette_fields() if self.palette_active() else []
+        return self.linked_fields(e) if e.prefab else self.entity_fields(e)
 
+    def palette_fields(self):
+        """The Entity tool's list of what to place: a plain item, or one of the map's prefabs."""
+        def pick(name):
+            return lambda: setattr(self, "place_prefab", name)
+
+        fields = [Field("palette", "Place", "header", None, None),
+                  Field("pick_plain", "Plain item", "button", (lambda: self.place_prefab == ""), None,
+                        action=pick(""), icon=self.entity_brush.tile)]
+        for i, p in enumerate(self.level.prefabs):
+            fields.append(Field(f"pick_{i}", p.name, "button", (lambda n=p.name: self.place_prefab == n), None,
+                                action=pick(p.name), icon=p.tile))
+        return fields
+
+    def linked_fields(self, e):
+        """An item placed from a prefab: pick which prefab (or none, to detach it); its settings come from it."""
+        names = ("",) + tuple(p.name for p in self.level.prefabs)
+        return [Field("prefab", "Prefab", "enum", (lambda: e.prefab), self.set_instance_prefab, choices=names,
+                      labels={"": "(none: detach)", **{n: n for n in names}})]
+
+    def entity_fields(self, e, is_prefab=False):
+        """The settings of an item, or of a prefab (which also has a name and calls its picture an icon)."""
         def field(name, label, kind, **options):
             return Field(name, label, kind, (lambda n=name: getattr(e, n)),
                          (lambda v, n=name: self.set_entity(n, v)), **options)
 
-        fields = [field("tile", "Sprite", "tile", low=0, high=len(self.tiles) - 1),
-                  field("mode", "Mode", "enum", choices=ENTITY_MODES, labels=MODE_LABELS),
-                  field("effect", "Effect", "enum", choices=ENTITY_EFFECTS, labels=EFFECT_LABELS)]
+        fields = [field("name", "Name", "text")] if is_prefab else []
+        fields += [field("tile", "Icon" if is_prefab else "Sprite", "tile", low=0, high=len(self.tiles) - 1),
+                   field("mode", "Mode", "enum", choices=ENTITY_MODES, labels=MODE_LABELS),
+                   field("effect", "Effect", "enum", choices=ENTITY_EFFECTS, labels=EFFECT_LABELS)]
         if e.effect == "item":
             fields.append(field("item", "Item name", "text"))
         if e.effect == "gun":
@@ -467,6 +528,9 @@ class Editor:
         if unused:
             fields.append(Field("add_animation", "Add animation", "menu", None, self.add_animation,
                                 choices=unused, labels=ANIMATION_LABELS, text_override="+ Add animation"))
+        if not is_prefab:
+            fields.append(Field("make_prefab", "Save as prefab", "button", None, None,
+                                action=self.make_prefab, text_override="Save as a new prefab"))
         return fields
 
     def gun_fields(self, g):
@@ -513,18 +577,30 @@ class Editor:
 
     def set_entity(self, name, value):
         """Change one setting of the selected item (one undo step); new items start with it too."""
-        e = self.selected_entity()
-        if e is None or getattr(e, name) == value:
+        e = self.editing_entity()
+        if e is None:
+            return
+        is_prefab = e is self.selected_prefab()
+        if name == "name" and is_prefab:
+            value = self.new_prefab_name(str(value).strip()[:MAX_NAME], skip=self.prefab_selected) \
+                if str(value).strip() else e.name
+        if getattr(e, name) == value:
             return
         self.begin_edit()
-        old = e.effect
-        setattr(e, name, value)
-        setattr(self.entity_brush, name, value)
-        if name == "effect" and not (old in ("score", "health") and value in ("score", "health")):
-            e.amount = self.entity_brush.amount = {"score": 10.0, "health": 25.0, "item": 1.0,
-                                                   "gun": 1.0, "ammo": 24.0}.get(value, e.amount)
-        if name == "item":
-            e.item = self.entity_brush.item = str(value).strip()[:MAX_NAME]
+        old, old_name = e.effect, e.name
+        targets = [e] if is_prefab else [e, self.entity_brush]      # new items start with what you last set
+        for t in targets:
+            setattr(t, name, value)
+            if name == "effect" and not (old in ("score", "health") and value in ("score", "health")):
+                t.amount = {"score": 10.0, "health": 25.0, "item": 1.0, "gun": 1.0, "ammo": 24.0}.get(value, t.amount)
+            if name == "item":
+                t.item = str(value).strip()[:MAX_NAME]
+        if is_prefab:
+            if name == "name":
+                for inst in self.level.entities:
+                    if inst.prefab == old_name:
+                        inst.prefab = value
+            self.level.apply_prefabs()                                   # every item made from it follows
 
     def gun_names(self):
         return [g.name for g in self.level.guns]
@@ -558,7 +634,7 @@ class Editor:
                 return
         self.begin_edit()
         if name == "name":
-            for e in self.level.entities:
+            for e in self.level.entities + self.level.prefabs:
                 if e.gun == g.name:
                     e.gun = value
         setattr(g, name, value)
@@ -596,7 +672,7 @@ class Editor:
             for g in self.level.guns:
                 if g.ammo == a.name:
                     g.ammo = value
-            for e in self.level.entities:
+            for e in self.level.entities + self.level.prefabs:
                 if e.ammo == a.name:
                     e.ammo = value
         setattr(a, name, value)
@@ -608,7 +684,7 @@ class Editor:
             for g in self.level.guns:                    # guns that used it fall back to the default bullet
                 if g.ammo == a.name:
                     g.ammo = ""
-            for e in self.level.entities:
+            for e in self.level.entities + self.level.prefabs:
                 if e.ammo == a.name:
                     e.ammo = ""
             self.level.ammo_types.remove(a)
@@ -622,22 +698,81 @@ class Editor:
             self.gun_selected = None
 
     def add_animation(self, kind):
-        e = self.selected_entity()
+        e = self.editing_entity()
         if e is not None and kind in ANIMATION_KINDS and all(a.kind != kind for a in e.animations):
             self.begin_edit()
             e.animations.append(Animation(kind))
+            self.level.apply_prefabs()
 
     def remove_animation(self, index):
-        e = self.selected_entity()
+        e = self.editing_entity()
         if e is not None and 0 <= index < len(e.animations):
             self.begin_edit()
             del e.animations[index]
+            self.level.apply_prefabs()
 
     def set_animation(self, index, name, value):
-        e = self.selected_entity()
+        e = self.editing_entity()
         if e is not None and 0 <= index < len(e.animations) and getattr(e.animations[index], name) != value:
             self.begin_edit()
             setattr(e.animations[index], name, value)
+            self.level.apply_prefabs()
+
+    # ---------------------------------------------------------------- prefabs
+
+    def new_prefab_name(self, base="Prefab", skip=None):
+        taken = {p.name for i, p in enumerate(self.level.prefabs) if i != skip}
+        if base not in taken:
+            return base
+        n = 2
+        while f"{base} {n}"[:MAX_NAME] in taken:
+            n += 1
+        return f"{base} {n}"[:MAX_NAME]
+
+    def add_prefab(self):
+        """Add a prefab with the settings of the last item you edited and select it."""
+        self.begin_edit()
+        base = self.entity_brush.clone(x=0.0, y=0.0, span=0, name="", prefab="", animations=[])
+        base.name = self.new_prefab_name("Prefab")
+        self.level.prefabs.append(base)
+        self.prefab_selected = len(self.level.prefabs) - 1
+        self.tile_target = "tile"
+        self.say("Added a prefab: set its icon and settings in the Details pane, then place it with the Entity tool")
+
+    def make_prefab(self):
+        """Turn the selected plain item into a new prefab (the item becomes an instance of it)."""
+        e = self.selected_entity()
+        if e is None or e.prefab:
+            return
+        self.begin_edit()
+        base = e.item or e.ammo or e.gun or {"score": "Score", "health": "Health"}.get(e.effect, "Pickup")
+        prefab = e.clone(x=0.0, y=0.0, span=0, name="", prefab="")
+        prefab.name = self.new_prefab_name(f"{base} pickup"[:MAX_NAME])
+        self.level.prefabs.append(prefab)
+        e.prefab = prefab.name
+        self.place_prefab = prefab.name
+        self.say(f"Saved '{prefab.name}'. Edit it in the Prefabs section; place more with the Entity tool")
+
+    def set_instance_prefab(self, name):
+        """Point the selected item at a prefab, or at none ('') to detach it (it keeps its settings)."""
+        e = self.selected_entity()
+        if e is None or e.prefab == name:
+            return
+        self.begin_edit()
+        e.prefab = name if self.level.prefab_named(name) else ""
+        self.level.apply_prefabs()
+
+    def delete_prefab(self):
+        p = self.selected_prefab()
+        if p is not None:
+            self.begin_edit()
+            for e in self.level.entities:                    # items made from it keep their settings
+                if e.prefab == p.name:
+                    e.prefab = ""
+            self.level.prefabs.remove(p)
+            if self.place_prefab == p.name:
+                self.place_prefab = ""
+            self.prefab_selected = None
 
     def select_entity(self, entity):
         self.field_edit = None
@@ -648,7 +783,7 @@ class Editor:
 
     def deselect(self):
         self.selected, self.field_edit, self.menu_open = None, None, None
-        self.gun_selected = self.ammo_selected = None
+        self.gun_selected = self.ammo_selected = self.prefab_selected = None
 
     def delete_selected(self):
         if self.selected_gun() is not None:
@@ -656,6 +791,9 @@ class Editor:
             return
         if self.selected_ammo() is not None:
             self.delete_ammo_type()
+            return
+        if self.selected_prefab() is not None:
+            self.delete_prefab()
             return
         e = self.selected_entity()
         if e is not None:
@@ -667,12 +805,15 @@ class Editor:
         """A click inside the Details pane: step a value, start typing one, or delete the item."""
         rect = self.details_rect()
         rows = self.details_rows()
-        if details.button_rect(rect, rows).collidepoint(pos):
+        if self.details_delete_label() and details.button_rect(rect, rows).collidepoint(pos):
             self.delete_selected()
             return
         for row in rows:
             f = row.field
-            if f.kind == "header":
+            if f.kind == "button":
+                if details.button_box(row).collidepoint(pos) and f.action is not None:
+                    f.action()
+            elif f.kind == "header":
                 if f.action is not None and row.plus.collidepoint(pos):
                     f.action()
             elif f.kind == "menu":
@@ -691,6 +832,16 @@ class Editor:
                     self.menu_open = f.key              # a drop-down list of the choices
                 elif f.kind == "tile":
                     self.tile_target = f.key            # the next atlas click sets this picture
+
+    def details_delete_label(self):
+        """Text of the Details pane's delete button for what is selected ('' for none: the palette)."""
+        if self.selected_gun() is not None:
+            return "Delete gun"
+        if self.selected_ammo() is not None:
+            return "Delete ammo"
+        if self.selected_prefab() is not None:
+            return "Delete prefab"
+        return "Delete" if self.selected_entity() is not None else ""
 
     def menu_click(self, pos):
         """A click while a drop-down list is open: pick the choice under it; any click closes the list."""
@@ -769,7 +920,8 @@ class Editor:
         if self.floor > 0:
             row1.append(("btn", "Del", "delfloor"))
         row1.append(("txt", f"floor {self.floor + 1} of {count}", DIM))
-        row1 += [None, ("btn", "Guns(G)", "guns"), ("btn", "Key(K)", "legend"), ("btn", "3D(V)", "preview"),
+        row1 += [None, ("btn", "Guns(G)", "guns"), ("btn", "Prefabs(P)", "prefabs"),
+                 ("btn", "Key(K)", "legend"), ("btn", "3D(V)", "preview"),
                  ("btn", "Reload tex(F6)", "textures")]
         if self.show_preview:
             row1.append(("btn", "Cam->Start", "camstart"))
@@ -785,7 +937,7 @@ class Editor:
             row2 += [None, ("btn", "Step-", "step-"), ("btn", "Step+", "step+"),
                      ("txt", f"step {fmt(self.stair_step)}", ACCENT)]
         if self.tool == "entity":
-            row2 += [None, ("txt", "Click an item to edit it in the Details pane, or an empty cell to add one", DIM)]
+            row2 += [None, ("txt", "Pick what to place in the list on the right, click a cell to place it, or click an item to edit it", DIM)]
         row3 = [("btn", f"{name.capitalize()}({key})", f"tool:{name}") for name, key in TOOLS.items()]
         row3 += [None, ("btn", "Undo", "undo"), ("btn", "Redo", "redo"), None,
                  ("btn", "Border", "border"), ("txt", "Edge", DIM),
@@ -1116,10 +1268,16 @@ class Editor:
             self.say("An item needs an open floor or the top of a wall to stand on: no room in this cell on this floor")
             return
         self.begin_edit()
-        level.entities.append(self.entity_brush.clone(x=cell[0] + 0.5, y=cell[1] + 0.5, span=self.floor,
-                                                      animations=[]))
+        prefab = level.prefab_named(self.place_prefab) if self.place_prefab else None
+        if prefab is not None:                      # an instance of the chosen prefab: it follows the prefab
+            level.entities.append(prefab.clone(x=cell[0] + 0.5, y=cell[1] + 0.5, span=self.floor, name="",
+                                               prefab=prefab.name))
+        else:
+            level.entities.append(self.entity_brush.clone(x=cell[0] + 0.5, y=cell[1] + 0.5, span=self.floor,
+                                                          animations=[]))
         self.select_entity(level.entities[-1])
-        self.say("Added an item: change its settings in the Details pane")
+        self.say("Added an item: change its settings in the Details pane" if prefab is None
+                 else f"Placed {prefab.name}: edit it in the Prefabs section")
 
     def remove_entities(self, cell):
         found = self.entities_in(cell)
@@ -1197,6 +1355,13 @@ class Editor:
         else:
             self.selection |= picked
         self.atlas_drag = None
+        if self.prefabs_mode:                           # the Prefabs section: the prefab's icon
+            if self.selected_prefab() is not None:
+                self.set_entity("tile", min(picked))
+                self.say(f"Prefab icon: tile {min(picked) + 1}")
+            else:
+                self.say("Select a prefab first (or add one), then click a tile")
+            return
         if self.guns_mode:                              # the Guns section: the picture of the gun or its bullet
             if self.selected_gun() is not None:
                 self.set_gun("tile", min(picked))
@@ -1273,6 +1438,10 @@ class Editor:
             self.gun_selected = None
         if self.ammo_selected is not None and not 0 <= self.ammo_selected < len(self.level.ammo_types):
             self.ammo_selected = None
+        if self.prefab_selected is not None and not 0 <= self.prefab_selected < len(self.level.prefabs):
+            self.prefab_selected = None
+        if self.place_prefab and self.level.prefab_named(self.place_prefab) is None:
+            self.place_prefab = ""
         self.dropdown_open = False
 
     def do(self, action):
@@ -1281,12 +1450,17 @@ class Editor:
         if action != "dropdown":
             self.dropdown_open = False
         if action == "guns":
-            self.guns_mode = not self.guns_mode
+            self.guns_mode, self.prefabs_mode = not self.guns_mode, False
             self.deselect()
             self.say("Guns: add a gun, then edit it in the Details pane" if self.guns_mode else "Back to the map")
+        elif action == "prefabs":
+            self.prefabs_mode, self.guns_mode = not self.prefabs_mode, False
+            self.deselect()
+            self.say("Prefabs: add one, set its icon and settings, then place it with the Entity tool"
+                     if self.prefabs_mode else "Back to the map")
         elif action.startswith("tool:"):
             self.tool = action[5:]
-            self.guns_mode = False
+            self.guns_mode = self.prefabs_mode = False
             if self.tool != "entity":
                 self.deselect()
             if self.tool == "camera" and not self.show_preview:
@@ -1586,6 +1760,8 @@ class Editor:
             self.do("legend")
         elif e.key == pygame.K_g:
             self.do("guns")
+        elif e.key == pygame.K_p:
+            self.do("prefabs")
         elif e.key == pygame.K_v:
             self.do("preview")
         elif e.key in LAYER_KEYS:
@@ -1647,6 +1823,9 @@ class Editor:
             elif self.guns_mode:
                 if e.button == 1:
                     self.guns_click(e.pos)
+            elif self.prefabs_mode:
+                if e.button == 1:
+                    self.prefabs_click(e.pos)
             elif e.button in (1, 3):
                 self.confirm = None
                 self.map_click(self.cell_at(e.pos), e.button)
@@ -1697,7 +1876,7 @@ class Editor:
                 self.preview.nudge(1 if e.y > 0 else -1, abs(e.y))
             return
         area = self.map_area()
-        if not area.collidepoint(self.mouse) or self.guns_mode:
+        if not area.collidepoint(self.mouse) or self.section_open():
             return
         if self.mods() & pygame.KMOD_CTRL:      # Ctrl + wheel changes the value under the cursor, no zoom
             self.nudge_cell(self.cell_at(self.mouse), VALUE_STEP * (1 if e.y > 0 else -1) * abs(e.y))
@@ -1715,6 +1894,8 @@ class Editor:
         screen.fill(BG)
         if self.guns_mode:
             self.draw_guns(screen)
+        elif self.prefabs_mode:
+            self.draw_prefabs(screen)
         else:
             self.draw_map(screen)
         self.draw_panel(screen)
@@ -2006,16 +2187,96 @@ class Editor:
                  "guns that use it share one pool of spare rounds")
         self._draw_wrapped(screen, lines, card.x + 20, card.y + 90, card.w - 40)
 
+    # ---------------------------------------------------------------- the Prefabs section
+
+    PREFAB_ROW_H = 46
+
+    def prefab_rows(self):
+        """[(rect, prefab index)] for the list of prefabs, and the rect of the Add button after it."""
+        area = self.map_area()
+        width = min(area.w - 40, 440)
+        rows = [(pygame.Rect(area.x + 20, area.y + 74 + i * self.PREFAB_ROW_H, width, self.PREFAB_ROW_H - 4), i)
+                for i in range(len(self.level.prefabs))]
+        top = area.y + 74 + len(rows) * self.PREFAB_ROW_H
+        return rows, pygame.Rect(area.x + 20, top, 170, 34)
+
+    def prefabs_click(self, pos):
+        rows, add = self.prefab_rows()
+        if add.collidepoint(pos):
+            self.add_prefab()
+            return
+        for rect, i in rows:
+            if rect.collidepoint(pos):
+                self.prefab_selected = i
+                self.tile_target = "tile"
+                self.field_edit = self.menu_open = None
+                return
+
+    def draw_prefabs(self, screen):
+        """The Prefabs section: the map's prefabs as a list, and a big look at the selected one's icon."""
+        area = self.map_area()
+        screen.set_clip(area)
+        pygame.draw.rect(screen, BG, area)
+        screen.blit(self.font.render("Prefabs in this map", True, ACCENT), (area.x + 20, area.y + 14))
+        screen.blit(self.small.render("A prefab is a saved item (icon, pickup effect, animation) you can place as often as you like.",
+                                      True, DIM), (area.x + 20, area.y + 40))
+        rows, add = self.prefab_rows()
+        for rect, i in rows:
+            p = self.level.prefabs[i]
+            on = i == self.prefab_selected
+            pygame.draw.rect(screen, BUTTON_ON if on else (BUTTON_HOT if rect.collidepoint(self.mouse) else BUTTON),
+                             rect, border_radius=4)
+            screen.set_clip(rect.clip(area))
+            screen.blit(self.tiles[max(0, min(p.tile, len(self.tiles) - 1))], (rect.x + 6, rect.y + (rect.h - TILE) // 2))
+            screen.blit(self.font.render(p.name, True, TEXT), (rect.x + 48, rect.y + 5))
+            used = sum(1 for e in self.level.entities if e.prefab == p.name)
+            summary = f"{MODE_LABELS[p.mode]}   {describe(p)}   placed {used}x"
+            screen.blit(self.small.render(summary, True, TEXT if on else DIM), (rect.x + 48, rect.y + 24))
+            screen.set_clip(area)
+        self._draw_add_button(screen, add, "+ Add prefab")
+        right = area.x + 20 + min(area.w - 40, 440) + 24
+        p = self.selected_prefab()
+        if p is None:
+            note = "No prefabs yet: add one." if not self.level.prefabs else "Select a prefab to edit it."
+            screen.blit(self.small.render(note, True, DIM), (right if area.right - right > 200 else add.x, add.bottom + 14
+                                                           if area.right - right <= 200 else area.y + 74))
+        else:
+            card = pygame.Rect(right, area.y + 74, 200, 200)
+            if area.right - right < 220:
+                card = pygame.Rect(add.x, add.bottom + 20, 200, 200)
+            pygame.draw.rect(screen, (44, 48, 60), card)
+            pygame.draw.rect(screen, GRID, card.inflate(2, 2), 1)
+            icon = pygame.transform.scale(self.tiles[max(0, min(p.tile, len(self.tiles) - 1))], (128, 128))
+            screen.blit(icon, icon.get_rect(center=(card.centerx, card.y + 76)))
+            screen.blit(self.small.render("how it looks in the world", True, DIM), (card.x + 12, card.bottom - 24))
+            lines = (f"{MODE_LABELS[p.mode]}: {describe(p)}",
+                     ", ".join(ANIMATION_LABELS[a.kind].lower() for a in p.animations) or "no animation",
+                     f"size {p.size:g}, lift {p.lift:g}")
+            self._draw_wrapped(screen, lines, card.x, card.bottom + 12, max(200, area.right - card.x - 20))
+        screen.set_clip(None)
+
     def draw_details(self, screen):
         """The docked Details pane (only while something is selected)."""
         rect = self.details_rect()
         if rect is None:
             return
         e, gun, ammo = self.selected_entity(), self.selected_gun(), self.selected_ammo()
+        prefab = self.selected_prefab()
         theme = {"panel": PANEL_BG, "grid": GRID, "text": TEXT, "dim": DIM, "accent": ACCENT, "button": BUTTON,
                  "button_hot": BUTTON_HOT, "field": (28, 29, 34), "field_edit": (50, 52, 64),
-                 "danger": (120, 50, 55), "danger_hot": (160, 64, 70)}
-        if gun is not None:
+                 "danger": (120, 50, 55), "danger_hot": (160, 64, 70), "button_on": BUTTON_ON}
+        if prefab is not None:
+            used = sum(1 for i in self.level.entities if i.prefab == prefab.name)
+            notes = (f"Placed {used} time{'s' if used != 1 else ''} in this map.",
+                     "Changes here update every one of them.", "Click an atlas tile to set the icon.",
+                     "Place it with the Entity tool (N).")
+        elif e is None and gun is None and ammo is None:
+            notes = ("Click a cell to place the chosen one.", "Click a placed item to edit it.",
+                     "Make prefabs in the Prefabs section (P),", "or save an item as one from its pane.")
+        elif e is not None and e.prefab:
+            notes = (f"A {e.prefab}.", "Its settings come from the prefab:", "edit them in the Prefabs section (P).",
+                     "Choose (none) above to detach it.")
+        elif gun is not None:
             how = {"single": "one round, reloads after every shot", "semi": "one round per trigger pull",
                    "auto": "keeps firing while the trigger is held"}[gun.mode]
             gap = 1.0 / gun.fire_rate
@@ -2035,9 +2296,10 @@ class Editor:
             notes = (f"Cell ({math.floor(e.x)}, {math.floor(e.y)}) on {self.level.names[e.span]}",
                      "Wheel over a row steps it.", "Click a number to type one.",
                      "Click an atlas tile: sets the sprite.", "Esc closes this; Del removes the item.")
-        details.draw(screen, rect, "Gun" if gun is not None else ("Ammo type" if ammo is not None else "Item"),
-                     self.details_rows(), theme, (self.font, self.small), focus=self.tile_target,
-                     button_label="Delete gun" if gun is not None else ("Delete ammo" if ammo is not None else "Delete"),
+        title = ("Gun" if gun is not None else "Ammo type" if ammo is not None else "Prefab" if prefab is not None
+                 else "Prefab to place" if e is None else "Item")
+        details.draw(screen, rect, title, self.details_rows(), theme, (self.font, self.small), focus=self.tile_target,
+                     button_label=self.details_delete_label(),
                      editing=self.field_edit, hover=self.mouse, open_menu=self.menu_open, tile_surface=lambda i: self.tiles[max(0, min(i, len(self.tiles) - 1))],
                      notes=notes)
 
@@ -2352,7 +2614,8 @@ class Editor:
                 self.draw_dropdown_button(screen, rect, label)
                 continue
             active = action in (f"tool:{self.tool}", f"layer:{self.layer}") \
-                or (action == "legend" and self.show_legend) or (action == "guns" and self.guns_mode)
+                or (action == "legend" and self.show_legend) or (action == "guns" and self.guns_mode) \
+                or (action == "prefabs" and self.prefabs_mode)
             colour = BUTTON_ON if active else (BUTTON_HOT if rect.collidepoint(self.mouse) else BUTTON)
             pygame.draw.rect(screen, colour, rect, border_radius=4)
             text = self.font.render(label, True, TEXT)

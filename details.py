@@ -15,6 +15,9 @@ Field kinds:
     header  a heading row for a group of fields; with an `action` it has a remove button
     menu    a button that opens a drop-down list of choices; picking one calls `set(choice)`
             (used to add things); a menu with no choices is not shown
+    button  a full-width button that calls `action`; with `get` it is drawn "on" while that is true,
+            and `icon` (an atlas tile index) puts that tile's picture at its left. Used for lists of
+            things to pick from.
 """
 from dataclasses import dataclass, field as dataclass_field
 from typing import Any, Callable
@@ -42,10 +45,11 @@ class Field:
     labels: dict = dataclass_field(default_factory=dict)    # enum: display text per choice
     unit: str = ""                              # num: shown after the value
     action: Callable = None                     # header: called by its remove button
-    text_override: str = ""                     # header / menu: the text shown
+    text_override: str = ""                     # header / menu / button: the text shown
+    icon: Any = None                            # button: atlas tile drawn at its left
 
     def text(self):
-        if self.kind in ("header", "menu"):
+        if self.kind in ("header", "menu", "button"):
             return self.text_override or self.label
         value = self.get()
         if self.kind == "text":
@@ -94,6 +98,11 @@ def rows_for(rect, fields):
         minus = pygame.Rect(value.x - 4 - BUTTON_W, y + 3, BUTTON_W, ROW_H - 6)
         rows.append(Row(f, row, minus, value, plus))
     return rows
+
+
+def button_box(row):
+    """The area of a full-width button row."""
+    return pygame.Rect(row.rect.x + 8, row.rect.y + 3, row.rect.w - 16, row.rect.h - 6)
 
 
 def menu_anchor(row):
@@ -146,6 +155,18 @@ def draw(screen, rect, title, rows, theme, fonts, editing=None, hover=None, tile
                 glyph = font.render("x", True, theme["text"])
                 screen.blit(glyph, glyph.get_rect(center=row.plus.center))
             continue
+        if f.kind == "button":
+            wide = button_box(row)
+            chosen = f.get() if f.get else False
+            box(wide, theme["button_on"] if chosen else (theme["button_hot"] if hot(wide) else theme["button"]))
+            label = font.render(f.text(), True, theme["text"])
+            x = wide.x + 8
+            if f.icon is not None and tile_surface is not None:
+                picture = pygame.transform.scale(tile_surface(f.icon), (wide.h - 4, wide.h - 4))
+                screen.blit(picture, (x, wide.y + 2))
+                x += wide.h + 2
+            screen.blit(label, label.get_rect(midleft=(x, wide.centery)))
+            continue
         if f.kind == "menu":
             wide = menu_anchor(row)
             box(wide, theme["button_hot"] if hot(wide) or open_menu == f.key else theme["button"])
@@ -180,10 +201,11 @@ def draw(screen, rect, title, rows, theme, fonts, editing=None, hover=None, tile
                         else text.get_rect(midright=(row.value.right - 6, row.value.centery)))
             screen.set_clip(None)
     button = button_rect(rect, rows)
-    box(button, theme["danger_hot"] if hot(button) else theme["danger"])
-    label = font.render(button_label, True, theme["text"])
-    screen.blit(label, label.get_rect(center=button.center))
-    y = button.bottom + 10
+    if button_label:
+        box(button, theme["danger_hot"] if hot(button) else theme["danger"])
+        label = font.render(button_label, True, theme["text"])
+        screen.blit(label, label.get_rect(center=button.center))
+    y = (button.bottom if button_label else button.top) + 10
     for line in notes:
         screen.blit(small.render(line, True, theme["dim"]), (rect.x + 10, y))
         y += 16

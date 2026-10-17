@@ -60,6 +60,7 @@ _UPPER_DEFAULTS = {"floor_tex": 3, "ceil_tex": 6, "floor_h": 0.0, "ceil_h": 0.0,
 
 
 ENTITY_MODES = ("once", "respawn", "persistent")
+PREFAB_FIELDS = ("tile", "mode", "effect", "amount", "respawn", "size", "lift", "item", "gun", "ammo")
 ENTITY_EFFECTS = ("none", "score", "health", "item", "gun", "ammo")
 MODE_LABELS = {"once": "Pick up once", "respawn": "Respawns", "persistent": "Stays"}
 EFFECT_LABELS = {"none": "None", "score": "Score", "health": "Health", "item": "Inventory item",
@@ -207,7 +208,11 @@ class Entity:
     lift     height of the sprite's bottom above the floor
     animations  list of Animation (none by default): float and / or rotate, each with its own speed
     item, gun, ammo   what the "item" effect puts in the inventory (amount of it), which gun the "gun"
-                effect hands out, and which ammo type the "ammo" effect gives (amount of rounds)"""
+                effect hands out, and which ammo type the "ammo" effect gives (amount of rounds)
+    name, prefab  a prefab is an Entity kept in the level's list of prefabs, with a name and its settings
+                (its x, y and span mean nothing). An item placed from it has prefab set to that name and
+                takes every setting except its place from it (Level.apply_prefabs), so editing the prefab
+                changes all of them at once. Clearing `prefab` detaches an item: it keeps what it had."""
     x: float
     y: float
     span: int = 0
@@ -222,6 +227,8 @@ class Entity:
     item: str = ""                  # effect "item": the name of the thing put in the inventory
     gun: str = ""                   # effect "gun": the name of the gun it hands out
     ammo: str = ""                  # effect "ammo": the name of the ammo type it gives (amount rounds)
+    name: str = ""                  # a prefab's name (an item placed in the map has none)
+    prefab: str = ""                # the prefab this item is an instance of ("" for a plain item)
 
     def clone(self, **changes):
         """A copy that shares nothing with this entity (its animations are copied too)."""
@@ -244,7 +251,8 @@ class Entity:
                        animations=[Animation.from_dict(a) for a in data.get("animations", [])
                                    if isinstance(a, dict)],
                        item=str(data.get("item", ""))[:MAX_NAME], gun=str(data.get("gun", ""))[:MAX_NAME],
-                       ammo=str(data.get("ammo", ""))[:MAX_NAME])
+                       ammo=str(data.get("ammo", ""))[:MAX_NAME],
+                       name=str(data.get("name", ""))[:MAX_NAME], prefab=str(data.get("prefab", ""))[:MAX_NAME])
 
 
 def grid_name(layer, floor):
@@ -281,10 +289,11 @@ def default_floor_name(index):
 
 class Level:
     def __init__(self, grids, start_x=1.5, start_y=1.5, start_angle=0.0, start_span=0, names=None,
-                 entities=None, guns=None, ammo_types=None):
+                 entities=None, guns=None, ammo_types=None, prefabs=None):
         self.grids = grids
         self.guns = list(guns or [])                # weapons defined for this map (see Gun)
         self.ammo_types = list(ammo_types or [])    # kinds of ammunition defined for this map (see AmmoType)
+        self.prefabs = list(prefabs or [])          # reusable items defined for this map (see Entity)
         self.entities = list(entities or [])        # items in the world (see Entity)
         self.start_x, self.start_y = start_x, start_y
         self.start_angle = start_angle              # radians, 0 faces +x (right on the grid)
@@ -313,7 +322,27 @@ class Level:
         return Level({k: [row[:] for row in g] for k, g in self.grids.items()},
                      self.start_x, self.start_y, self.start_angle, self.start_span, self.names,
                      [e.clone() for e in self.entities], [replace(g) for g in self.guns],
-                     [replace(a) for a in self.ammo_types])
+                     [replace(a) for a in self.ammo_types], [p.clone() for p in self.prefabs])
+
+    def prefab_named(self, name):
+        for prefab in self.prefabs:
+            if prefab.name == name:
+                return prefab
+        return None
+
+    def apply_prefabs(self):
+        """Give every item placed from a prefab that prefab's settings (everything but its place). An item
+        whose prefab no longer exists is detached: it keeps the settings it last had."""
+        for e in self.entities:
+            if not e.prefab:
+                continue
+            prefab = self.prefab_named(e.prefab)
+            if prefab is None:
+                e.prefab = ""
+                continue
+            for key in PREFAB_FIELDS:
+                setattr(e, key, getattr(prefab, key))
+            e.animations = [replace(a) for a in prefab.animations]
 
     def ammo_for(self, gun):
         """The AmmoType a gun fires. A gun that names none (or one that no longer exists) fires a plain
@@ -804,9 +833,16 @@ def load_level(path):
                 "speed": item.get("proj_speed", 18.0), "range": item.get("proj_range", 20.0)}))
             gun.ammo = name
         level.guns.append(gun)
+    for item in data.get("prefabs", []):
+        if isinstance(item, dict) and "x" in item:
+            prefab = Entity.from_dict(item)
+            if prefab.name and level.prefab_named(prefab.name) is None:
+                prefab.prefab = ""
+                level.prefabs.append(prefab)
     for entity in level.entities:                   # ammo pickups used to name a gun, not an ammo type
         if entity.effect == "ammo" and not entity.ammo and entity.gun:
             entity.ammo = next((g.ammo for g in level.guns if g.name == entity.gun), "")
+    level.apply_prefabs()
     return level
 
 
@@ -828,7 +864,9 @@ def save_level(path, level):
         + ('  "ammo_types": [\n' + ",\n".join("    " + json.dumps(asdict(a)) for a in level.ammo_types) + "\n  ],\n"
            if level.ammo_types else "")
         + ('  "guns": [\n' + ",\n".join("    " + json.dumps(asdict(g)) for g in level.guns) + "\n  ],\n"
-           if level.guns else "") +
+           if level.guns else "")
+        + ('  "prefabs": [\n' + ",\n".join("    " + json.dumps(asdict(p)) for p in level.prefabs) + "\n  ],\n"
+           if level.prefabs else "") +
         '  "grids": {\n' + ",\n".join(blocks) + "\n  }\n}\n"
     )
     with open(path, "w", encoding="utf-8") as f:

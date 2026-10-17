@@ -185,7 +185,7 @@ def ed(tmp_path):
 
 def test_the_entity_tool_places_selects_and_removes_items(ed):
     ed.do("tool:entity")
-    assert ed.details_rect() is None                            # nothing selected: no pane
+    assert ed.selected_entity() is None and ed.palette_active()      # nothing selected: the prefab list shows
     ed.map_click((4, 4), 1)
     assert len(ed.level.entities) == 1 and ed.selected_entity() is ed.level.entities[0]
     assert ed.details_rect() is not None                        # a selected item opens the pane
@@ -196,7 +196,7 @@ def test_the_entity_tool_places_selects_and_removes_items(ed):
     ed.map_click((4, 4), 1)                                     # clicking an existing item selects it, no new one
     assert len(ed.level.entities) == 2 and ed.selected == 0
     ed.map_click((4, 4), 3)                                     # right click removes it
-    assert len(ed.level.entities) == 1 and ed.details_rect() is None
+    assert len(ed.level.entities) == 1 and ed.selected_entity() is None
     ed.do("undo")
     assert len(ed.level.entities) == 2
 
@@ -265,7 +265,7 @@ def test_the_pane_only_shows_the_fields_that_apply(ed):
     ed.do("tool:entity")
     ed.map_click((4, 4), 1)
     keys = [r.field.key for r in ed.details_rows()]
-    assert keys == ["tile", "mode", "effect", "amount", "size", "lift", "animations", "add_animation"]
+    assert keys == ["tile", "mode", "effect", "amount", "size", "lift", "animations", "add_animation", "make_prefab"]
     ed.level.entities[0].effect = "none"
     ed.level.entities[0].mode = "respawn"
     keys = [r.field.key for r in ed.details_rows()]
@@ -312,13 +312,13 @@ def test_delete_button_delete_key_escape_and_changing_tools_close_the_pane(ed):
     ed.do("tool:entity")
     ed.map_click((4, 4), 1)
     pane_click(ed, details_button(ed))
-    assert ed.level.entities == [] and ed.details_rect() is None
+    assert ed.level.entities == [] and ed.selected_entity() is None
     ed.map_click((4, 4), 1)
     ed.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_DELETE, mod=0, unicode=""))
     assert ed.level.entities == []
     ed.map_click((4, 4), 1)
     ed.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE, mod=0, unicode=""))
-    assert ed.details_rect() is None and len(ed.level.entities) == 1       # closed, item kept
+    assert ed.selected_entity() is None and len(ed.level.entities) == 1    # closed, item kept
     ed.map_click((4, 4), 1)
     ed.do("tool:paint")
     assert ed.details_rect() is None
@@ -342,9 +342,12 @@ def test_clicking_the_pane_does_not_paint_the_map_and_the_atlas_sets_the_sprite(
 
 def test_the_pane_is_drawn_and_shrinks_the_map_area(ed):
     ed.do("tool:entity")
-    wide = ed.map_area().width
+    wide = ed.map_area().width                                  # the prefab list is already docked here
+    ed.do("tool:paint")
+    assert ed.map_area().width == wide + map_editor.PANE_WIDTH   # with another tool there is no pane
+    ed.do("tool:entity")
     ed.map_click((4, 4), 1)
-    assert ed.map_area().width == wide - map_editor.PANE_WIDTH
+    assert ed.map_area().width == wide
     ed.draw(pygame.display.get_surface())
     ed.field_edit = ["size", "1."]
     ed.draw(pygame.display.get_surface())

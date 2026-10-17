@@ -42,6 +42,20 @@ Details pane's "+ Add animation" list and each one has its own settings:
 Add both for an item that floats and spins.
 `maps/items.json` is a small example.
 
+## Prefabs
+
+A prefab is an item you design once and reuse: its icon (the sprite the player sees in the world),
+mode, effect, size and animations. Make them in the editor's **Prefabs** section (`P`): add a prefab,
+click a tile in the atlas to set its icon, and set the rest in the Details pane. For example a "9mm
+box" prefab with the Give ammo effect and a bullet icon, a "Heart" prefab that heals, or a "Pistol
+pickup" that gives the pistol. They are saved in the map file.
+
+To place them, choose the Entity tool (`N`): with nothing selected, the pane on the right lists
+"Plain item" and your prefabs. Pick one and click cells. Items placed from a prefab stay linked to
+it, so editing the prefab updates every copy in the map. Select a placed copy to switch it to another
+prefab, or choose (none) to detach it, which keeps its settings so you can edit it on its own. A
+plain item's pane also has "Save as a new prefab".
+
 ## Inventory and guns
 
 Some items are kept instead of used up. Give an item the **Inventory item** effect (a name and a
@@ -83,5 +97,5 @@ has three example guns and pickups.
     main.py, map_editor.py, ...   game and editor source
     assets/                       textures.png (the texture atlas)
     maps/                         map.json (default map) and the demo maps (items.json has pickups,
-                                  guns.json guns and an inventory item)
+                                  guns.json guns, an inventory item and prefabs)
     tests/
