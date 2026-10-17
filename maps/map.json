@@ -11,7 +11,11 @@
     {"x": 16.5, "y": 8.5, "span": 0, "tile": 12, "mode": "once", "effect": "score", "amount": 10.0, "respawn": 10.0, "size": 0.6, "lift": 0.0, "animations": [{"kind": "rotate", "speed": 0.5, "amount": 0.1}], "item": "", "gun": ""},
     {"x": 6.5, "y": 10.5, "span": 0, "tile": 13, "mode": "once", "effect": "none", "amount": 10.0, "respawn": 10.0, "size": 0.4, "lift": 0.0, "animations": [{"kind": "float", "speed": 0.3, "amount": 1.5}], "item": "", "gun": ""},
     {"x": 2.5, "y": 6.5, "span": 1, "tile": 13, "mode": "once", "effect": "score", "amount": 10.0, "respawn": 10.0, "size": 0.4, "lift": 0.3, "animations": [{"kind": "rotate", "speed": 0.3, "amount": 0.1}, {"kind": "float", "speed": 0.5, "amount": 0.025}], "item": "", "gun": ""},
-    {"x": 14.5, "y": 10.5, "span": 0, "tile": 16, "mode": "once", "effect": "score", "amount": 10.0, "respawn": 10.0, "size": 0.4, "lift": 0.0, "animations": [], "item": "", "gun": ""}
+    {"x": 14.5, "y": 10.5, "span": 0, "tile": 17, "mode": "respawn", "effect": "ammo", "amount": 24.0, "respawn": 10.0, "size": 0.4, "lift": 0.1, "animations": [{"kind": "float", "speed": 0.2, "amount": 0.05}], "item": "", "gun": "Gun"},
+    {"x": 17.5, "y": 10.5, "span": 0, "tile": 16, "mode": "once", "effect": "gun", "amount": 1.0, "respawn": 10.0, "size": 0.4, "lift": 0.0, "animations": [], "item": "", "gun": "Gun"}
+  ],
+  "guns": [
+    {"name": "Gun", "tile": 16, "size": 5.0, "mode": "semi", "damage": 10.0, "fire_rate": 4.0, "mag_size": 12, "start_ammo": 36, "reload_time": 1.5, "proj_tile": 17, "proj_size": 0.5, "proj_speed": 18.0, "proj_range": 20.0, "spread": 0.0}
   ],
   "grids": {
     "walls": [

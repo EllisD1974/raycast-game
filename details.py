@@ -21,7 +21,7 @@ from typing import Any, Callable
 
 import pygame
 
-PANE_WIDTH = 270
+PANE_WIDTH = 340
 ROW_H = 34
 TITLE_H = 34
 BUTTON_W = 28
@@ -90,7 +90,7 @@ def rows_for(rect, fields):
         y = rect.y + TITLE_H + i * ROW_H
         row = pygame.Rect(rect.x, y, rect.w, ROW_H)
         plus = pygame.Rect(rect.right - 8 - BUTTON_W, y + 3, BUTTON_W, ROW_H - 6)
-        value = pygame.Rect(plus.x - 4 - 122, y + 3, 122, ROW_H - 6)
+        value = pygame.Rect(plus.x - 4 - 118, y + 3, 118, ROW_H - 6)
         minus = pygame.Rect(value.x - 4 - BUTTON_W, y + 3, BUTTON_W, ROW_H - 6)
         rows.append(Row(f, row, minus, value, plus))
     return rows

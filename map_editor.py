@@ -369,7 +369,7 @@ class Editor:
 
     def preview_width(self):
         """Width of the 3D view's column at the window's right; 0 while the view is hidden."""
-        if not self.show_preview:
+        if not self.show_preview or self.guns_mode:        # the Guns section has no use for the 3D view
             return 0
         return int(min(PREVIEW_MAX_W, max(PREVIEW_MIN_W, (self._size()[0] - PANEL_W) * 0.4)))
 
@@ -1795,8 +1795,7 @@ class Editor:
                              rect, border_radius=4)
             screen.blit(self.tiles[max(0, min(g.tile, len(self.tiles) - 1))], (rect.x + 6, rect.y + (rect.h - TILE) // 2))
             screen.blit(self.font.render(g.name, True, TEXT), (rect.x + 48, rect.y + 5))
-            summary = (f"{GUN_MODE_LABELS[g.mode]}   {g.damage:g} dmg   {g.fire_rate:g}/s   "
-                       f"{g.capacity} rounds   reload {g.reload_time:g}s")
+            summary = f"{GUN_MODE_LABELS[g.mode]}   {g.damage:g} dmg   {g.fire_rate:g}/s   {g.capacity} rounds"
             screen.blit(self.small.render(summary, True, TEXT if on else DIM), (rect.x + 48, rect.y + 24))
         pygame.draw.rect(screen, BUTTON_HOT if add.collidepoint(self.mouse) else BUTTON, add, border_radius=4)
         label = self.font.render("+ Add gun", True, TEXT)
@@ -1806,7 +1805,8 @@ class Editor:
             note = "No guns yet: add one." if not self.level.guns else "Select a gun to edit it."
             screen.blit(self.small.render(note, True, DIM), (add.x, add.bottom + 14))
         else:
-            self.draw_gun_preview(screen, pygame.Rect(add.x, add.bottom + 16, 400, 225), gun)
+            width = max(160, min(400, area.w - 40))
+            self.draw_gun_preview(screen, pygame.Rect(add.x, add.bottom + 16, width, width * 9 // 16), gun)
         screen.set_clip(None)
 
     def draw_gun_preview(self, screen, card, gun):
