@@ -13,7 +13,7 @@ TEXTURES below are drawn; every other slot shows a magenta/black "missing textur
 checker so an unpopulated map id is obvious. To add a texture, write a function
 like brick() and append it to TEXTURES. Its index (row-major) is its map id - 1.
 Tile order: 0 brick, 1 mossy stone, 2 wood, 3 blue tiles, 4 floor, 5 ceiling, 6-9 left free for
-hand-drawn textures, 10 gem, 11 heart, 12 coin, 13 key. The last four are item sprites for map entities: they have transparent corners, so
+hand-drawn textures, 10 gem, 11 heart, 12 coin, 13 key, 14 bullet, 16 pistol. Tiles 10-14 are sprites for map entities: they have transparent corners, so
 only the shape is drawn.
 Map ids are index + 1; mapfile.DEFAULTS uses ids 5 and 6 as the default floor and ceiling.
 """
@@ -169,9 +169,27 @@ def key(rng):
     return s
 
 
+def bullet(rng):
+    """Projectile sprite: a small glowing yellow dot."""
+    s = _sprite()
+    pygame.draw.circle(s, (255, 230, 120), (16, 16), 6)
+    pygame.draw.circle(s, (255, 255, 230), (16, 16), 3)
+    return s
+
+
+def pistol(rng):
+    """Gun sprite: a plain black pistol seen from the side (the editor's Guns section uses it)."""
+    s = _sprite()
+    pygame.draw.rect(s, (0, 0, 0), (5, 10, 15, 5))
+    pygame.draw.polygon(s, (0, 0, 0), ((18, 10), (21, 10), (26, 19), (21, 19)))
+    return s
+
+
 TEXTURES = (brick, mossy_stone, wood, blue_tiles, floor_tile, ceiling_panel,
             missing, missing, missing, missing,     # 6-9: free slots (draw your own)
-            gem, heart, coin, key)                  # append new textures here
+            gem, heart, coin, key,
+            bullet, missing,                        # 14: bullet sprite, 15: free
+            pistol)                                 # 16: the pistol; append new textures here
 
 
 ATLAS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "textures.png")

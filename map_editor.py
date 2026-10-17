@@ -67,6 +67,13 @@ over a row, or by clicking the number and typing. Esc closes the pane, Delete or
 removes the item (so does right click on it). Items show on the map ringed white / cyan / green by
 mode, and in the 3D view as sprites that face you.
 
+The Guns section (G or the Guns button) replaces the map with the list of the map's guns: add one
+with "+ Add gun", click one to edit it in the Details pane (name, picture and its size, fire mode,
+damage, fire rate, magazine, spare ammunition, reload time, spread, and the bullet's picture, size,
+speed and range). Click a Sprite row and then a tile in the atlas to set that picture. Hand a gun
+out with an item whose effect is "Give a gun" (or "Give ammo"); an "Inventory item" effect puts a
+named thing in the player's inventory instead. Choosing a map tool goes back to the map.
+
 The 3D view (V or the 3D button shows and hides it) is a live picture of the level at the right of
 the window, drawn by the game's own renderer, and it follows every edit as you make it, even
 mid-stroke. Drag inside it to look around; with the mouse over it, W A S D / arrows walk and turn
@@ -91,11 +98,13 @@ import pygame
 from atlas import ATLAS_PATH, atlas_array, transparent_tiles, unpack_atlas
 from constants import HEIGHT, MOUSE_SENSITIVITY, PLAYER_HEIGHT, TILE, WIDTH
 from mapfile import (ANIMATION_KINDS, ANIMATION_LABELS, DEFAULTS, EDIT_LAYERS, EFFECT_LABELS, ENTITY_EFFECTS,
-                     ENTITY_MODES, MAP_PATH, MAX_NAME_LENGTH, MIN_WALL_GAP, MODE_LABELS, Animation, Entity, Level,
-                     default_level,
+                     ENTITY_MODES, GUN_MODE_LABELS, GUN_MODES, MAP_PATH, MAX_NAME, MAX_NAME_LENGTH, MIN_WALL_GAP,
+                     MODE_LABELS, Animation, Entity, Gun, Level, default_level,
                      grid_name, load_level, save_level, split_grid_name)
 import details
+import hud
 from details import PANE_WIDTH, Field
+from inventory import GunState
 from preview import Preview
 from window import maximize
 
@@ -271,6 +280,9 @@ class Editor:
         self.selected = None                    # index in level.entities of the selected item, or None
         self.field_edit = None                  # [field key, text] while a number is typed in the Details pane
         self.menu_open = None                   # key of the Details field whose drop-down list is open
+        self.guns_mode = False                  # the Guns section is showing instead of the map
+        self.gun_selected = None                # index in level.guns of the gun being edited
+        self.tile_target = "tile"               # the tile field the atlas sets while a pane is open
         self.selection = {0}                    # selected atlas tile indices (0-based)
         self.value = {}                         # height brush per stored grid; see brush()
         self.ramp_dir = 1
@@ -368,14 +380,22 @@ class Editor:
 
     # ---------------------------------------------------------------- the Details pane
 
+    def selected_gun(self):
+        """The gun being edited in the Guns section, or None."""
+        if self.guns_mode and self.gun_selected is not None and 0 <= self.gun_selected < len(self.level.guns):
+            return self.level.guns[self.gun_selected]
+        return None
+
     def selected_entity(self):
         """The selected item, or None (nothing selected, or the selection no longer exists)."""
+        if self.guns_mode:
+            return None
         if self.selected is not None and 0 <= self.selected < len(self.level.entities):
             return self.level.entities[self.selected]
         return None
 
     def details_width(self):
-        return PANE_WIDTH if self.selected_entity() is not None else 0
+        return PANE_WIDTH if self.selected_entity() is not None or self.selected_gun() is not None else 0
 
     def details_rect(self):
         """The docked Details pane, or None while nothing is selected."""
@@ -386,7 +406,10 @@ class Editor:
         return pygame.Rect(w - self.preview_width() - width, TOOLBAR_H, width, max(1, h - TOOLBAR_H - STATUS_H))
 
     def details_fields(self):
-        """Fields describing the selected thing; today that is always an item."""
+        """Fields describing the selected thing: a gun in the Guns section, else an item."""
+        gun = self.selected_gun()
+        if gun is not None:
+            return self.gun_fields(gun)
         e = self.selected_entity()
         if e is None:
             return []
@@ -398,8 +421,16 @@ class Editor:
         fields = [field("tile", "Sprite", "tile", low=0, high=len(self.tiles) - 1),
                   field("mode", "Mode", "enum", choices=ENTITY_MODES, labels=MODE_LABELS),
                   field("effect", "Effect", "enum", choices=ENTITY_EFFECTS, labels=EFFECT_LABELS)]
-        if e.effect != "none":
-            fields.append(field("amount", "Amount", "num", step=5.0, low=0.0, high=1000.0))
+        if e.effect == "item":
+            fields.append(field("item", "Item name", "text"))
+        if e.effect in ("gun", "ammo"):
+            names = tuple(g.name for g in self.level.guns) or ("",)
+            fields.append(field("gun", "Gun", "enum", choices=names,
+                                labels={"": "(no guns yet)", **{n: n for n in names}}))
+        if e.effect in ("score", "health", "item", "ammo"):
+            step = {"score": 5.0, "health": 5.0, "item": 1.0, "ammo": 6.0}[e.effect]
+            fields.append(field("amount", "Amount" if e.effect != "ammo" else "Rounds", "num", step=step,
+                                low=0.0, high=1000.0))
         if e.mode == "respawn":
             fields.append(field("respawn", "Respawn", "num", step=1.0, low=0.0, high=600.0, unit="s"))
         fields += [field("size", "Size", "num", step=0.1, low=0.1, high=3.0),
@@ -422,6 +453,30 @@ class Editor:
                                 choices=unused, labels=ANIMATION_LABELS, text_override="+ Add animation"))
         return fields
 
+    def gun_fields(self, g):
+        """The settings of one gun, for the Details pane in the Guns section."""
+        def field(name, label, kind, cast=None, **options):
+            return Field(name, label, kind, (lambda n=name: getattr(g, n)),
+                         (lambda v, n=name, c=cast: self.set_gun(n, c(v) if c else v)), **options)
+
+        fields = [field("name", "Name", "text"),
+                  field("tile", "Sprite", "tile", int, low=0, high=len(self.tiles) - 1),
+                  field("size", "Sprite size", "num", step=0.5, low=0.2, high=20.0),
+                  field("mode", "Fire mode", "enum", choices=GUN_MODES, labels=GUN_MODE_LABELS),
+                  field("damage", "Damage", "num", step=1.0, low=0.0, high=10000.0),
+                  field("fire_rate", "Fire rate", "num", step=0.5, low=0.1, high=100.0, unit="/s")]
+        if g.mode != "single":
+            fields.append(field("mag_size", "Rounds / mag", "num", int, step=1.0, low=1, high=1000))
+        fields += [field("start_ammo", "Spare rounds", "num", int, step=6.0, low=0, high=100000),
+                   field("reload_time", "Reload time", "num", step=0.1, low=0.0, high=60.0, unit="s"),
+                   field("spread", "Spread", "num", step=0.5, low=0.0, high=45.0, unit=" deg"),
+                   Field("projectile", "Bullet", "header", None, None),
+                   field("proj_tile", "Bullet sprite", "tile", int, low=0, high=len(self.tiles) - 1),
+                   field("proj_size", "Bullet size", "num", step=0.02, low=0.01, high=2.0),
+                   field("proj_speed", "Bullet speed", "num", step=1.0, low=0.5, high=200.0, unit="/s"),
+                   field("proj_range", "Bullet range", "num", step=1.0, low=0.5, high=200.0)]
+        return fields
+
     def details_rows(self):
         rect = self.details_rect()
         return [] if rect is None else details.rows_for(rect, self.details_fields())
@@ -432,8 +487,58 @@ class Editor:
         if e is None or getattr(e, name) == value:
             return
         self.begin_edit()
+        old = e.effect
         setattr(e, name, value)
         setattr(self.entity_brush, name, value)
+        if name == "effect" and not (old in ("score", "health") and value in ("score", "health")):
+            e.amount = self.entity_brush.amount = {"score": 10.0, "health": 25.0, "item": 1.0,
+                                                   "gun": 1.0, "ammo": 24.0}.get(value, e.amount)
+        if name == "item":
+            e.item = self.entity_brush.item = str(value).strip()[:MAX_NAME]
+
+    def gun_names(self):
+        return [g.name for g in self.level.guns]
+
+    def new_gun_name(self, base="Gun", skip=None):
+        taken = {g.name for i, g in enumerate(self.level.guns) if i != skip}
+        if base not in taken:
+            return base
+        n = 2
+        while f"{base} {n}"[:MAX_NAME] in taken:
+            n += 1
+        return f"{base} {n}"[:MAX_NAME]
+
+    def add_gun(self):
+        """Add a gun with the default settings (a plain pistol) and select it."""
+        self.begin_edit()
+        self.level.guns.append(Gun(name=self.new_gun_name("Gun")))
+        self.gun_selected = len(self.level.guns) - 1
+        self.tile_target = "tile"
+        self.say("Added a gun: change it in the Details pane, then hand it out with a Give a gun item")
+
+    def set_gun(self, name, value):
+        """Change one setting of the selected gun (one undo step). Renaming keeps the items that give
+        the gun pointing at it."""
+        g = self.selected_gun()
+        if g is None or getattr(g, name) == value:
+            return
+        if name == "name":
+            value = self.new_gun_name(str(value).strip()[:MAX_NAME], skip=self.gun_selected) if str(value).strip() else g.name
+            if value == g.name:
+                return
+        self.begin_edit()
+        if name == "name":
+            for e in self.level.entities:
+                if e.gun == g.name:
+                    e.gun = value
+        setattr(g, name, value)
+
+    def delete_gun(self):
+        g = self.selected_gun()
+        if g is not None:
+            self.begin_edit()
+            self.level.guns.remove(g)
+            self.gun_selected = None
 
     def add_animation(self, kind):
         e = self.selected_entity()
@@ -461,9 +566,12 @@ class Editor:
                 self.selected = i
 
     def deselect(self):
-        self.selected, self.field_edit, self.menu_open = None, None, None
+        self.selected, self.field_edit, self.menu_open, self.gun_selected = None, None, None, None
 
     def delete_selected(self):
+        if self.selected_gun() is not None:
+            self.delete_gun()
+            return
         e = self.selected_entity()
         if e is not None:
             self.begin_edit()
@@ -492,10 +600,12 @@ class Editor:
             elif row.value.collidepoint(pos):
                 if f.kind == "num":
                     self.field_edit = [f.key, f"{f.get():g}"]
+                elif f.kind == "text":
+                    self.field_edit = [f.key, str(f.get())]
                 elif f.kind == "enum":
                     self.menu_open = f.key              # a drop-down list of the choices
-                else:
-                    f.set(f.stepped(1))
+                elif f.kind == "tile":
+                    self.tile_target = f.key            # the next atlas click sets this picture
 
     def menu_click(self, pos):
         """A click while a drop-down list is open: pick the choice under it; any click closes the list."""
@@ -513,13 +623,19 @@ class Editor:
                 row.field.set(row.field.stepped(1 if notches > 0 else -1, abs(notches)))
                 return
 
+    def editing_text(self):
+        """True while the Details pane is taking a name (any characters) rather than a number."""
+        if self.field_edit is None:
+            return False
+        return any(f.key == self.field_edit[0] and f.kind == "text" for f in self.details_fields())
+
     def finish_field_edit(self, commit):
         """Apply (or drop) the number typed into the Details pane."""
         typed, self.field_edit = self.field_edit, None
         if typed and commit:
             for f in self.details_fields():
                 if f.key == typed[0]:
-                    value = f.parsed(typed[1])
+                    value = typed[1].strip() if f.kind == "text" else f.parsed(typed[1])
                     if value is not None:
                         f.set(value)
 
@@ -568,7 +684,7 @@ class Editor:
         if self.floor > 0:
             row1.append(("btn", "Del", "delfloor"))
         row1.append(("txt", f"floor {self.floor + 1} of {count}", DIM))
-        row1 += [None, ("btn", "Key(K)", "legend"), ("btn", "3D(V)", "preview"),
+        row1 += [None, ("btn", "Guns(G)", "guns"), ("btn", "Key(K)", "legend"), ("btn", "3D(V)", "preview"),
                  ("btn", "Reload tex(F6)", "textures")]
         if self.show_preview:
             row1.append(("btn", "Cam->Start", "camstart"))
@@ -996,6 +1112,14 @@ class Editor:
         else:
             self.selection |= picked
         self.atlas_drag = None
+        if self.guns_mode:                              # the Guns section: the picture of the gun or its bullet
+            if self.selected_gun() is not None:
+                target = self.tile_target if self.tile_target in ("tile", "proj_tile") else "tile"
+                self.set_gun(target, min(picked))
+                self.say(f"{'Bullet' if target == 'proj_tile' else 'Gun'} sprite: tile {min(picked) + 1}")
+            else:
+                self.say("Select a gun first (or add one), then click a tile")
+            return
         if self.tool == "entity":                       # the tile chosen here is the item's sprite
             if self.selected_entity() is not None:
                 self.set_entity("tile", min(picked))
@@ -1058,6 +1182,8 @@ class Editor:
         self.field_edit = self.menu_open = None
         if self.selected_entity() is None:
             self.selected = None
+        if self.gun_selected is not None and not 0 <= self.gun_selected < len(self.level.guns):
+            self.gun_selected = None
         self.dropdown_open = False
 
     def do(self, action):
@@ -1065,8 +1191,13 @@ class Editor:
             self.confirm = None
         if action != "dropdown":
             self.dropdown_open = False
-        if action.startswith("tool:"):
+        if action == "guns":
+            self.guns_mode = not self.guns_mode
+            self.deselect()
+            self.say("Guns: add a gun, then edit it in the Details pane" if self.guns_mode else "Back to the map")
+        elif action.startswith("tool:"):
             self.tool = action[5:]
+            self.guns_mode = False
             if self.tool != "entity":
                 self.deselect()
             if self.tool == "camera" and not self.show_preview:
@@ -1325,7 +1456,9 @@ class Editor:
                 self.finish_field_edit(False)
             elif e.key == pygame.K_BACKSPACE:
                 self.field_edit[1] = self.field_edit[1][:-1]
-            elif char and char in "0123456789.,-" and len(self.field_edit[1]) < 8:
+            elif char and self.editing_text() and char.isprintable() and len(self.field_edit[1]) < MAX_NAME:
+                self.field_edit[1] += char
+            elif char and not self.editing_text() and char in "0123456789.,-" and len(self.field_edit[1]) < 8:
                 self.field_edit[1] += char
             return
         ctrl = bool(e.mod & pygame.KMOD_CTRL)
@@ -1362,6 +1495,8 @@ class Editor:
             self.do("rename")
         elif e.key == pygame.K_k:
             self.do("legend")
+        elif e.key == pygame.K_g:
+            self.do("guns")
         elif e.key == pygame.K_v:
             self.do("preview")
         elif e.key in LAYER_KEYS:
@@ -1420,6 +1555,9 @@ class Editor:
         elif area.collidepoint(e.pos):
             if e.button == 2 or (e.button == 1 and pygame.key.get_pressed()[pygame.K_SPACE]):
                 self.pan_drag = True
+            elif self.guns_mode:
+                if e.button == 1:
+                    self.guns_click(e.pos)
             elif e.button in (1, 3):
                 self.confirm = None
                 self.map_click(self.cell_at(e.pos), e.button)
@@ -1470,7 +1608,7 @@ class Editor:
                 self.preview.nudge(1 if e.y > 0 else -1, abs(e.y))
             return
         area = self.map_area()
-        if not area.collidepoint(self.mouse):
+        if not area.collidepoint(self.mouse) or self.guns_mode:
             return
         if self.mods() & pygame.KMOD_CTRL:      # Ctrl + wheel changes the value under the cursor, no zoom
             self.nudge_cell(self.cell_at(self.mouse), VALUE_STEP * (1 if e.y > 0 else -1) * abs(e.y))
@@ -1486,7 +1624,10 @@ class Editor:
 
     def draw(self, screen):
         screen.fill(BG)
-        self.draw_map(screen)
+        if self.guns_mode:
+            self.draw_guns(screen)
+        else:
+            self.draw_map(screen)
         self.draw_panel(screen)
         self.draw_preview(screen)
         self.draw_details(screen)
@@ -1613,21 +1754,105 @@ class Editor:
         self.draw_cursor(screen, area)
         screen.set_clip(None)
 
+    # ---------------------------------------------------------------- the Guns section
+
+    GUN_ROW_H = 46
+
+    def gun_rows(self):
+        """[(rect, gun index)] for the list of guns, and the rect of the Add button after it."""
+        area = self.map_area()
+        width = min(area.w - 40, 420)
+        rows = [(pygame.Rect(area.x + 20, area.y + 74 + i * self.GUN_ROW_H, width, self.GUN_ROW_H - 4), i)
+                for i in range(len(self.level.guns))]
+        top = area.y + 74 + len(rows) * self.GUN_ROW_H
+        return rows, pygame.Rect(area.x + 20, top, 160, 34)
+
+    def guns_click(self, pos):
+        rows, add = self.gun_rows()
+        if add.collidepoint(pos):
+            self.add_gun()
+            return
+        for rect, i in rows:
+            if rect.collidepoint(pos):
+                self.gun_selected = i
+                self.tile_target = "tile"
+                self.field_edit = self.menu_open = None
+                return
+
+    def draw_guns(self, screen):
+        """The Guns section: the map's guns as a list, and a preview of the selected one as it looks in hand."""
+        area = self.map_area()
+        screen.set_clip(area)
+        pygame.draw.rect(screen, BG, area)
+        screen.blit(self.font.render("Guns in this map", True, ACCENT), (area.x + 20, area.y + 14))
+        screen.blit(self.small.render("Click a gun to edit it in the Details pane. Pick its pictures from the atlas on the left.",
+                                      True, DIM), (area.x + 20, area.y + 40))
+        rows, add = self.gun_rows()
+        for rect, i in rows:
+            g = self.level.guns[i]
+            on = i == self.gun_selected
+            pygame.draw.rect(screen, BUTTON_ON if on else (BUTTON_HOT if rect.collidepoint(self.mouse) else BUTTON),
+                             rect, border_radius=4)
+            screen.blit(self.tiles[max(0, min(g.tile, len(self.tiles) - 1))], (rect.x + 6, rect.y + (rect.h - TILE) // 2))
+            screen.blit(self.font.render(g.name, True, TEXT), (rect.x + 48, rect.y + 5))
+            summary = (f"{GUN_MODE_LABELS[g.mode]}   {g.damage:g} dmg   {g.fire_rate:g}/s   "
+                       f"{g.capacity} rounds   reload {g.reload_time:g}s")
+            screen.blit(self.small.render(summary, True, TEXT if on else DIM), (rect.x + 48, rect.y + 24))
+        pygame.draw.rect(screen, BUTTON_HOT if add.collidepoint(self.mouse) else BUTTON, add, border_radius=4)
+        label = self.font.render("+ Add gun", True, TEXT)
+        screen.blit(label, label.get_rect(center=add.center))
+        gun = self.selected_gun()
+        if gun is None:
+            note = "No guns yet: add one." if not self.level.guns else "Select a gun to edit it."
+            screen.blit(self.small.render(note, True, DIM), (add.x, add.bottom + 14))
+        else:
+            self.draw_gun_preview(screen, pygame.Rect(add.x, add.bottom + 16, 400, 225), gun)
+        screen.set_clip(None)
+
+    def draw_gun_preview(self, screen, card, gun):
+        """The gun as the player sees it at the bottom of the game picture (same drawing code), the
+        bullet at its real size next to a cell-sized square, and the numbers that matter."""
+        picture = pygame.Surface((640, 360))
+        picture.fill((44, 48, 60))
+        pygame.draw.rect(picture, (64, 60, 52), (0, 300, 640, 60))
+        hud.draw_weapon(picture, self.tiles, GunState(gun, mag=gun.capacity), 0.0)
+        screen.blit(pygame.transform.smoothscale(picture, card.size), card)
+        pygame.draw.rect(screen, GRID, card.inflate(2, 2), 1)
+        cell = 56                                        # a map cell, to show how big the bullet is
+        box = pygame.Rect(card.x, card.bottom + 14, cell, cell)
+        pygame.draw.rect(screen, GRID, box, 1)
+        size = max(2, round(gun.proj_size * cell))
+        bullet = pygame.transform.scale(self.tiles[max(0, min(gun.proj_tile, len(self.tiles) - 1))], (size, size))
+        screen.blit(bullet, bullet.get_rect(center=box.center))
+        screen.blit(self.small.render("bullet vs a 1 cell square", True, DIM), (box.right + 10, box.centery - 8))
+        lines = (f"{gun.damage * gun.fire_rate:g} damage a second at full fire rate",
+                 f"{gun.capacity} round{'s' if gun.capacity != 1 else ''} a magazine, {gun.start_ammo} spare, "
+                 f"{gun.reload_time:g}s to reload",
+                 f"bullets fly {gun.proj_speed:g} cells a second for up to {gun.proj_range:g} cells")
+        for i, text in enumerate(lines):
+            screen.blit(self.small.render(text, True, DIM), (card.x, box.bottom + 14 + i * 17))
+
     def draw_details(self, screen):
         """The docked Details pane (only while something is selected)."""
         rect = self.details_rect()
         if rect is None:
             return
-        e = self.selected_entity()
+        e, gun = self.selected_entity(), self.selected_gun()
         theme = {"panel": PANEL_BG, "grid": GRID, "text": TEXT, "dim": DIM, "accent": ACCENT, "button": BUTTON,
                  "button_hot": BUTTON_HOT, "field": (28, 29, 34), "field_edit": (50, 52, 64),
                  "danger": (120, 50, 55), "danger_hot": (160, 64, 70)}
-        notes = (f"Cell ({math.floor(e.x)}, {math.floor(e.y)}) on {self.level.names[e.span]}",
-                 "Wheel over a row steps it.",
-                 "Click a number to type one.",
-                 "Click an atlas tile: sets the sprite.",
-                 "Esc closes this; Del removes the item.")
-        details.draw(screen, rect, "Item", self.details_rows(), theme, (self.font, self.small),
+        if gun is not None:
+            how = {"single": "one round, reloads after every shot", "semi": "one round per trigger pull",
+                   "auto": "keeps firing while the trigger is held"}[gun.mode]
+            notes = (f"{GUN_MODE_LABELS[gun.mode]}: {how}.", "Click a Sprite row, then an atlas tile,",
+                     "to set that picture.", "Hand the gun out with an item whose", "effect is Give a gun.")
+        else:
+            notes = (f"Cell ({math.floor(e.x)}, {math.floor(e.y)}) on {self.level.names[e.span]}",
+                     "Wheel over a row steps it.", "Click a number to type one.",
+                     "Click an atlas tile: sets the sprite.", "Esc closes this; Del removes the item.")
+        details.draw(screen, rect, "Gun" if self.selected_gun() is not None else "Item", self.details_rows(),
+                     theme, (self.font, self.small), focus=self.tile_target,
+                     button_label="Delete gun" if self.selected_gun() is not None else "Delete",
                      editing=self.field_edit, hover=self.mouse, open_menu=self.menu_open, tile_surface=lambda i: self.tiles[max(0, min(i, len(self.tiles) - 1))],
                      notes=notes)
 
@@ -1942,7 +2167,7 @@ class Editor:
                 self.draw_dropdown_button(screen, rect, label)
                 continue
             active = action in (f"tool:{self.tool}", f"layer:{self.layer}") \
-                or (action == "legend" and self.show_legend)
+                or (action == "legend" and self.show_legend) or (action == "guns" and self.guns_mode)
             colour = BUTTON_ON if active else (BUTTON_HOT if rect.collidepoint(self.mouse) else BUTTON)
             pygame.draw.rect(screen, colour, rect, border_radius=4)
             text = self.font.render(label, True, TEXT)

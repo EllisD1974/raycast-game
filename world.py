@@ -116,6 +116,21 @@ class World:
                 self.ceil_plane[0, y, x] = (level.wall_ceiling(x, y), 0.0, 0.0)
                 self.floor_tex[0, y, x] = self.wall_tex[y, x]       # the top and the sides look like the wall
 
+    def point_open(self, x, y, z):
+        """True if the point is in open space: inside the height range of some floor's room at that spot,
+        and not inside see-through glass (which stops bullets as it stops the player)."""
+        cx, cy = math.floor(x), math.floor(y)
+        if not (0 <= cx < self.width and 0 <= cy < self.height):
+            return False
+        if self.pane_tex[cy, cx] >= 0 and z < self.pane_top[cy, cx]:
+            return False
+        fx, fy = x - cx, y - cy
+        for s in range(self.floors):
+            if self.span_on[s, cy, cx] and plane_z(self.floor_plane, s, cx, cy, fx, fy) <= z \
+                    < plane_z(self.ceil_plane, s, cx, cy, fx, fy):
+                return True
+        return False
+
     def is_blocked(self, cx, cy):
         return not (0 <= cx < self.width and 0 <= cy < self.height) or bool(self.blocked[cy, cx])
 

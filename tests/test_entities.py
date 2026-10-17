@@ -367,7 +367,7 @@ def test_a_drop_down_opens_lists_the_choices_and_closes_without_choosing(ed):
     ed.map_click((4, 4), 1)
     row = pane_row(ed, "effect")
     pane_click(ed, row.value)
-    assert ed.menu_open == "effect" and [c for _r, c in details.menu_rects(row)] == ["none", "score", "health"]
+    assert ed.menu_open == "effect" and [c for _r, c in details.menu_rects(row)] == ["none", "score", "health", "item", "gun", "ammo"]
     ed.draw(pygame.display.get_surface())                       # the open list draws
     pane_click(ed, pygame.Rect(700, 700, 4, 4))                 # click away: closed, nothing changed
     assert ed.menu_open is None and ed.level.entities[0].effect == "score"

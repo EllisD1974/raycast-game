@@ -38,6 +38,12 @@ def describe(entity):
         return f"+{amount} score"
     if entity.effect == "health":
         return f"+{amount} health"
+    if entity.effect == "item":
+        return f"+{amount} {entity.item or 'Item'}"
+    if entity.effect == "gun":
+        return f"Picked up {entity.gun or 'a gun'}"
+    if entity.effect == "ammo":
+        return f"+{amount} {entity.gun or 'gun'} ammo"
     return "Picked up"
 
 
@@ -45,6 +51,7 @@ class Entities:
     def __init__(self, level, world):
         self.clock = 0.0
         self.items = []
+        self.guns = {g.name: g for g in level.guns}          # what a "gun" or "ammo" pickup refers to
         for e in level.entities:
             cx, cy = math.floor(e.x), math.floor(e.y)
             if e.span >= world.floors or not (0 <= cx < world.width and 0 <= cy < world.height):
@@ -82,9 +89,10 @@ class Entities:
             return False
         return player.z < item.z + e.size and player.z + PLAYER_HEIGHT > item.z      # the heights overlap
 
-    def update(self, player, stats, dt):
+    def update(self, player, stats, dt, inventory=None):
         """Advance dt seconds: bring back respawning items and pick up what the player touches.
-        Returns the messages of the pickups made this tick."""
+        Returns the messages of the pickups made this tick. Pickups that go in the inventory (an item,
+        a gun, ammo) need `inventory`; without one they are still picked up but give nothing."""
         self.clock += dt
         messages = []
         for item in self.items:
@@ -96,7 +104,7 @@ class Entities:
                     continue
             touching = self._touched(item, player)
             if touching and not item.touching:
-                self._apply(e, stats)
+                self._apply(e, stats, inventory, self.guns)
                 messages.append(describe(e))
                 if e.mode == "once":
                     item.present = False
@@ -106,8 +114,16 @@ class Entities:
         return messages
 
     @staticmethod
-    def _apply(entity, stats):
+    def _apply(entity, stats, inventory=None, guns=None):
         if entity.effect == "score":
             stats.score += entity.amount
         elif entity.effect == "health":
             stats.health = max(0.0, min(stats.max_health, stats.health + entity.amount))
+        elif inventory is None:
+            return
+        elif entity.effect == "item":
+            inventory.add_item(entity.item, entity.amount)
+        elif entity.effect == "gun" and guns and entity.gun in guns:
+            inventory.give_gun(guns[entity.gun])
+        elif entity.effect == "ammo":
+            inventory.add_ammo(entity.gun, entity.amount)

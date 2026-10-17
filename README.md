@@ -42,9 +42,36 @@ Details pane's "+ Add animation" list and each one has its own settings:
 Add both for an item that floats and spins.
 `maps/items.json` is a small example.
 
+## Inventory and guns
+
+Some items are kept instead of used up. Give an item the **Inventory item** effect (a name and a
+count) and picking it up adds it to the inventory, which is listed at the bottom left of the game
+view. The effects **Give a gun** and **Give ammo** hand out the guns defined in the map's Guns
+section (below); picking a gun up loads it with its starting spare ammunition and equips it.
+
+Playing: left mouse button fires (hold for full auto), `R` reloads, `1`-`9` take out that gun
+(press it again to put it away), and the mouse wheel steps through your guns.
+
+The editor's **Guns** section (`G`, or the Guns button) lists the map's guns. Select one to edit it in
+the Details pane:
+
+| Setting | |
+|---|---|
+| Name, Sprite, Sprite size | the picture drawn in your hands (click the Sprite row, then an atlas tile) |
+| Fire mode | **Single shot**: one round per pull, reloads after every shot; **Semi-auto**: one round per pull; **Full auto**: fires while held |
+| Damage, Fire rate | per round, and rounds per second |
+| Rounds / mag, Spare rounds, Reload time | magazine size (not used by single shot), starting spare ammunition, seconds to reload |
+| Spread | random aim error in degrees |
+| Bullet sprite, size, speed, range | the projectile that flies out: its picture, its size in cells, cells per second, and how far it goes |
+
+Bullets fly where you look (up and down included) and stop at walls, floors, ceilings and glass.
+Nothing takes damage yet, so damage is stored on the bullet for when something can. `maps/guns.json`
+has three example guns and pickups.
+
 ## Layout
 
     main.py, map_editor.py, ...   game and editor source
     assets/                       textures.png (the texture atlas)
-    maps/                         map.json (default map) and the demo maps (items.json has pickups)
+    maps/                         map.json (default map) and the demo maps (items.json has pickups,
+                                  guns.json guns and an inventory item)
     tests/

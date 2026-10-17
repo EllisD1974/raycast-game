@@ -22,8 +22,11 @@ import pygame
 from atlas import ATLAS_PATH, atlas_array, transparent_tiles, unpack_atlas
 from constants import FPS_CAP, HEIGHT, MOUSE_SENSITIVITY, TURN_SPEED, WIDTH
 from entities import Entities, PlayerStats
+from hud import draw_hud
+from inventory import Inventory
 from mapfile import MAP_PATH, load_or_default
 from physics import look, spawn, step
+from projectiles import Projectiles
 from renderer import BACKGROUND, Renderer, fit_rect  # noqa: F401  (re-exported: main.Renderer etc.)
 from window import maximize
 from world import World
@@ -54,22 +57,6 @@ def present(screen, frame):
     rect = fit_rect(screen.get_size())
     pygame.transform.scale(frame, rect.size, screen.subsurface(rect))
     draw_crosshair(screen, rect.center, max(6, rect.height // 60), max(1, rect.height // 450))
-
-
-def draw_hud(picture, font, stats, message):
-    """Score and health in the corner of the (unscaled) picture, and the last pickup's message."""
-    lines = [f"Health {stats.health:g}", f"Score {stats.score:g}"]
-    for i, text in enumerate(lines):
-        label = font.render(text, True, (255, 255, 255))
-        shadow = font.render(text, True, (0, 0, 0))
-        picture.blit(shadow, (9, 9 + i * 18))
-        picture.blit(label, (8, 8 + i * 18))
-    if message:
-        label = font.render(message, True, (255, 240, 120))
-        shadow = font.render(message, True, (0, 0, 0))
-        at = ((picture.get_width() - label.get_width()) // 2, picture.get_height() // 2 + 40)
-        picture.blit(shadow, (at[0] + 1, at[1] + 1))
-        picture.blit(label, at)
 
 
 # ------------------------------------------------------------------ input
@@ -155,6 +142,9 @@ def main():
     renderer = Renderer(textures)
     items = Entities(level, world)
     stats = PlayerStats()
+    inventory = Inventory()
+    projectiles = Projectiles()
+    kick = 0.0                                    # 1 right after a shot, fading to 0 (the gun's recoil)
     font = pygame.font.Font(None, 22)
     message, message_left = "", 0.0
 
@@ -176,7 +166,7 @@ def main():
     mouse = MouseLook()
     mouse.set_captured(True)
     print("Compiling the renderer (first run only; later runs use the cache)...")
-    jump_pressed = False
+    jump_pressed = reload_pressed = False
     running = True
     while running:
         dt = min(clock.tick(FPS_CAP) / 1000, 0.05)
@@ -189,6 +179,12 @@ def main():
                 jump_pressed = True
             elif event.type == pygame.KEYDOWN and event.key == pygame.K_TAB:
                 mouse.set_captured(not mouse.captured)
+            elif event.type == pygame.KEYDOWN and event.key == pygame.K_r:
+                reload_pressed = True
+            elif event.type == pygame.KEYDOWN and pygame.K_1 <= event.key <= pygame.K_9:
+                inventory.equip(event.key - pygame.K_1)        # 1-9 take out that gun (again: put it away)
+            elif event.type == pygame.MOUSEWHEEL and mouse.captured:
+                inventory.cycle(-event.y)                      # the wheel steps through the guns
             else:
                 mouse.handle_event(event)
 
@@ -197,13 +193,20 @@ def main():
         step(world, player, forward, strafe, key_turn * TURN_SPEED * dt + mouse_turn, jump_pressed, dt, sprint)
         look(player, tilt)
         jump_pressed = False
-        picked = items.update(player, stats, dt)
+        trigger = mouse.captured and pygame.mouse.get_pressed()[0]
+        for gun in inventory.update(dt, trigger, reload_pressed):
+            projectiles.fire(player, gun)
+            kick = 1.0
+        reload_pressed = False
+        kick = max(0.0, kick - dt * 8.0)
+        projectiles.update(world, dt)
+        picked = items.update(player, stats, dt, inventory)
         if picked:
             message, message_left = ", ".join(picked), 1.5
         message_left = max(0.0, message_left - dt)
 
-        picture = renderer.draw(world, player, items.sprites())
-        draw_hud(picture, font, stats, message if message_left > 0 else "")
+        picture = renderer.draw(world, player, items.sprites() + projectiles.sprites())
+        draw_hud(picture, font, stats, message if message_left > 0 else "", inventory, tiles, kick)
         present(pygame.display.get_surface(), picture)
         pygame.display.set_caption(f"simple raycaster - {clock.get_fps():.0f} fps")
         pygame.display.flip()

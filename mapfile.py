@@ -60,11 +60,75 @@ _UPPER_DEFAULTS = {"floor_tex": 3, "ceil_tex": 6, "floor_h": 0.0, "ceil_h": 0.0,
 
 
 ENTITY_MODES = ("once", "respawn", "persistent")
-ENTITY_EFFECTS = ("none", "score", "health")
+ENTITY_EFFECTS = ("none", "score", "health", "item", "gun", "ammo")
 MODE_LABELS = {"once": "Pick up once", "respawn": "Respawns", "persistent": "Stays"}
-EFFECT_LABELS = {"none": "None", "score": "Score", "health": "Health"}
+EFFECT_LABELS = {"none": "None", "score": "Score", "health": "Health", "item": "Inventory item",
+                 "gun": "Give a gun", "ammo": "Give ammo"}
+GUN_MODES = ("single", "semi", "auto")
+GUN_MODE_LABELS = {"single": "Single shot", "semi": "Semi-auto", "auto": "Full auto"}
+MAX_NAME = 24                                   # longest name of an item or gun
 ANIMATION_KINDS = ("float", "rotate")
 ANIMATION_LABELS = {"float": "Float", "rotate": "Rotate"}
+
+
+@dataclass
+class Gun:
+    """A weapon the player can pick up, keep in the inventory and equip. The map defines the guns
+    (the editor's Guns section); entities hand them out.
+
+    name        what it is called (also how an item that gives it or its ammo refers to it)
+    tile        atlas tile drawn at the bottom of the screen while it is equipped
+    size        scale of that picture: 1.0 draws the 32 pixel tile at 1 / 8 of the screen's height
+    mode        single: one round per trigger pull, reloaded after every shot (the magazine is one
+                round); semi: one round per trigger pull, as fast as the fire rate allows;
+                auto: keeps firing at the fire rate while the trigger is held
+    damage      damage of one round (what hits will do)
+    fire_rate   rounds per second
+    mag_size    rounds in a magazine (not used by single, which holds one)
+    start_ammo  spare rounds picked up with the gun (more guns of the same kind add this again)
+    reload_time seconds a reload takes
+    proj_tile   atlas tile of the bullet that flies out
+    proj_size   size of that bullet in cells
+    proj_speed  how fast it flies, in cells per second
+    proj_range  how far it flies before it disappears, in cells
+    spread      random aim error in degrees (0 is dead accurate)"""
+    name: str = "Pistol"
+    tile: int = 16
+    size: float = 5.0
+    mode: str = "semi"
+    damage: float = 10.0
+    fire_rate: float = 4.0
+    mag_size: int = 12
+    start_ammo: int = 36
+    reload_time: float = 1.5
+    proj_tile: int = 14
+    proj_size: float = 0.1
+    proj_speed: float = 18.0
+    proj_range: float = 20.0
+    spread: float = 0.0
+
+    @property
+    def capacity(self):
+        """Rounds the gun holds ready to fire."""
+        return 1 if self.mode == "single" else max(1, int(self.mag_size))
+
+    @classmethod
+    def from_dict(cls, data):
+        base = cls()
+
+        def number(key, low, high, cast=float):
+            try:
+                return cast(max(low, min(high, float(data.get(key, getattr(base, key))))))
+            except (TypeError, ValueError):
+                return getattr(base, key)
+        name = str(data.get("name", base.name)).strip()[:MAX_NAME] or base.name
+        return cls(name=name, tile=int(number("tile", 0, 255, int)),
+                   size=number("size", 0.2, 20.0), mode=data.get("mode") if data.get("mode") in GUN_MODES else base.mode,
+                   damage=number("damage", 0.0, 10000.0), fire_rate=number("fire_rate", 0.1, 100.0),
+                   mag_size=number("mag_size", 1, 1000, int), start_ammo=number("start_ammo", 0, 100000, int),
+                   reload_time=number("reload_time", 0.0, 60.0), proj_tile=int(number("proj_tile", 0, 255, int)),
+                   proj_size=number("proj_size", 0.01, 2.0), proj_speed=number("proj_speed", 0.5, 200.0),
+                   proj_range=number("proj_range", 0.5, 200.0), spread=number("spread", 0.0, 45.0))
 
 
 @dataclass
@@ -102,7 +166,9 @@ class Entity:
     respawn  seconds until a respawning item comes back
     size     sprite height in world units (it is as wide as it is tall)
     lift     height of the sprite's bottom above the floor
-    animations  list of Animation (none by default): float and / or rotate, each with its own speed"""
+    animations  list of Animation (none by default): float and / or rotate, each with its own speed
+    item, gun   what the "item" effect puts in the inventory (amount of it), and which gun the "gun"
+                effect hands out or the "ammo" effect (amount of rounds) is for"""
     x: float
     y: float
     span: int = 0
@@ -114,6 +180,8 @@ class Entity:
     size: float = 0.4
     lift: float = 0.0
     animations: list = field(default_factory=list)
+    item: str = ""                  # effect "item": the name of the thing put in the inventory
+    gun: str = ""                   # effect "gun" / "ammo": the name of the gun it is for
 
     def clone(self, **changes):
         """A copy that shares nothing with this entity (its animations are copied too)."""
@@ -134,7 +202,8 @@ class Entity:
                        size=max(0.05, float(data.get("size", base.size))),
                        lift=float(data.get("lift", base.lift)),
                        animations=[Animation.from_dict(a) for a in data.get("animations", [])
-                                   if isinstance(a, dict)])
+                                   if isinstance(a, dict)],
+                       item=str(data.get("item", ""))[:MAX_NAME], gun=str(data.get("gun", ""))[:MAX_NAME])
 
 
 def grid_name(layer, floor):
@@ -171,8 +240,9 @@ def default_floor_name(index):
 
 class Level:
     def __init__(self, grids, start_x=1.5, start_y=1.5, start_angle=0.0, start_span=0, names=None,
-                 entities=None):
+                 entities=None, guns=None):
         self.grids = grids
+        self.guns = list(guns or [])                # weapons defined for this map (see Gun)
         self.entities = list(entities or [])        # items in the world (see Entity)
         self.start_x, self.start_y = start_x, start_y
         self.start_angle = start_angle              # radians, 0 faces +x (right on the grid)
@@ -200,7 +270,7 @@ class Level:
     def copy(self):
         return Level({k: [row[:] for row in g] for k, g in self.grids.items()},
                      self.start_x, self.start_y, self.start_angle, self.start_span, self.names,
-                     [e.clone() for e in self.entities])
+                     [e.clone() for e in self.entities], [replace(g) for g in self.guns])
 
     # ----------------------------------------------------------- floors
 
@@ -665,6 +735,9 @@ def load_level(path):
         entity = Entity.from_dict(item)
         if 0 <= entity.x < w and 0 <= entity.y < h and entity.span < count:
             level.entities.append(entity)
+    for item in data.get("guns", []):
+        if isinstance(item, dict):
+            level.guns.append(Gun.from_dict(item))
     return level
 
 
@@ -682,7 +755,9 @@ def save_level(path, level):
         f'  "floors": {json.dumps(level.names)},\n'
         f'  "start": {json.dumps(start)},\n'
         + ('  "entities": [\n' + ",\n".join("    " + json.dumps(asdict(e)) for e in level.entities) + "\n  ],\n"
-           if level.entities else "") +
+           if level.entities else "")
+        + ('  "guns": [\n' + ",\n".join("    " + json.dumps(asdict(g)) for g in level.guns) + "\n  ],\n"
+           if level.guns else "") +
         '  "grids": {\n' + ",\n".join(blocks) + "\n  }\n}\n"
     )
     with open(path, "w", encoding="utf-8") as f:

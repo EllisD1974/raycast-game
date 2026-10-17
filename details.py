@@ -9,7 +9,9 @@ Field kinds:
     num     a number, stepped by - / + buttons, the mouse wheel, or typed in (click the value)
     enum    one of a fixed list of choices, picked from a drop-down list (click the value), or
             stepped through with - / + or the mouse wheel
-    tile    an atlas tile index, shown as its picture, stepped with - / +
+    tile    an atlas tile index, shown as its picture, stepped with - / +; clicking it makes it the
+            field that atlas clicks set (when a pane has more than one tile field)
+    text    a name typed in (click it)
     header  a heading row for a group of fields; with an `action` it has a remove button
     menu    a button that opens a drop-down list of choices; picking one calls `set(choice)`
             (used to add things); a menu with no choices is not shown
@@ -46,6 +48,8 @@ class Field:
         if self.kind in ("header", "menu"):
             return self.text_override or self.label
         value = self.get()
+        if self.kind == "text":
+            return str(value)
         if self.kind == "enum":
             return self.labels.get(value, str(value))
         if self.kind == "tile":
@@ -114,10 +118,11 @@ def button_rect(rect, rows):
 
 
 def draw(screen, rect, title, rows, theme, fonts, editing=None, hover=None, tile_surface=None,
-         notes=(), button_label="Delete", open_menu=None):
+         notes=(), button_label="Delete", open_menu=None, focus=None):
     """Draw the pane. `editing` is (field key, text typed so far) while a number is being typed;
     `hover` is the mouse position; `tile_surface(index)` gives the picture for a tile field;
-    `open_menu` is the key of the field whose drop-down list is showing."""
+    `open_menu` is the key of the field whose drop-down list is showing; `focus` the tile field that
+    atlas clicks will set."""
     font, small = fonts
     pygame.draw.rect(screen, theme["panel"], rect)
     pygame.draw.line(screen, theme["grid"], rect.topleft, rect.bottomleft)
@@ -154,7 +159,7 @@ def draw(screen, rect, title, rows, theme, fonts, editing=None, hover=None, tile
             screen.blit(glyph, glyph.get_rect(center=button.center))
         typing = editing is not None and editing[0] == f.key
         box(row.value, theme["field_edit"] if typing else (theme["button_hot"] if hot(row.value) else theme["field"]),
-            border=typing or open_menu == f.key)
+            border=typing or open_menu == f.key or (f.kind == "tile" and focus == f.key))
         if f.kind == "tile" and tile_surface is not None:
             picture = pygame.transform.scale(tile_surface(f.get()), (row.value.h - 4, row.value.h - 4))
             screen.blit(picture, (row.value.x + 4, row.value.y + 2))
@@ -168,7 +173,12 @@ def draw(screen, rect, title, rows, theme, fonts, editing=None, hover=None, tile
         else:
             shown = (editing[1] + "|") if typing else f.text()
             text = font.render(shown, True, theme["text"] if typing else theme["accent"])
-            screen.blit(text, text.get_rect(center=row.value.center))
+            if text.get_width() > row.value.w - 8:                    # a long name: show the end of it
+                text = small.render(shown, True, theme["text"] if typing else theme["accent"])
+            screen.set_clip(row.value.inflate(-4, 0))
+            screen.blit(text, text.get_rect(center=row.value.center) if text.get_width() <= row.value.w - 8
+                        else text.get_rect(midright=(row.value.right - 6, row.value.centery)))
+            screen.set_clip(None)
     button = button_rect(rect, rows)
     box(button, theme["danger_hot"] if hot(button) else theme["danger"])
     label = font.render(button_label, True, theme["text"])
