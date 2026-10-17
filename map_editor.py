@@ -90,6 +90,8 @@ from constants import HEIGHT, MOUSE_SENSITIVITY, PLAYER_HEIGHT, TILE, WIDTH
 from mapfile import (DEFAULTS, EDIT_LAYERS, ENTITY_EFFECTS, ENTITY_MODES, MAP_PATH, MAX_NAME_LENGTH, MIN_WALL_GAP,
                      MODE_LABELS, Entity, Level, default_level,
                      grid_name, load_level, save_level, split_grid_name)
+import details
+from details import PANE_WIDTH, Field
 from preview import Preview
 from window import maximize
 
@@ -261,7 +263,9 @@ class Editor:
         self.rename = None                      # text being typed while renaming a floor
         self.layer = "walls"
         self.tool = "paint"
-        self.entity_brush = Entity(0.0, 0.0, tile=ENTITY_FIRST_TILE)   # settings the Entity tool places with
+        self.entity_brush = Entity(0.0, 0.0, tile=ENTITY_FIRST_TILE)   # settings new items start with
+        self.selected = None                    # index in level.entities of the selected item, or None
+        self.field_edit = None                  # [field key, text] while a number is typed in the Details pane
         self.selection = {0}                    # selected atlas tile indices (0-based)
         self.value = {}                         # height brush per stored grid; see brush()
         self.ramp_dir = 1
@@ -354,8 +358,113 @@ class Editor:
 
     def map_area(self):
         w, h = self._size()
-        return pygame.Rect(PANEL_W, TOOLBAR_H, max(1, w - PANEL_W - self.preview_width()),
+        return pygame.Rect(PANEL_W, TOOLBAR_H, max(1, w - PANEL_W - self.preview_width() - self.details_width()),
                            max(1, h - TOOLBAR_H - STATUS_H))
+
+    # ---------------------------------------------------------------- the Details pane
+
+    def selected_entity(self):
+        """The selected item, or None (nothing selected, or the selection no longer exists)."""
+        if self.selected is not None and 0 <= self.selected < len(self.level.entities):
+            return self.level.entities[self.selected]
+        return None
+
+    def details_width(self):
+        return PANE_WIDTH if self.selected_entity() is not None else 0
+
+    def details_rect(self):
+        """The docked Details pane, or None while nothing is selected."""
+        width = self.details_width()
+        if not width:
+            return None
+        w, h = self._size()
+        return pygame.Rect(w - self.preview_width() - width, TOOLBAR_H, width, max(1, h - TOOLBAR_H - STATUS_H))
+
+    def details_fields(self):
+        """Fields describing the selected thing; today that is always an item."""
+        e = self.selected_entity()
+        if e is None:
+            return []
+
+        def field(name, label, kind, **options):
+            return Field(name, label, kind, (lambda n=name: getattr(e, n)),
+                         (lambda v, n=name: self.set_entity(n, v)), **options)
+
+        fields = [field("tile", "Sprite", "tile", low=0, high=len(self.tiles) - 1),
+                  field("mode", "Mode", "enum", choices=ENTITY_MODES, labels=MODE_LABELS),
+                  field("effect", "Effect", "enum", choices=ENTITY_EFFECTS)]
+        if e.effect != "none":
+            fields.append(field("amount", "Amount", "num", step=5.0, low=0.0, high=1000.0))
+        if e.mode == "respawn":
+            fields.append(field("respawn", "Respawn", "num", step=1.0, low=0.0, high=600.0, unit="s"))
+        fields += [field("size", "Size", "num", step=0.1, low=0.1, high=3.0),
+                   field("lift", "Lift", "num", step=0.1, low=-2.0, high=5.0)]
+        return fields
+
+    def details_rows(self):
+        rect = self.details_rect()
+        return [] if rect is None else details.rows_for(rect, self.details_fields())
+
+    def set_entity(self, name, value):
+        """Change one setting of the selected item (one undo step); new items start with it too."""
+        e = self.selected_entity()
+        if e is None or getattr(e, name) == value:
+            return
+        self.begin_edit()
+        setattr(e, name, value)
+        setattr(self.entity_brush, name, value)
+
+    def select_entity(self, entity):
+        self.field_edit = None
+        self.selected = None
+        for i, candidate in enumerate(self.level.entities):
+            if candidate is entity:
+                self.selected = i
+
+    def deselect(self):
+        self.selected, self.field_edit = None, None
+
+    def delete_selected(self):
+        e = self.selected_entity()
+        if e is not None:
+            self.begin_edit()
+            self.level.entities.remove(e)
+            self.deselect()
+
+    def details_click(self, pos):
+        """A click inside the Details pane: step a value, start typing one, or delete the item."""
+        rect = self.details_rect()
+        rows = self.details_rows()
+        if details.button_rect(rect, rows).collidepoint(pos):
+            self.delete_selected()
+            return
+        for row in rows:
+            f = row.field
+            if row.minus.collidepoint(pos):
+                f.set(f.stepped(-1))
+            elif row.plus.collidepoint(pos):
+                f.set(f.stepped(1))
+            elif row.value.collidepoint(pos):
+                if f.kind == "num":
+                    self.field_edit = [f.key, f"{f.get():g}"]
+                else:
+                    f.set(f.stepped(1))
+
+    def details_wheel(self, pos, notches):
+        for row in self.details_rows():
+            if row.rect.collidepoint(pos):
+                row.field.set(row.field.stepped(1 if notches > 0 else -1, abs(notches)))
+                return
+
+    def finish_field_edit(self, commit):
+        """Apply (or drop) the number typed into the Details pane."""
+        typed, self.field_edit = self.field_edit, None
+        if typed and commit:
+            for f in self.details_fields():
+                if f.key == typed[0]:
+                    value = f.parsed(typed[1])
+                    if value is not None:
+                        f.set(value)
 
     def preview_column(self):
         """The whole right-hand column (title, picture, hints) of the 3D view, or None if hidden."""
@@ -418,17 +527,7 @@ class Editor:
             row2 += [None, ("btn", "Step-", "step-"), ("btn", "Step+", "step+"),
                      ("txt", f"step {fmt(self.stair_step)}", ACCENT)]
         if self.tool == "entity":
-            e = self.entity_brush
-            row2 += [None, ("txt", "Item:", DIM), ("btn", MODE_LABELS[e.mode], "ent:mode"),
-                     ("btn", f"Effect: {e.effect}", "ent:effect")]
-            if e.effect != "none":
-                row2 += [("btn", "-", "ent:amount-"), ("txt", f"amount {e.amount:g}", ACCENT),
-                         ("btn", "+", "ent:amount+")]
-            if e.mode == "respawn":
-                row2 += [("btn", "-", "ent:respawn-"), ("txt", f"back after {e.respawn:g}s", ACCENT),
-                         ("btn", "+", "ent:respawn+")]
-            row2 += [("btn", "-", "ent:size-"), ("txt", f"size {e.size:g}", ACCENT), ("btn", "+", "ent:size+"),
-                     ("btn", "-", "ent:lift-"), ("txt", f"lift {e.lift:g}", ACCENT), ("btn", "+", "ent:lift+")]
+            row2 += [None, ("txt", "Click an item to edit it in the Details pane, or an empty cell to add one", DIM)]
         row3 = [("btn", f"{name.capitalize()}({key})", f"tool:{name}") for name, key in TOOLS.items()]
         row3 += [None, ("btn", "Undo", "undo"), ("btn", "Redo", "redo"), None,
                  ("btn", "Border", "border"), ("txt", "Edge", DIM),
@@ -744,19 +843,24 @@ class Editor:
                 if (math.floor(e.x), math.floor(e.y)) == tuple(cell) and e.span == self.floor]
 
     def place_entity(self, cell):
-        """Entity tool: put an item with the current settings in the middle of the cell, on the floor
-        being edited, replacing any item already there."""
+        """Entity tool: clicking an item selects it (its settings appear in the Details pane);
+        clicking an empty cell adds an item there, in the middle of the cell on the floor being
+        edited, with the settings of the last item you edited, and selects it."""
         level = self.level
         if not level.in_bounds(*cell):
             return
+        found = self.entities_in(cell)
+        if found:
+            self.select_entity(found[0])
+            return
         if not level.span_present(self.floor, *cell):
+            self.deselect()
             self.say("An item needs an open floor to stand on: no room in this cell on this floor")
             return
         self.begin_edit()
-        for old in self.entities_in(cell):
-            level.entities.remove(old)
         level.entities.append(replace(self.entity_brush, x=cell[0] + 0.5, y=cell[1] + 0.5, span=self.floor))
-        self.say(f"Placed an item ({MODE_LABELS[self.entity_brush.mode].lower()}, effect {self.entity_brush.effect})")
+        self.select_entity(level.entities[-1])
+        self.say("Added an item: change its settings in the Details pane")
 
     def remove_entities(self, cell):
         found = self.entities_in(cell)
@@ -764,19 +868,7 @@ class Editor:
             self.begin_edit()
             for e in found:
                 self.level.entities.remove(e)
-
-    def entity_action(self, action):
-        """The Item buttons: cycle the mode / effect, or step amount, respawn time, size and lift."""
-        e, what = self.entity_brush, action[4:]
-        if what == "mode":
-            e.mode = ENTITY_MODES[(ENTITY_MODES.index(e.mode) + 1) % len(ENTITY_MODES)]
-        elif what == "effect":
-            e.effect = ENTITY_EFFECTS[(ENTITY_EFFECTS.index(e.effect) + 1) % len(ENTITY_EFFECTS)]
-        else:
-            name, sign = what[:-1], 1 if what.endswith("+") else -1
-            step, low, high = {"amount": (5.0, 0.0, 1000.0), "respawn": (1.0, 0.0, 600.0),
-                               "size": (0.1, 0.1, 3.0), "lift": (0.1, -2.0, 5.0)}[name]
-            setattr(e, name, round(max(low, min(high, getattr(e, name) + sign * step)), 3))
+            self.deselect()
 
     def place_camera(self, cell, point):
         """Camera tool: stand the 3D view's camera in this cell, on the floor being edited (or the
@@ -847,8 +939,11 @@ class Editor:
             self.selection |= picked
         self.atlas_drag = None
         if self.tool == "entity":                       # the tile chosen here is the item's sprite
-            self.entity_brush.tile = min(picked)
-            self.say(f"Item sprite: tile {self.entity_brush.tile + 1}")
+            if self.selected_entity() is not None:
+                self.set_entity("tile", min(picked))
+            else:
+                self.entity_brush.tile = min(picked)
+            self.say(f"Item sprite: tile {min(picked) + 1}")
             return
         if self.tool in ("erase", "pick", "start", "stairs"):
             self.tool = "paint"
@@ -861,6 +956,9 @@ class Editor:
     def select_floor(self, floor):
         self.floor = max(0, min(floor, self.level.floor_count - 1))
         self.stairs_drag = None
+        e = self.selected_entity()
+        if e is not None and e.span != self.floor:
+            self.deselect()                             # the item is on another floor
 
     def add_floor(self):
         self.begin_edit()
@@ -899,6 +997,9 @@ class Editor:
         """Keep the edited floor valid after the level changed (undo, reload, new map)."""
         self.floor = max(0, min(self.floor, self.level.floor_count - 1))
         self.rename = None
+        self.field_edit = None
+        if self.selected_entity() is None:
+            self.selected = None
         self.dropdown_open = False
 
     def do(self, action):
@@ -906,10 +1007,10 @@ class Editor:
             self.confirm = None
         if action != "dropdown":
             self.dropdown_open = False
-        if action.startswith("ent:"):
-            self.entity_action(action)
-        elif action.startswith("tool:"):
+        if action.startswith("tool:"):
             self.tool = action[5:]
+            if self.tool != "entity":
+                self.deselect()
             if self.tool == "camera" and not self.show_preview:
                 self.set_preview(True)
         elif action.startswith("layer:"):
@@ -1158,12 +1259,27 @@ class Editor:
             elif char and char.isprintable() and len(self.rename) < MAX_NAME_LENGTH:
                 self.rename += char
             return
+        if self.field_edit is not None:                 # typing a number into the Details pane
+            char = getattr(e, "unicode", "")
+            if e.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                self.finish_field_edit(True)
+            elif e.key == pygame.K_ESCAPE:
+                self.finish_field_edit(False)
+            elif e.key == pygame.K_BACKSPACE:
+                self.field_edit[1] = self.field_edit[1][:-1]
+            elif char and char in "0123456789.,-" and len(self.field_edit[1]) < 8:
+                self.field_edit[1] += char
+            return
         ctrl = bool(e.mod & pygame.KMOD_CTRL)
         if e.key == pygame.K_ESCAPE:
             if self.dropdown_open:
                 self.dropdown_open = False
+            elif self.selected_entity() is not None:
+                self.deselect()
             else:
                 self.request_quit()
+        elif e.key == pygame.K_DELETE and self.selected_entity() is not None:
+            self.delete_selected()
         elif ctrl and e.key == pygame.K_s:
             self.do("save")
         elif ctrl and e.key == pygame.K_z:
@@ -1205,6 +1321,13 @@ class Editor:
         self.mouse = e.pos
         if self.rename is not None:                     # clicking away keeps the typed name
             self.finish_rename(True)
+            return
+        if self.field_edit is not None:                 # ... and the typed number
+            self.finish_field_edit(True)
+        pane = self.details_rect()
+        if pane is not None and pane.collidepoint(e.pos) and e.pos[1] >= TOOLBAR_H:
+            if e.button == 1:
+                self.details_click(e.pos)
             return
         if self.dropdown_open:                          # the open list swallows the next click
             self.dropdown_open = False
@@ -1274,6 +1397,10 @@ class Editor:
             self.revision += 1
 
     def on_wheel(self, e):
+        pane = self.details_rect()
+        if pane is not None and pane.collidepoint(self.mouse):      # the wheel steps the value under it
+            self.details_wheel(self.mouse, e.y)
+            return
         if self.over_preview():                 # the wheel walks the camera forward / back
             if self.preview is not None:
                 self.preview.nudge(1 if e.y > 0 else -1, abs(e.y))
@@ -1298,6 +1425,7 @@ class Editor:
         self.draw_map(screen)
         self.draw_panel(screen)
         self.draw_preview(screen)
+        self.draw_details(screen)
         self.draw_legend(screen)
         self.draw_status(screen)
         self.draw_toolbar(screen)
@@ -1421,12 +1549,31 @@ class Editor:
         self.draw_cursor(screen, area)
         screen.set_clip(None)
 
+    def draw_details(self, screen):
+        """The docked Details pane (only while something is selected)."""
+        rect = self.details_rect()
+        if rect is None:
+            return
+        e = self.selected_entity()
+        theme = {"panel": PANEL_BG, "grid": GRID, "text": TEXT, "dim": DIM, "accent": ACCENT, "button": BUTTON,
+                 "button_hot": BUTTON_HOT, "field": (28, 29, 34), "field_edit": (50, 52, 64),
+                 "danger": (120, 50, 55), "danger_hot": (160, 64, 70)}
+        notes = (f"Cell ({math.floor(e.x)}, {math.floor(e.y)}) on {self.level.names[e.span]}",
+                 "Wheel over a row steps it.",
+                 "Click a number to type one.",
+                 "Click an atlas tile: sets the sprite.",
+                 "Esc closes this; Del removes the item.")
+        details.draw(screen, rect, "Item", self.details_rows(), theme, (self.font, self.small),
+                     editing=self.field_edit, hover=self.mouse, tile_surface=lambda i: self.tiles[max(0, min(i, len(self.tiles) - 1))],
+                     notes=notes)
+
     def draw_entities(self, screen):
         """Items on the floor being edited: their sprite on the map, ringed in the colour of their mode
         (white once, cyan respawning, green staying)."""
         z = self.zoom
         origin = self.cell_rect(0, 0)
         size = max(8, int(z * 0.7))
+        chosen = self.selected_entity()
         for e in self.level.entities:
             if e.span != self.floor:
                 continue
@@ -1435,6 +1582,8 @@ class Editor:
             pygame.draw.circle(screen, (20, 20, 30), (cx, cy), size // 2 + 2)
             screen.blit(sprite, sprite.get_rect(center=(cx, cy)))
             pygame.draw.circle(screen, ENTITY_MODE_COLOURS[e.mode], (cx, cy), size // 2 + 2, 2)
+            if e is chosen:                              # the selected item gets a bright outer ring
+                pygame.draw.circle(screen, ACCENT, (cx, cy), size // 2 + 6, 3)
 
     def draw_start(self, screen):
         z, level = self.zoom, self.level

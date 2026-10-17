@@ -183,21 +183,22 @@ def ed(tmp_path):
     return editor
 
 
-def test_the_entity_tool_places_replaces_and_removes_items(ed):
+def test_the_entity_tool_places_selects_and_removes_items(ed):
     ed.do("tool:entity")
-    ed.do("ent:mode")
-    ed.do("ent:effect")
+    assert ed.details_rect() is None                            # nothing selected: no pane
     ed.map_click((4, 4), 1)
-    assert len(ed.level.entities) == 1
+    assert len(ed.level.entities) == 1 and ed.selected_entity() is ed.level.entities[0]
+    assert ed.details_rect() is not None                        # a selected item opens the pane
     e = ed.level.entities[0]
-    assert (e.x, e.y, e.span, e.mode, e.effect) == (4.5, 4.5, 0, "respawn", "health")
-    ed.do("ent:amount+")
-    ed.map_click((4, 4), 1)                                     # again: replaces, not duplicates
-    assert len(ed.level.entities) == 1 and ed.level.entities[0].amount == 15
+    assert (e.x, e.y, e.span) == (4.5, 4.5, 0)
+    ed.map_click((6, 6), 1)                                     # a second item
+    assert len(ed.level.entities) == 2 and ed.selected == 1
+    ed.map_click((4, 4), 1)                                     # clicking an existing item selects it, no new one
+    assert len(ed.level.entities) == 2 and ed.selected == 0
     ed.map_click((4, 4), 3)                                     # right click removes it
-    assert ed.level.entities == []
+    assert len(ed.level.entities) == 1 and ed.details_rect() is None
     ed.do("undo")
-    assert len(ed.level.entities) == 1
+    assert len(ed.level.entities) == 2
 
 
 def test_the_entity_tool_needs_a_room_on_the_floor_being_edited(ed):
@@ -213,16 +214,127 @@ def test_the_entity_tool_needs_a_room_on_the_floor_being_edited(ed):
     ed.draw(pygame.display.get_surface())
 
 
-def test_the_buttons_step_the_item_settings(ed):
+def pane_row(ed, key):
+    return next(r for r in ed.details_rows() if r.field.key == key)
+
+
+def pane_click(ed, rect):
+    ed.on_mouse_down(pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=rect.center, button=1))
+    ed.on_mouse_up(pygame.event.Event(pygame.MOUSEBUTTONUP, pos=rect.center, button=1))
+
+
+def type_keys(ed, text):
+    for ch in text:
+        ed.handle_event(pygame.event.Event(pygame.KEYDOWN, key=ord(ch) if ch.isalnum() else 0, mod=0, unicode=ch))
+
+
+def test_the_pane_edits_the_selected_item_in_place(ed):
     ed.do("tool:entity")
-    for action in ("ent:size+", "ent:lift+", "ent:respawn+", "ent:amount-", "ent:amount-"):
-        ed.do(action)
-    b = ed.entity_brush
-    assert b.size == pytest.approx(0.5) and b.lift == pytest.approx(0.1) and b.respawn == 11 and b.amount == 0
-    assert any(a == "ent:effect" for _r, _l, a in ed.layout())
-    assert not any(a == "ent:respawn+" for _r, _l, a in ed.layout())      # only shown for respawning items
-    ed.do("ent:mode")
-    assert any(a == "ent:respawn+" for _r, _l, a in ed.layout())
+    ed.map_click((4, 4), 1)
+    ed.map_click((6, 6), 1)
+    ed.map_click((4, 4), 1)                                     # select the first one again
+    first, second = ed.level.entities
+    pane_click(ed, pane_row(ed, "mode").value)                  # clicking an enum value goes to the next choice
+    assert first.mode == "respawn" and second.mode == "once"
+    pane_click(ed, pane_row(ed, "effect").plus)
+    assert first.effect == "health"
+    pane_click(ed, pane_row(ed, "amount").plus)
+    pane_click(ed, pane_row(ed, "respawn").plus)                # only shown for respawning items
+    assert first.amount == 15 and first.respawn == 11
+    pane_click(ed, pane_row(ed, "size").minus)
+    assert first.size == pytest.approx(0.3)
+    assert (first.x, first.y) == (4.5, 4.5) and len(ed.level.entities) == 2       # edited, not replaced
+    ed.do("undo")
+    assert ed.level.entities[0].size == pytest.approx(0.4)
+
+
+def test_the_pane_only_shows_the_fields_that_apply(ed):
+    ed.do("tool:entity")
+    ed.map_click((4, 4), 1)
+    keys = [r.field.key for r in ed.details_rows()]
+    assert keys == ["tile", "mode", "effect", "amount", "size", "lift"]
+    ed.level.entities[0].effect = "none"
+    ed.level.entities[0].mode = "respawn"
+    keys = [r.field.key for r in ed.details_rows()]
+    assert "amount" not in keys and "respawn" in keys
+
+
+def test_the_wheel_over_a_row_steps_it_and_a_number_can_be_typed(ed):
+    ed.do("tool:entity")
+    ed.map_click((4, 4), 1)
+    e = ed.level.entities[0]
+    ed.mouse = pane_row(ed, "amount").rect.center
+    ed.handle_event(pygame.event.Event(pygame.MOUSEWHEEL, x=0, y=2))
+    assert e.amount == 20
+    zoom = ed.zoom
+    ed.handle_event(pygame.event.Event(pygame.MOUSEWHEEL, x=0, y=-1))
+    assert e.amount == 15 and ed.zoom == zoom                   # the map did not zoom
+    pane_click(ed, pane_row(ed, "size").value)                  # click the number: type a new one
+    assert ed.field_edit is not None
+    for _ in range(6):
+        ed.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_BACKSPACE, mod=0, unicode=""))
+    type_keys(ed, "1.25")
+    ed.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RETURN, mod=0, unicode=""))
+    assert e.size == 1.25 and ed.field_edit is None
+    pane_click(ed, pane_row(ed, "lift").value)
+    type_keys(ed, "99")                                         # out of range: clamped
+    ed.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RETURN, mod=0, unicode=""))
+    assert e.lift == 5.0
+    pane_click(ed, pane_row(ed, "size").value)
+    type_keys(ed, "x")
+    ed.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE, mod=0, unicode=""))
+    assert e.size == 1.25 and ed.field_edit is None and ed.selected_entity() is e    # Esc cancels typing only
+
+
+def test_new_items_start_with_the_settings_you_last_edited(ed):
+    ed.do("tool:entity")
+    ed.map_click((4, 4), 1)
+    pane_click(ed, pane_row(ed, "mode").plus)
+    pane_click(ed, pane_row(ed, "size").plus)
+    ed.map_click((7, 7), 1)
+    assert (ed.level.entities[1].mode, ed.level.entities[1].size) == ("respawn", pytest.approx(0.5))
+
+
+def test_delete_button_delete_key_escape_and_changing_tools_close_the_pane(ed):
+    ed.do("tool:entity")
+    ed.map_click((4, 4), 1)
+    pane_click(ed, details_button(ed))
+    assert ed.level.entities == [] and ed.details_rect() is None
+    ed.map_click((4, 4), 1)
+    ed.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_DELETE, mod=0, unicode=""))
+    assert ed.level.entities == []
+    ed.map_click((4, 4), 1)
+    ed.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE, mod=0, unicode=""))
+    assert ed.details_rect() is None and len(ed.level.entities) == 1       # closed, item kept
+    ed.map_click((4, 4), 1)
+    ed.do("tool:paint")
+    assert ed.details_rect() is None
+
+
+def details_button(ed):
+    import details
+    return details.button_rect(ed.details_rect(), ed.details_rows())
+
+
+def test_clicking_the_pane_does_not_paint_the_map_and_the_atlas_sets_the_sprite(ed):
+    ed.do("tool:entity")
+    ed.map_click((4, 4), 1)
+    before = [row[:] for row in ed.level.walls]
+    pane_click(ed, pane_row(ed, "tile").plus)
+    assert ed.level.walls == before and ed.level.entities[0].tile == map_editor.ENTITY_FIRST_TILE + 1
+    ed.atlas_drag = ((1, 0), (1, 0))
+    ed.finish_atlas_drag()
+    assert ed.level.entities[0].tile == 1
+
+
+def test_the_pane_is_drawn_and_shrinks_the_map_area(ed):
+    ed.do("tool:entity")
+    wide = ed.map_area().width
+    ed.map_click((4, 4), 1)
+    assert ed.map_area().width == wide - map_editor.PANE_WIDTH
+    ed.draw(pygame.display.get_surface())
+    ed.field_edit = ["size", "1."]
+    ed.draw(pygame.display.get_surface())
 
 
 def test_the_3d_preview_shows_items(ed):
