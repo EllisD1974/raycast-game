@@ -149,7 +149,7 @@ TOOL_KEYS = {pygame.K_b: "paint", pygame.K_e: "erase", pygame.K_f: "fill",
              pygame.K_i: "pick", pygame.K_s: "start", pygame.K_t: "stairs", pygame.K_c: "camera",
              pygame.K_n: "entity"}
 ENTITY_MODE_COLOURS = {"once": (255, 255, 255), "respawn": (90, 210, 255), "persistent": (110, 230, 120)}
-ENTITY_FIRST_TILE = 6                           # the first item sprite in the stock atlas (the gem)
+ENTITY_FIRST_TILE = 10                          # the first item sprite in the stock atlas (the gem)
 RAMP_NAMES = {1: "East", 2: "West", 3: "South", 4: "North"}
 RAMP_VECTORS = {1: (1, 0), 2: (-1, 0), 3: (0, 1), 4: (0, -1)}
 

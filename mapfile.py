@@ -84,7 +84,7 @@ class Entity:
     x: float
     y: float
     span: int = 0
-    tile: int = 6
+    tile: int = 10
     mode: str = "once"
     effect: str = "score"
     amount: float = 10.0

@@ -12,8 +12,8 @@ The atlas is COLUMNS x ROWS tiles (16x16 = 256 slots, 512x512 px). Only the tile
 TEXTURES below are drawn; every other slot shows a magenta/black "missing texture"
 checker so an unpopulated map id is obvious. To add a texture, write a function
 like brick() and append it to TEXTURES. Its index (row-major) is its map id - 1.
-Tile order: 0 brick, 1 mossy stone, 2 wood, 3 blue tiles, 4 floor, 5 ceiling, 6 gem, 7 heart,
-8 coin, 9 key. The last four are item sprites for map entities: they have transparent corners, so
+Tile order: 0 brick, 1 mossy stone, 2 wood, 3 blue tiles, 4 floor, 5 ceiling, 6-9 left free for
+hand-drawn textures, 10 gem, 11 heart, 12 coin, 13 key. The last four are item sprites for map entities: they have transparent corners, so
 only the shape is drawn.
 Map ids are index + 1; mapfile.DEFAULTS uses ids 5 and 6 as the default floor and ceiling.
 """
@@ -170,6 +170,7 @@ def key(rng):
 
 
 TEXTURES = (brick, mossy_stone, wood, blue_tiles, floor_tile, ceiling_panel,
+            missing, missing, missing, missing,     # 6-9: free slots (draw your own)
             gem, heart, coin, key)                  # append new textures here
 
 
