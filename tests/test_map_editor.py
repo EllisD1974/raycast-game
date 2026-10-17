@@ -344,3 +344,11 @@ def test_both_floors_draw_every_layer_without_error(ed):
         for name in map_editor.EDIT_LAYERS:
             ed.do(f"layer:{name}")
             ed.draw(surface)
+
+
+def test_escape_does_not_quit_the_editor(ed):
+    ed.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE, mod=0, unicode=""))
+    ed.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE, mod=0, unicode=""))
+    assert ed.running
+    ed.handle_event(pygame.event.Event(pygame.QUIT))            # closing the window still quits
+    assert not ed.running

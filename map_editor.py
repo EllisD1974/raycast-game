@@ -1282,7 +1282,7 @@ class Editor:
     def request_quit(self):
         if self.dirty and not self.quit_armed:
             self.quit_armed = True
-            self.say("Unsaved changes: press Esc / close again to discard them, or Ctrl+S to save", 6)
+            self.say("Unsaved changes: close the window again to discard them, or Ctrl+S to save", 6)
         else:
             self.running = False
 
@@ -1335,9 +1335,7 @@ class Editor:
             elif self.menu_open is not None:
                 self.menu_open = None
             elif self.selected_entity() is not None:
-                self.deselect()
-            else:
-                self.request_quit()
+                self.deselect()                         # (Esc no longer quits: close the window for that)
         elif e.key == pygame.K_DELETE and self.selected_entity() is not None:
             self.delete_selected()
         elif ctrl and e.key == pygame.K_s:
