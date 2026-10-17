@@ -195,7 +195,7 @@ def main():
         jump_pressed = False
         trigger = mouse.captured and pygame.mouse.get_pressed()[0]
         for gun in inventory.update(dt, trigger, reload_pressed):
-            projectiles.fire(player, gun)
+            projectiles.fire(player, gun, level.ammo_for(gun))
             kick = 1.0
         reload_pressed = False
         kick = max(0.0, kick - dt * 8.0)

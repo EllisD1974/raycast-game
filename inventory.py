@@ -10,13 +10,24 @@ from mapfile import Gun
 
 @dataclass
 class GunState:
-    """One gun the player owns: its definition and the ammunition and timers of it."""
+    """One gun the player owns: its definition, its magazine and its timers. Spare rounds are not
+    kept here: they are the inventory's pool for the gun's ammo type, shared by every gun that uses it."""
     gun: Gun
     mag: int = 0                 # rounds ready to fire
-    reserve: int = 0             # spare rounds
     cooldown: float = 0.0        # seconds until the next shot is allowed
     reload_left: float = 0.0     # seconds left of a reload in progress (0 when not reloading)
     trigger_was_down: bool = False
+    inventory: object = field(default=None, repr=False)      # whose pool of spare rounds this draws on
+
+    @property
+    def reserve(self):
+        """Spare rounds of this gun's ammo type (shared with other guns of the type)."""
+        return 0 if self.inventory is None else self.inventory.ammo.get(self.gun.ammo, 0)
+
+    @reserve.setter
+    def reserve(self, rounds):
+        if self.inventory is not None:
+            self.inventory.ammo[self.gun.ammo] = max(0, int(rounds))
 
     @property
     def reloading(self):
@@ -28,7 +39,7 @@ class Inventory:
     items: dict = field(default_factory=dict)       # name -> how many
     guns: list = field(default_factory=list)         # GunState, in the order they were picked up
     equipped: int = None                             # index in `guns` of the gun in the player's hands
-    pending_ammo: dict = field(default_factory=dict)  # ammo picked up before its gun: gun name -> rounds
+    ammo: dict = field(default_factory=dict)         # spare rounds per ammo type name (shared by guns)
 
     # ------------------------------------------------------------------ what is carried
 
@@ -47,29 +58,24 @@ class Inventory:
         return None
 
     def give_gun(self, gun):
-        """Pick up a gun. A new one comes loaded with its starting spare ammunition and is equipped if
-        nothing is; one already owned just gives its starting ammunition again. Returns the state."""
+        """Pick up a gun. A new one comes loaded, with its starting spare rounds added to its ammo type's
+        pool, and is equipped if nothing is; one already owned just adds the starting rounds again."""
         state = self.find_gun(gun.name)
         if state is not None:
-            state.reserve += gun.start_ammo
+            self.add_ammo(gun.ammo, gun.start_ammo)
             return state
-        state = GunState(gun, mag=gun.capacity,
-                         reserve=gun.start_ammo + self.pending_ammo.pop(gun.name, 0))
+        state = GunState(gun, mag=gun.capacity, inventory=self)
+        self.add_ammo(gun.ammo, gun.start_ammo)
         self.guns.append(state)
         if self.equipped is None:
             self.equipped = len(self.guns) - 1
         return state
 
-    def add_ammo(self, gun_name, rounds):
-        """Spare rounds for a gun. If the player does not have that gun yet they are kept for when they do;
-        returns whether the gun is already owned."""
-        rounds = max(0, int(rounds))
-        state = self.find_gun(gun_name)
-        if state is None:
-            self.pending_ammo[gun_name] = self.pending_ammo.get(gun_name, 0) + rounds
-            return False
-        state.reserve += rounds
-        return True
+    def add_ammo(self, ammo_name, rounds):
+        """Spare rounds of an ammo type, usable by every gun that fires it, whether the player has one yet or
+        not. Returns whether they have a gun that uses it."""
+        self.ammo[ammo_name] = self.ammo.get(ammo_name, 0) + max(0, int(rounds))
+        return any(state.gun.ammo == ammo_name for state in self.guns)
 
     # ------------------------------------------------------------------ the gun in hand
 

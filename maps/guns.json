@@ -5,15 +5,21 @@
   "floors": ["Floor 1"],
   "start": {"x": 1.5, "y": 4.5, "angle": 0.0, "span": 0},
   "entities": [
-    {"x": 3.5, "y": 4.5, "span": 0, "tile": 16, "mode": "once", "effect": "gun", "amount": 10.0, "respawn": 10.0, "size": 0.5, "lift": 0.0, "animations": [{"kind": "float", "speed": 0.5, "amount": 0.05}, {"kind": "rotate", "speed": 0.4, "amount": 0.1}], "item": "", "gun": "Pistol"},
-    {"x": 4.5, "y": 3.5, "span": 0, "tile": 16, "mode": "once", "effect": "gun", "amount": 10.0, "respawn": 10.0, "size": 0.5, "lift": 0.0, "animations": [{"kind": "rotate", "speed": 0.4, "amount": 0.1}], "item": "", "gun": "Rifle"},
-    {"x": 4.5, "y": 6.5, "span": 0, "tile": 10, "mode": "respawn", "effect": "ammo", "amount": 24, "respawn": 15, "size": 0.4, "lift": 0.0, "animations": [], "item": "", "gun": "Pistol"},
-    {"x": 6.5, "y": 4.5, "span": 0, "tile": 13, "mode": "once", "effect": "item", "amount": 1, "respawn": 10.0, "size": 0.4, "lift": 0.0, "animations": [{"kind": "float", "speed": 0.6, "amount": 0.06}], "item": "Gold key", "gun": ""}
+    {"x": 3.5, "y": 4.5, "span": 0, "tile": 16, "mode": "once", "effect": "gun", "amount": 10.0, "respawn": 10.0, "size": 0.5, "lift": 0.0, "animations": [{"kind": "float", "speed": 0.5, "amount": 0.05}, {"kind": "rotate", "speed": 0.4, "amount": 0.1}], "item": "", "gun": "Pistol", "ammo": ""},
+    {"x": 4.5, "y": 3.5, "span": 0, "tile": 16, "mode": "once", "effect": "gun", "amount": 10.0, "respawn": 10.0, "size": 0.5, "lift": 0.0, "animations": [{"kind": "rotate", "speed": 0.4, "amount": 0.1}], "item": "", "gun": "SMG", "ammo": ""},
+    {"x": 4.5, "y": 6.5, "span": 0, "tile": 14, "mode": "respawn", "effect": "ammo", "amount": 24, "respawn": 15, "size": 0.25, "lift": 0.0, "animations": [], "item": "", "gun": "", "ammo": "9mm"},
+    {"x": 6.5, "y": 4.5, "span": 0, "tile": 13, "mode": "once", "effect": "item", "amount": 1, "respawn": 10.0, "size": 0.4, "lift": 0.0, "animations": [{"kind": "float", "speed": 0.6, "amount": 0.06}], "item": "Gold key", "gun": "", "ammo": ""}
+  ],
+  "ammo_types": [
+    {"name": "9mm", "tile": 14, "size": 0.1, "speed": 18, "range": 20, "damage_mult": 1.0},
+    {"name": "5.56", "tile": 14, "size": 0.08, "speed": 30, "range": 25, "damage_mult": 1.2},
+    {"name": "Musket ball", "tile": 14, "size": 0.16, "speed": 22, "range": 20, "damage_mult": 2.0}
   ],
   "guns": [
-    {"name": "Pistol", "tile": 16, "size": 5.0, "mode": "semi", "damage": 10.0, "fire_rate": 4.0, "mag_size": 12, "start_ammo": 36, "reload_time": 1.5, "proj_tile": 14, "proj_size": 0.1, "proj_speed": 18.0, "proj_range": 20.0, "spread": 0.0},
-    {"name": "Rifle", "tile": 16, "size": 6.5, "mode": "auto", "damage": 6, "fire_rate": 10, "mag_size": 30, "start_ammo": 90, "reload_time": 2.0, "proj_tile": 14, "proj_size": 0.08, "proj_speed": 30, "proj_range": 20.0, "spread": 1.5},
-    {"name": "Musket", "tile": 16, "size": 7, "mode": "single", "damage": 40, "fire_rate": 1, "mag_size": 12, "start_ammo": 12, "reload_time": 1.2, "proj_tile": 14, "proj_size": 0.16, "proj_speed": 22, "proj_range": 20.0, "spread": 0.0}
+    {"name": "Pistol", "tile": 16, "size": 5.0, "mode": "semi", "damage": 10.0, "fire_rate": 4.0, "mag_size": 12, "start_ammo": 36, "reload_time": 1.5, "ammo": "9mm", "spread": 0.0, "shot": "single", "pellets": 8},
+    {"name": "SMG", "tile": 16, "size": 5.5, "mode": "auto", "damage": 5, "fire_rate": 12, "mag_size": 30, "start_ammo": 30, "reload_time": 1.8, "ammo": "9mm", "spread": 2.0, "shot": "single", "pellets": 8},
+    {"name": "Rifle", "tile": 16, "size": 6.5, "mode": "auto", "damage": 6, "fire_rate": 10, "mag_size": 30, "start_ammo": 90, "reload_time": 2.0, "ammo": "5.56", "spread": 1.5, "shot": "single", "pellets": 8},
+    {"name": "Musket", "tile": 16, "size": 7, "mode": "single", "damage": 40, "fire_rate": 1, "mag_size": 12, "start_ammo": 12, "reload_time": 1.2, "ammo": "Musket ball", "spread": 0.0, "shot": "single", "pellets": 8}
   ],
   "grids": {
     "walls": [

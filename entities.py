@@ -43,7 +43,7 @@ def describe(entity):
     if entity.effect == "gun":
         return f"Picked up {entity.gun or 'a gun'}"
     if entity.effect == "ammo":
-        return f"+{amount} {entity.gun or 'gun'} ammo"
+        return f"+{amount} {entity.ammo or 'Bullet'} ammo"
     return "Picked up"
 
 
@@ -126,4 +126,4 @@ class Entities:
         elif entity.effect == "gun" and guns and entity.gun in guns:
             inventory.give_gun(guns[entity.gun])
         elif entity.effect == "ammo":
-            inventory.add_ammo(entity.gun, entity.amount)
+            inventory.add_ammo(entity.ammo, entity.amount)

@@ -74,6 +74,39 @@ ANIMATION_LABELS = {"float": "Float", "rotate": "Rotate"}
 
 
 @dataclass
+class AmmoType:
+    """A kind of ammunition. Guns that name the same type share one pool of spare rounds, and what
+    they shoot looks and flies like this type says.
+
+    name         what it is called (also how a pickup and a gun refer to it)
+    tile         atlas tile of the bullet that flies out
+    size         size of that bullet in cells
+    speed        how fast it flies, in cells per second
+    range        how far it flies before it disappears, in cells
+    damage_mult  multiplies the damage of the gun that fires it (1.0 leaves it as it is)"""
+    name: str = "Bullet"
+    tile: int = 14
+    size: float = 0.1
+    speed: float = 18.0
+    range: float = 20.0
+    damage_mult: float = 1.0
+
+    @classmethod
+    def from_dict(cls, data):
+        base = cls()
+
+        def number(key, low, high, cast=float):
+            try:
+                return cast(max(low, min(high, float(data.get(key, getattr(base, key))))))
+            except (TypeError, ValueError):
+                return getattr(base, key)
+        name = str(data.get("name", base.name)).strip()[:MAX_NAME] or base.name
+        return cls(name=name, tile=number("tile", 0, 255, int), size=number("size", 0.01, 2.0),
+                   speed=number("speed", 0.5, 200.0), range=number("range", 0.5, 200.0),
+                   damage_mult=number("damage_mult", 0.0, 100.0))
+
+
+@dataclass
 class Gun:
     """A weapon the player can pick up, keep in the inventory and equip. The map defines the guns
     (the editor's Guns section); entities hand them out.
@@ -87,12 +120,10 @@ class Gun:
     damage      damage of one round (what hits will do)
     fire_rate   rounds per second
     mag_size    rounds in a magazine (not used by single, which holds one)
-    start_ammo  spare rounds picked up with the gun (more guns of the same kind add this again)
+    ammo        name of the AmmoType it uses: the bullet it fires and the pool of spare rounds it
+                draws on, shared with every other gun of that type ("" is a plain default bullet)
+    start_ammo  spare rounds of that ammunition picked up with the gun (again with each copy of it)
     reload_time seconds a reload takes
-    proj_tile   atlas tile of the bullet that flies out
-    proj_size   size of that bullet in cells
-    proj_speed  how fast it flies, in cells per second
-    proj_range  how far it flies before it disappears, in cells
     spread      random aim error in degrees (0 is dead accurate); each bullet of a multi shot gets its own
     shot        what one pull of the trigger sends out:
                 single      one bullet
@@ -109,10 +140,7 @@ class Gun:
     mag_size: int = 12
     start_ammo: int = 36
     reload_time: float = 1.5
-    proj_tile: int = 14
-    proj_size: float = 0.1
-    proj_speed: float = 18.0
-    proj_range: float = 20.0
+    ammo: str = ""
     spread: float = 0.0
     shot: str = "single"
     pellets: int = 8
@@ -136,9 +164,8 @@ class Gun:
                    size=number("size", 0.2, 20.0), mode=data.get("mode") if data.get("mode") in GUN_MODES else base.mode,
                    damage=number("damage", 0.0, 10000.0), fire_rate=number("fire_rate", 0.1, 100.0),
                    mag_size=number("mag_size", 1, 1000, int), start_ammo=number("start_ammo", 0, 100000, int),
-                   reload_time=number("reload_time", 0.0, 60.0), proj_tile=int(number("proj_tile", 0, 255, int)),
-                   proj_size=number("proj_size", 0.01, 2.0), proj_speed=number("proj_speed", 0.5, 200.0),
-                   proj_range=number("proj_range", 0.5, 200.0), spread=number("spread", 0.0, 45.0),
+                   reload_time=number("reload_time", 0.0, 60.0), ammo=str(data.get("ammo", ""))[:MAX_NAME],
+                   spread=number("spread", 0.0, 45.0),
                    shot=data.get("shot") if data.get("shot") in SHOT_TYPES else base.shot,
                    pellets=number("pellets", 1, 100, int))
 
@@ -179,8 +206,8 @@ class Entity:
     size     sprite height in world units (it is as wide as it is tall)
     lift     height of the sprite's bottom above the floor
     animations  list of Animation (none by default): float and / or rotate, each with its own speed
-    item, gun   what the "item" effect puts in the inventory (amount of it), and which gun the "gun"
-                effect hands out or the "ammo" effect (amount of rounds) is for"""
+    item, gun, ammo   what the "item" effect puts in the inventory (amount of it), which gun the "gun"
+                effect hands out, and which ammo type the "ammo" effect gives (amount of rounds)"""
     x: float
     y: float
     span: int = 0
@@ -193,7 +220,8 @@ class Entity:
     lift: float = 0.0
     animations: list = field(default_factory=list)
     item: str = ""                  # effect "item": the name of the thing put in the inventory
-    gun: str = ""                   # effect "gun" / "ammo": the name of the gun it is for
+    gun: str = ""                   # effect "gun": the name of the gun it hands out
+    ammo: str = ""                  # effect "ammo": the name of the ammo type it gives (amount rounds)
 
     def clone(self, **changes):
         """A copy that shares nothing with this entity (its animations are copied too)."""
@@ -215,7 +243,8 @@ class Entity:
                        lift=float(data.get("lift", base.lift)),
                        animations=[Animation.from_dict(a) for a in data.get("animations", [])
                                    if isinstance(a, dict)],
-                       item=str(data.get("item", ""))[:MAX_NAME], gun=str(data.get("gun", ""))[:MAX_NAME])
+                       item=str(data.get("item", ""))[:MAX_NAME], gun=str(data.get("gun", ""))[:MAX_NAME],
+                       ammo=str(data.get("ammo", ""))[:MAX_NAME])
 
 
 def grid_name(layer, floor):
@@ -252,9 +281,10 @@ def default_floor_name(index):
 
 class Level:
     def __init__(self, grids, start_x=1.5, start_y=1.5, start_angle=0.0, start_span=0, names=None,
-                 entities=None, guns=None):
+                 entities=None, guns=None, ammo_types=None):
         self.grids = grids
         self.guns = list(guns or [])                # weapons defined for this map (see Gun)
+        self.ammo_types = list(ammo_types or [])    # kinds of ammunition defined for this map (see AmmoType)
         self.entities = list(entities or [])        # items in the world (see Entity)
         self.start_x, self.start_y = start_x, start_y
         self.start_angle = start_angle              # radians, 0 faces +x (right on the grid)
@@ -282,7 +312,16 @@ class Level:
     def copy(self):
         return Level({k: [row[:] for row in g] for k, g in self.grids.items()},
                      self.start_x, self.start_y, self.start_angle, self.start_span, self.names,
-                     [e.clone() for e in self.entities], [replace(g) for g in self.guns])
+                     [e.clone() for e in self.entities], [replace(g) for g in self.guns],
+                     [replace(a) for a in self.ammo_types])
+
+    def ammo_for(self, gun):
+        """The AmmoType a gun fires. A gun that names none (or one that no longer exists) fires a plain
+        default bullet."""
+        for kind in self.ammo_types:
+            if kind.name == gun.ammo:
+                return kind
+        return AmmoType(name=gun.ammo or "Bullet")
 
     # ----------------------------------------------------------- floors
 
@@ -747,9 +786,27 @@ def load_level(path):
         entity = Entity.from_dict(item)
         if 0 <= entity.x < w and 0 <= entity.y < h and entity.span < count:
             level.entities.append(entity)
-    for item in data.get("guns", []):
+    for item in data.get("ammo_types", []):
         if isinstance(item, dict):
-            level.guns.append(Gun.from_dict(item))
+            level.ammo_types.append(AmmoType.from_dict(item))
+    for item in data.get("guns", []):
+        if not isinstance(item, dict):
+            continue
+        gun = Gun.from_dict(item)
+        if "ammo_types" not in data and any(k.startswith("proj_") for k in item):
+            # An older map kept the bullet on the gun: each gun gets an ammo type of its own from it.
+            names = {a.name for a in level.ammo_types}
+            name, n = f"{gun.name} ammo"[:MAX_NAME], 2
+            while name in names:
+                name, n = f"{gun.name} ammo {n}"[:MAX_NAME], n + 1
+            level.ammo_types.append(AmmoType.from_dict({
+                "name": name, "tile": item.get("proj_tile", 14), "size": item.get("proj_size", 0.1),
+                "speed": item.get("proj_speed", 18.0), "range": item.get("proj_range", 20.0)}))
+            gun.ammo = name
+        level.guns.append(gun)
+    for entity in level.entities:                   # ammo pickups used to name a gun, not an ammo type
+        if entity.effect == "ammo" and not entity.ammo and entity.gun:
+            entity.ammo = next((g.ammo for g in level.guns if g.name == entity.gun), "")
     return level
 
 
@@ -768,6 +825,8 @@ def save_level(path, level):
         f'  "start": {json.dumps(start)},\n'
         + ('  "entities": [\n' + ",\n".join("    " + json.dumps(asdict(e)) for e in level.entities) + "\n  ],\n"
            if level.entities else "")
+        + ('  "ammo_types": [\n' + ",\n".join("    " + json.dumps(asdict(a)) for a in level.ammo_types) + "\n  ],\n"
+           if level.ammo_types else "")
         + ('  "guns": [\n' + ",\n".join("    " + json.dumps(asdict(g)) for g in level.guns) + "\n  ],\n"
            if level.guns else "") +
         '  "grids": {\n' + ",\n".join(blocks) + "\n  }\n}\n"

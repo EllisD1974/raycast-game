@@ -9,6 +9,8 @@ import math
 import random
 from dataclasses import dataclass
 
+from mapfile import AmmoType
+
 MAX_STEP = 0.1                  # cells a bullet moves between collision checks
 MUZZLE = 0.25                   # how far in front of the eye a bullet starts
 
@@ -40,13 +42,16 @@ class Projectiles:
         self.bullets = []
         self.rng = rng or random.Random()
 
-    def fire(self, player, gun):
+    def fire(self, player, gun, ammo=None):
         """One pull of the trigger: shoot `gun` from the player's eye, along where they are looking (a
-        little off if it has spread). A multi shot sends all its pellets, each aimed on its own."""
+        little off if it has spread). `ammo` is the AmmoType it fires (what the bullet looks like and
+        how it flies); None is a plain default bullet. A multi shot sends all its pellets, each aimed on
+        its own."""
+        ammo = ammo or AmmoType()
         for _ in range(max(1, gun.pellets) if gun.shot == "multi" else 1):
-            self.fire_one(player, gun)
+            self.fire_one(player, gun, ammo)
 
-    def fire_one(self, player, gun):
+    def fire_one(self, player, gun, ammo):
         yaw, pitch = player.angle, player.pitch
         if gun.spread > 0.0:
             spread = math.radians(gun.spread)
@@ -56,8 +61,8 @@ class Projectiles:
         dx, dy, dz = math.cos(yaw) * cp, math.sin(yaw) * cp, math.sin(pitch)
         self.bullets.append(Projectile(
             player.x + dx * MUZZLE, player.y + dy * MUZZLE, player.eye_z - 0.03 + dz * MUZZLE,
-            dx * gun.proj_speed, dy * gun.proj_speed, dz * gun.proj_speed,
-            gun.proj_tile, gun.proj_size, gun.damage, gun.proj_range))
+            dx * ammo.speed, dy * ammo.speed, dz * ammo.speed,
+            ammo.tile, ammo.size, gun.damage * ammo.damage_mult, ammo.range))
 
     def update(self, world, dt):
         """Move every bullet dt seconds. Returns the Hit of each bullet that struck something."""

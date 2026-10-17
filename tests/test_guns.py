@@ -14,7 +14,7 @@ import physics
 from entities import Entities, PlayerStats
 from hud import draw_hud, weapon_picture
 from inventory import Inventory
-from mapfile import Entity, Gun, Level, load_level, save_level
+from mapfile import AmmoType, Entity, Gun, Level, load_level, save_level
 from projectiles import Projectiles
 from world import World
 
@@ -42,10 +42,13 @@ def run(inventory, seconds, trigger=False, reload_pressed=False):
 def test_guns_survive_save_and_load_and_bad_values_are_repaired(tmp_path):
     level = Level.blank(8, 8)
     level.guns = [Gun("Rifle", tile=20, size=6.5, mode="auto", damage=7.5, fire_rate=9, mag_size=30,
-                      start_ammo=90, reload_time=2.25, proj_tile=15, proj_size=0.2, proj_speed=40,
-                      proj_range=33, spread=1.5)]
+                      start_ammo=90, reload_time=2.25, ammo="5.56", spread=1.5)]
+    level.ammo_types = [AmmoType("5.56", tile=15, size=0.2, speed=40, range=33, damage_mult=1.5)]
     save_level(str(tmp_path / "m.json"), level)
-    assert load_level(str(tmp_path / "m.json")).guns == level.guns
+    again = load_level(str(tmp_path / "m.json"))
+    assert again.guns == level.guns and again.ammo_types == level.ammo_types
+    assert again.ammo_for(again.guns[0]).speed == 40
+    assert again.ammo_for(Gun("Other", ammo="missing")).name == "missing"        # no such type: a plain bullet
     mended = Gun.from_dict({"name": "  ", "mode": "laser", "damage": "lots", "fire_rate": -5, "mag_size": 0})
     assert mended.name == "Pistol" and mended.mode == "semi" and mended.damage == 10 and mended.fire_rate > 0
     assert mended.mag_size >= 1
@@ -88,26 +91,53 @@ def test_a_pickup_with_the_item_effect_goes_into_the_inventory_and_can_respawn()
 
 
 def test_a_gun_pickup_gives_the_gun_loaded_and_equips_it_and_a_second_one_gives_ammo():
-    pistol = Gun("Pistol", mag_size=10, start_ammo=30)
+    pistol = Gun("Pistol", mag_size=10, start_ammo=30, ammo="9mm")
     level = Level.blank(12, 12)
     level.guns = [pistol]
     level.entities = [Entity(5.5, 5.5, effect="gun", gun="Pistol"), Entity(7.5, 7.5, effect="gun", gun="Pistol"),
-                      Entity(3.5, 3.5, effect="ammo", gun="Pistol", amount=15)]
+                      Entity(3.5, 3.5, effect="ammo", ammo="9mm", amount=15)]
     items, stats, inv = Entities(level, World(level, 16)), PlayerStats(), Inventory()
     assert items.update(physics.Player(5.5, 5.5, 0.0), stats, DT, inv) == ["Picked up Pistol"]
     state = inv.current()
     assert state is not None and (state.mag, state.reserve) == (10, 30) and inv.equipped == 0
     items.update(physics.Player(7.5, 7.5, 0.0), stats, DT, inv)
     assert len(inv.guns) == 1 and inv.guns[0].reserve == 60     # the same gun again: more ammunition
-    assert items.update(physics.Player(3.5, 3.5, 0.0), stats, DT, inv) == ["+15 Pistol ammo"]
+    assert items.update(physics.Player(3.5, 3.5, 0.0), stats, DT, inv) == ["+15 9mm ammo"]
     assert inv.guns[0].reserve == 75
 
 
 def test_ammo_found_before_its_gun_is_kept_for_when_the_gun_is_picked_up():
     inv = Inventory()
-    assert not inv.add_ammo("Pistol", 20)
-    inv.give_gun(Gun("Pistol", mag_size=10, start_ammo=5))
+    assert not inv.add_ammo("9mm", 20)                                       # no gun uses it yet: still kept
+    inv.give_gun(Gun("Pistol", mag_size=10, start_ammo=5, ammo="9mm"))
     assert inv.current().reserve == 25
+
+
+def test_guns_that_share_an_ammo_type_share_one_pool_and_others_do_not():
+    inv = Inventory()
+    inv.give_gun(Gun("Pistol", ammo="9mm", mag_size=4, start_ammo=10, mode="auto", fire_rate=50, reload_time=0.1))
+    inv.give_gun(Gun("SMG", ammo="9mm", mag_size=20, start_ammo=10))
+    inv.give_gun(Gun("Rifle", ammo="5.56", mag_size=30, start_ammo=7))
+    assert inv.ammo == {"9mm": 20, "5.56": 7}                                # the 9mm guns' starting rounds add up
+    assert inv.guns[0].reserve == inv.guns[1].reserve == 20 and inv.guns[2].reserve == 7
+    run(inv, 0.3, trigger=True)                                              # empty the pistol: it reloads from the pool
+    run(inv, 0.5)
+    assert inv.guns[0].reserve == inv.guns[1].reserve and inv.guns[0].reserve < 20
+    assert inv.ammo["5.56"] == 7                                             # the rifle's rounds are untouched
+    before = inv.ammo["9mm"]
+    inv.add_ammo("9mm", 6)
+    assert inv.guns[0].reserve == inv.guns[1].reserve == before + 6
+
+
+def test_an_ammo_pickup_feeds_every_gun_using_that_type():
+    level = Level.blank(12, 12)
+    level.guns = [Gun("Pistol", ammo="9mm", start_ammo=0), Gun("SMG", ammo="9mm", start_ammo=0)]
+    level.entities = [Entity(5.5, 5.5, effect="ammo", ammo="9mm", amount=30)]
+    items, inv = Entities(level, World(level, 16)), Inventory()
+    inv.give_gun(level.guns[0])
+    inv.give_gun(level.guns[1])
+    items.update(physics.Player(5.5, 5.5, 0.0), PlayerStats(), DT, inv)
+    assert inv.guns[0].reserve == inv.guns[1].reserve == 30
 
 
 def test_picking_up_inventory_things_without_an_inventory_does_not_crash():
@@ -228,8 +258,8 @@ def test_a_bullet_flies_where_the_player_looks_at_its_speed_and_vanishes_at_its_
     world = World(Level.blank(40, 12), 16)
     player = physics.Player(2.5, 5.5, 0.0, angle=0.0)
     bullets = Projectiles()
-    gun = Gun("A", proj_speed=10.0, proj_range=6.0, proj_tile=14, proj_size=0.2)
-    bullets.fire(player, gun)
+    gun = Gun("A")
+    bullets.fire(player, gun, AmmoType("B", tile=14, size=0.2, speed=10.0, range=6.0))
     b = bullets.bullets[0]
     assert b.vx == pytest.approx(10.0) and b.vy == pytest.approx(0.0, abs=1e-9) and b.vz == pytest.approx(0.0, abs=1e-9)
     assert b.z == pytest.approx(player.eye_z - 0.03)
@@ -245,14 +275,14 @@ def test_a_bullet_flies_where_the_player_looks_at_its_speed_and_vanishes_at_its_
 def test_bullets_follow_the_pitch_and_the_spread_is_random_within_its_limit():
     player = physics.Player(2.5, 5.5, 0.0, angle=0.0, pitch=math.radians(30))
     bullets = Projectiles()
-    bullets.fire(player, Gun("A", proj_speed=10.0))
+    bullets.fire(player, Gun("A"), AmmoType(speed=10.0))
     b = bullets.bullets[0]
     assert b.vz == pytest.approx(5.0) and b.vx == pytest.approx(10 * math.cos(math.radians(30)))
     level_player = physics.Player(2.5, 5.5, 0.0, angle=0.0)
     yaws = set()
     for _ in range(40):
         bullets.bullets.clear()
-        bullets.fire(level_player, Gun("A", proj_speed=10.0, spread=5.0))
+        bullets.fire(level_player, Gun("A", spread=5.0), AmmoType(speed=10.0))
         angle = math.atan2(bullets.bullets[0].vy, bullets.bullets[0].vx)
         assert abs(angle) <= math.radians(5.0) + 1e-9
         yaws.add(round(angle, 4))
@@ -264,16 +294,17 @@ def test_bullets_stop_at_walls_floors_and_ceilings_and_report_the_hit():
     level.set("walls", 10, 5, 1)
     world = World(level, 16)
     bullets = Projectiles()
-    bullets.fire(physics.Player(2.5, 5.5, 0.0, angle=0.0), Gun("A", proj_speed=30.0, proj_range=50.0, damage=12))
+    bullets.fire(physics.Player(2.5, 5.5, 0.0, angle=0.0), Gun("A", damage=12),
+                 AmmoType(speed=30.0, range=50.0, damage_mult=2.0))
     hits = []
     for _ in range(40):
         hits += bullets.update(world, 1 / 60)
-    assert len(hits) == 1 and hits[0].damage == 12 and 9.5 < hits[0].x < 10.2 and bullets.bullets == []
+    assert len(hits) == 1 and hits[0].damage == 24 and 9.5 < hits[0].x < 10.2 and bullets.bullets == []
     down = Projectiles()
-    down.fire(physics.Player(5.5, 5.5, 0.0, angle=0.0, pitch=-math.radians(60)), Gun("A", proj_speed=30.0))
+    down.fire(physics.Player(5.5, 5.5, 0.0, angle=0.0, pitch=-math.radians(60)), Gun("A"), AmmoType(speed=30.0))
     assert len(sum((down.update(world, 1 / 60) for _ in range(30)), [])) == 1       # into the floor
     up = Projectiles()
-    up.fire(physics.Player(5.5, 5.5, 0.0, angle=0.0, pitch=math.radians(60)), Gun("A", proj_speed=30.0))
+    up.fire(physics.Player(5.5, 5.5, 0.0, angle=0.0, pitch=math.radians(60)), Gun("A"), AmmoType(speed=30.0))
     assert len(sum((up.update(world, 1 / 60) for _ in range(30)), [])) == 1         # into the ceiling
 
 
@@ -282,7 +313,7 @@ def test_a_fast_bullet_cannot_skip_through_a_thin_wall_and_glass_stops_bullets()
     level.set("walls", 10, 5, 1)
     world = World(level, 16)
     bullets = Projectiles()
-    bullets.fire(physics.Player(2.5, 5.5, 0.0, angle=0.0), Gun("A", proj_speed=200.0, proj_range=60.0))
+    bullets.fire(physics.Player(2.5, 5.5, 0.0, angle=0.0), Gun("A"), AmmoType(speed=200.0, range=60.0))
     hits = bullets.update(world, 0.2)                           # 40 cells in one frame
     assert len(hits) == 1 and hits[0].x < 11.0
     textures = np.zeros((16, 32, 32, 4), np.uint8)
@@ -292,7 +323,7 @@ def test_a_fast_bullet_cannot_skip_through_a_thin_wall_and_glass_stops_bullets()
     glass_level.set("walls", 10, 5, 4)                          # map id 4 = tile 3
     glass_world = World(glass_level, 16, transparent_tiles=(textures[..., 3] < 255).any(axis=(1, 2)))
     shot = Projectiles()
-    shot.fire(physics.Player(2.5, 5.5, 0.0, angle=0.0), Gun("A", proj_speed=200.0, proj_range=60.0))
+    shot.fire(physics.Player(2.5, 5.5, 0.0, angle=0.0), Gun("A"), AmmoType(speed=200.0, range=60.0))
     assert len(shot.update(glass_world, 0.2)) == 1
 
 
@@ -370,3 +401,22 @@ def test_shot_type_and_pellets_are_saved_and_bad_values_repaired(tmp_path):
     assert Gun.from_dict({"shot": "laser", "pellets": 0}).shot == "single"
     assert Gun.from_dict({"pellets": 0}).pellets == 1
     assert Gun.from_dict({}).shot == "single"                               # older maps have no shot type
+
+
+def test_an_older_map_with_the_bullet_on_the_gun_gets_an_ammo_type_per_gun(tmp_path):
+    import json
+    level = Level.blank(8, 8)
+    level.guns = [Gun("Pistol", ammo="x")]
+    level.entities = [Entity(3.5, 3.5, effect="ammo", ammo="x", amount=5)]
+    path = str(tmp_path / "old.json")
+    save_level(path, level)
+    data = json.loads(open(path).read())
+    data.pop("ammo_types", None)
+    data["guns"] = [{"name": "Pistol", "proj_tile": 15, "proj_size": 0.3, "proj_speed": 25, "proj_range": 9}]
+    data["entities"] = [{"x": 3.5, "y": 3.5, "effect": "ammo", "gun": "Pistol", "amount": 5}]
+    open(path, "w").write(json.dumps(data))
+    old = load_level(path)
+    assert [a.name for a in old.ammo_types] == ["Pistol ammo"] and old.guns[0].ammo == "Pistol ammo"
+    kind = old.ammo_for(old.guns[0])
+    assert (kind.tile, kind.size, kind.speed, kind.range) == (15, 0.3, 25, 9)
+    assert old.entities[0].ammo == "Pistol ammo"                          # the pickup now names the ammo type

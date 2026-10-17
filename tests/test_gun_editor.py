@@ -10,7 +10,7 @@ import pytest
 
 import details
 import map_editor
-from mapfile import Entity, Gun, Level
+from mapfile import AmmoType, Entity, Gun, Level
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -112,7 +112,7 @@ def test_add_select_and_delete_guns(ed):
 def test_the_pane_lists_every_gun_setting_and_hides_the_magazine_for_single_shot(ed):
     add_gun(ed)
     assert keys(ed) == ["name", "tile", "size", "mode", "shot", "damage", "fire_rate", "mag_size", "start_ammo",
-                        "reload_time", "spread", "projectile", "proj_tile", "proj_size", "proj_speed", "proj_range"]
+                        "reload_time", "spread", "ammo"]
     choose(ed, "mode", "single")
     assert "mag_size" not in keys(ed) and ed.level.guns[0].mode == "single"
     choose(ed, "mode", "auto")
@@ -134,26 +134,20 @@ def test_gun_numbers_step_wheel_and_type(ed):
     type_text(ed, "2.5")
     key(ed, pygame.K_RETURN)
     assert gun.reload_time == 2.5
-    click(ed, row(ed, "proj_size").value.center)
-    for _ in range(5):
-        key(ed, pygame.K_BACKSPACE)
-    type_text(ed, "9")
-    key(ed, pygame.K_RETURN)
-    assert gun.proj_size == 2.0                                  # clamped to the limit
 
 
-def test_the_atlas_sets_the_gun_picture_or_the_bullet_picture_depending_on_the_row_you_clicked(ed):
+def test_the_atlas_sets_the_gun_picture_and_the_ammo_types_bullet_picture(ed):
     gun = add_gun(ed)
     ed.atlas_drag = ((3, 0), (3, 0))
     ed.finish_atlas_drag()
-    assert gun.tile == 3                                         # the gun's own picture by default
-    click(ed, row(ed, "proj_tile").value.center)
-    assert ed.tile_target == "proj_tile"
-    ed.atlas_drag = ((5, 0), (5, 0))
-    ed.finish_atlas_drag()
-    assert gun.proj_tile == 5 and gun.tile == 3
+    assert gun.tile == 3
     click(ed, row(ed, "tile").plus.center)
     assert gun.tile == 4                                         # the + step works too
+    ed.add_ammo_type()
+    ammo = ed.level.ammo_types[0]
+    ed.atlas_drag = ((5, 0), (5, 0))
+    ed.finish_atlas_drag()
+    assert ammo.tile == 5 and gun.tile == 4
     ed.draw(pygame.display.get_surface())
 
 
@@ -189,7 +183,10 @@ def test_the_guns_section_draws_with_a_selected_gun_of_every_mode_and_through_ot
         gun.mode = mode
         ed.draw(pygame.display.get_surface())
     gun.tile = 9999                                              # a bad picture index is clamped, not a crash
-    gun.proj_tile = -3
+    ed.add_ammo_type()
+    ed.level.ammo_types[0].tile = -3
+    ed.draw(pygame.display.get_surface())
+    ed.gun_selected, ed.ammo_selected = 0, None
     ed.draw(pygame.display.get_surface())
     ed.do("guns")
     ed.draw(pygame.display.get_surface())
@@ -240,7 +237,7 @@ def test_an_item_that_goes_in_the_inventory_has_a_name_and_a_count(ed):
     assert e.amount == 10.0                                      # score to health keeps what you set
 
 
-def test_a_gun_item_picks_from_the_maps_guns_and_ammo_has_a_round_count(ed):
+def test_a_gun_item_picks_from_the_maps_guns_and_an_ammo_item_picks_an_ammo_type(ed):
     e = select_new_item(ed)
     choose(ed, "effect", "gun")
     assert row(ed, "gun").field.choices == ("",) and "amount" not in keys(ed)       # no guns defined yet
@@ -249,7 +246,11 @@ def test_a_gun_item_picks_from_the_maps_guns_and_ammo_has_a_round_count(ed):
     choose(ed, "gun", "Rifle")
     assert e.gun == "Rifle"
     choose(ed, "effect", "ammo")
-    assert e.amount == 24.0 and keys(ed)[-5:-2] == ["gun", "amount", "size"][:3] or "amount" in keys(ed)
+    assert row(ed, "ammo").field.choices == ("",)[:1] + ()                          # only the default bullet so far
+    ed.level.ammo_types = [AmmoType("9mm"), AmmoType("Shells")]
+    assert row(ed, "ammo").field.choices == ("", "9mm", "Shells")
+    choose(ed, "ammo", "Shells")
+    assert e.ammo == "Shells" and e.amount == 24.0 and "gun" not in keys(ed)
     click(ed, row(ed, "amount").plus.center)
     assert e.amount == 30.0
     ed.draw(pygame.display.get_surface())
@@ -279,3 +280,83 @@ def test_the_shot_type_is_single_bullet_by_default_and_multi_bullet_adds_a_count
     ed.draw(pygame.display.get_surface())
     choose(ed, "shot", "multi")
     ed.draw(pygame.display.get_surface())
+
+
+# ------------------------------------------------------------------ ammo types
+
+def add_ammo(ed):
+    if not ed.guns_mode:
+        ed.do("guns")
+    click(ed, ed.ammo_rows()[1].center)
+    return ed.level.ammo_types[-1]
+
+
+def test_ammo_types_are_added_selected_and_deleted_in_the_guns_section(ed):
+    first = add_ammo(ed)
+    assert ed.level.ammo_types == [first] and ed.selected_ammo() is first and first.name == "Ammo"
+    assert ed.selected_gun() is None
+    second = add_ammo(ed)
+    assert second.name == "Ammo 2" and ed.selected_ammo() is second
+    rows, _add = ed.ammo_rows()
+    click(ed, rows[0][0].center)
+    assert ed.selected_ammo() is first
+    assert keys(ed) == ["name", "tile", "size", "speed", "range", "damage_mult"]
+    click(ed, details.button_rect(ed.details_rect(), ed.details_rows()).center)
+    assert ed.level.ammo_types == [second] and ed.details_rect() is None
+    ed.do("undo")
+    assert len(ed.level.ammo_types) == 2
+
+
+def test_selecting_a_gun_and_an_ammo_type_are_exclusive_and_both_open_the_pane(ed):
+    add_gun(ed)
+    add_ammo(ed)
+    assert ed.selected_gun() is None and ed.selected_ammo() is not None
+    click(ed, ed.gun_rows()[0][0][0].center)
+    assert ed.selected_gun() is not None and ed.selected_ammo() is None
+    ed.draw(pygame.display.get_surface())
+    key(ed, pygame.K_ESCAPE)
+    assert ed.details_rect() is None
+
+
+def test_ammo_settings_step_and_type(ed):
+    ammo = add_ammo(ed)
+    click(ed, row(ed, "speed").plus.center)
+    assert ammo.speed == 19.0
+    click(ed, row(ed, "damage_mult").plus.center)
+    assert ammo.damage_mult == pytest.approx(1.1)
+    click(ed, row(ed, "size").value.center)
+    for _ in range(5):
+        key(ed, pygame.K_BACKSPACE)
+    type_text(ed, "9")
+    key(ed, pygame.K_RETURN)
+    assert ammo.size == 2.0                                      # clamped to the limit
+
+
+def test_guns_pick_their_ammo_type_from_a_list_and_two_guns_can_pick_the_same_one(ed):
+    add_ammo(ed)
+    add_ammo(ed)
+    a, b = ed.level.ammo_types
+    add_gun(ed)
+    assert row(ed, "ammo").field.choices == ("", "Ammo", "Ammo 2")
+    choose(ed, "ammo", "Ammo 2")
+    add_gun(ed)
+    choose(ed, "ammo", "Ammo 2")
+    assert [g.ammo for g in ed.level.guns] == ["Ammo 2", "Ammo 2"]
+    assert ed.level.ammo_for(ed.level.guns[0]) is b
+    ed.draw(pygame.display.get_surface())
+
+
+def test_renaming_an_ammo_type_keeps_guns_and_pickups_pointing_at_it_and_deleting_it_clears_them(ed):
+    ammo = add_ammo(ed)
+    ed.level.guns = [Gun("A", ammo="Ammo"), Gun("B", ammo="Ammo"), Gun("C", ammo="")]
+    ed.level.entities = [Entity(3.5, 3.5, effect="ammo", ammo="Ammo")]
+    click(ed, row(ed, "name").value.center)
+    for _ in range(30):
+        key(ed, pygame.K_BACKSPACE)
+    type_text(ed, "9mm")
+    key(ed, pygame.K_RETURN)
+    assert ammo.name == "9mm"
+    assert [g.ammo for g in ed.level.guns] == ["9mm", "9mm", ""] and ed.level.entities[0].ammo == "9mm"
+    click(ed, details.button_rect(ed.details_rect(), ed.details_rows()).center)
+    assert ed.level.ammo_types == []
+    assert [g.ammo for g in ed.level.guns] == ["", "", ""] and ed.level.entities[0].ammo == ""

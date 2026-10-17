@@ -62,9 +62,17 @@ the Details pane:
 | Shot type | **Single bullet**: one bullet per shot; **Multi bullet**: several bullets at once (a shotgun), each aimed a little differently by the spread; **Projectile**: reserved for rockets and the like, fires as a single bullet for now |
 | Bullets / shot | how many bullets a multi shot sends (one round of ammunition either way) |
 | Damage, Shots / second | per bullet, and shots per second |
-| Rounds / mag, Spare rounds, Reload time | magazine size (not used by single shot), starting spare ammunition, seconds to reload |
+| Ammo type | which kind of ammunition it uses (see below); guns using the same type share one pool of spare rounds |
+| Rounds / mag, Spare rounds, Reload time | magazine size (not used by single shot), spare rounds of its ammo type given with the gun, seconds to reload |
 | Spread | random aim error in degrees |
-| Bullet sprite, size, speed, range | the projectile that flies out: its picture, its size in cells, cells per second, and how far it goes |
+
+**Ammunition** is defined in the same section (the Ammunition list under the guns). An ammo type has
+the bullet's sprite, size, speed and range and a damage multiplier (an armour-piercing round might be
+x2). Give several guns the same ammo type and they draw on one shared pool of spare rounds, so a
+pistol and an SMG can both use 9mm; each gun still has its own magazine. An item with the **Give
+ammo** effect names an ammo type and adds rounds to that pool (even before you own a gun for it).
+A gun with no ammo type fires a plain default bullet. Maps saved before ammo types existed
+have one made for each gun from its old bullet settings, when they are loaded.
 
 Bullets fly where you look (up and down included) and stop at walls, floors, ceilings and glass.
 Nothing takes damage yet, so damage is stored on the bullet for when something can. `maps/guns.json`
