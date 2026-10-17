@@ -464,7 +464,7 @@ class Editor:
                   field("size", "Sprite size", "num", step=0.5, low=0.2, high=20.0),
                   field("mode", "Fire mode", "enum", choices=GUN_MODES, labels=GUN_MODE_LABELS),
                   field("damage", "Damage", "num", step=1.0, low=0.0, high=10000.0),
-                  field("fire_rate", "Fire rate", "num", step=0.5, low=0.1, high=100.0, unit="/s")]
+                  field("fire_rate", "Shots / second", "num", step=0.5, low=0.1, high=100.0, unit="/s")]
         if g.mode != "single":
             fields.append(field("mag_size", "Rounds / mag", "num", int, step=1.0, low=1, high=1000))
         fields += [field("start_ammo", "Spare rounds", "num", int, step=6.0, low=0, high=100000),
@@ -1825,7 +1825,7 @@ class Editor:
         bullet = pygame.transform.scale(self.tiles[max(0, min(gun.proj_tile, len(self.tiles) - 1))], (size, size))
         screen.blit(bullet, bullet.get_rect(center=box.center))
         screen.blit(self.small.render("bullet vs a 1 cell square", True, DIM), (box.right + 10, box.centery - 8))
-        lines = (f"{gun.damage * gun.fire_rate:g} damage a second at full fire rate",
+        lines = (f"{gun.damage * gun.fire_rate:g} damage a second at full fire rate (a shot every {1 / gun.fire_rate:.2g} s)",
                  f"{gun.capacity} round{'s' if gun.capacity != 1 else ''} a magazine, {gun.start_ammo} spare, "
                  f"{gun.reload_time:g}s to reload",
                  f"bullets fly {gun.proj_speed:g} cells a second for up to {gun.proj_range:g} cells")
@@ -1844,7 +1844,10 @@ class Editor:
         if gun is not None:
             how = {"single": "one round, reloads after every shot", "semi": "one round per trigger pull",
                    "auto": "keeps firing while the trigger is held"}[gun.mode]
-            notes = (f"{GUN_MODE_LABELS[gun.mode]}: {how}.", "Click a Sprite row, then an atlas tile,",
+            gap = 1.0 / gun.fire_rate
+            notes = (f"{GUN_MODE_LABELS[gun.mode]}: {how}.",
+                     f"At {gun.fire_rate:g} shots a second, one shot every {gap:.2g} s.",
+                     "Click a Sprite row, then an atlas tile,",
                      "to set that picture.", "Hand the gun out with an item whose", "effect is Give a gun.")
         else:
             notes = (f"Cell ({math.floor(e.x)}, {math.floor(e.y)}) on {self.level.names[e.span]}",
