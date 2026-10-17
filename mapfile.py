@@ -38,7 +38,7 @@ import os
 
 from constants import PLAYER_HEIGHT
 
-MAP_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "map.json")
+MAP_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "maps", "map.json")
 FORMAT_VERSION = 6
 MAX_NAME_LENGTH = 24
 MIN_WALL_GAP = 0.05             # a wall this close to the ceiling is just a full-height wall

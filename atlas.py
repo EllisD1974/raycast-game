@@ -1,4 +1,4 @@
-"""Loading the texture atlas (textures.png), shared by the game and the editor.
+"""Loading the texture atlas (assets/textures.png), shared by the game and the editor.
 
 The atlas may have an alpha channel (paint it with transparent pixels in any image editor). Tiles
 with any transparent or semi-transparent pixel are see-through when used as walls: fully transparent
@@ -11,7 +11,7 @@ import pygame
 
 from constants import TILE
 
-ATLAS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "textures.png")
+ATLAS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "textures.png")
 
 
 def unpack_atlas(path=ATLAS_PATH, tile=TILE):

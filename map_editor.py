@@ -1,6 +1,6 @@
 """Map editor for the simple raycaster.
 
-Run:  python map_editor.py [map.json]      (opens maximized)
+Run:  python map_editor.py [maps/map.json]      (opens maximized)
 
 A map has any number of floors stacked on top of each other. The ground floor exists everywhere;
 higher floors have a room only where you paint one. Pick the floor you are editing from the

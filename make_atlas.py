@@ -124,7 +124,7 @@ def ceiling_panel(rng):
 TEXTURES = (brick, mossy_stone, wood, blue_tiles, floor_tile, ceiling_panel)   # append new textures here
 
 
-ATLAS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "textures.png")
+ATLAS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "textures.png")
 
 
 def main(path=ATLAS_FILE, force=False):

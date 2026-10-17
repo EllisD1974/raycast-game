@@ -1,6 +1,6 @@
 """A simple raycaster with textured walls, floors, ceilings, stairs, ramps and variable heights.
 
-Run:  python make_atlas.py   (once: creates textures.png, the 32x32 texture map)
+Run:  python make_atlas.py   (once: creates assets/textures.png, the 32x32 texture map)
       python main.py         controls:
           mouse            look around (left/right turns, up/down tilts the view, up to 45 degrees)
           WASD / arrows    move (the left/right arrows turn too); hold SHIFT to sprint
