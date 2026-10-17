@@ -59,7 +59,9 @@ the Details pane:
 |---|---|
 | Name, Sprite, Sprite size | the picture drawn in your hands (click the Sprite row, then an atlas tile) |
 | Fire mode | **Single shot**: one round per pull, reloads after every shot; **Semi-auto**: one round per pull; **Full auto**: fires while held |
-| Damage, Fire rate | per round, and rounds per second |
+| Shot type | **Single bullet**: one bullet per shot; **Multi bullet**: several bullets at once (a shotgun), each aimed a little differently by the spread; **Projectile**: reserved for rockets and the like, fires as a single bullet for now |
+| Bullets / shot | how many bullets a multi shot sends (one round of ammunition either way) |
+| Damage, Shots / second | per bullet, and shots per second |
 | Rounds / mag, Spare rounds, Reload time | magazine size (not used by single shot), starting spare ammunition, seconds to reload |
 | Spread | random aim error in degrees |
 | Bullet sprite, size, speed, range | the projectile that flies out: its picture, its size in cells, cells per second, and how far it goes |

@@ -99,7 +99,7 @@ from atlas import ATLAS_PATH, atlas_array, transparent_tiles, unpack_atlas
 from constants import HEIGHT, MOUSE_SENSITIVITY, PLAYER_HEIGHT, TILE, WIDTH
 from mapfile import (ANIMATION_KINDS, ANIMATION_LABELS, DEFAULTS, EDIT_LAYERS, EFFECT_LABELS, ENTITY_EFFECTS,
                      ENTITY_MODES, GUN_MODE_LABELS, GUN_MODES, MAP_PATH, MAX_NAME, MAX_NAME_LENGTH, MIN_WALL_GAP,
-                     MODE_LABELS, Animation, Entity, Gun, Level, default_level,
+                     MODE_LABELS, SHOT_LABELS, SHOT_TYPES, Animation, Entity, Gun, Level, default_level,
                      grid_name, load_level, save_level, split_grid_name)
 import details
 import hud
@@ -463,8 +463,11 @@ class Editor:
                   field("tile", "Sprite", "tile", int, low=0, high=len(self.tiles) - 1),
                   field("size", "Sprite size", "num", step=0.5, low=0.2, high=20.0),
                   field("mode", "Fire mode", "enum", choices=GUN_MODES, labels=GUN_MODE_LABELS),
-                  field("damage", "Damage", "num", step=1.0, low=0.0, high=10000.0),
-                  field("fire_rate", "Shots / second", "num", step=0.5, low=0.1, high=100.0, unit="/s")]
+                  field("shot", "Shot type", "enum", choices=SHOT_TYPES, labels=SHOT_LABELS)]
+        if g.shot == "multi":
+            fields.append(field("pellets", "Bullets / shot", "num", int, step=1.0, low=1, high=100))
+        fields += [field("damage", "Damage", "num", step=1.0, low=0.0, high=10000.0),
+                   field("fire_rate", "Shots / second", "num", step=0.5, low=0.1, high=100.0, unit="/s")]
         if g.mode != "single":
             fields.append(field("mag_size", "Rounds / mag", "num", int, step=1.0, low=1, high=1000))
         fields += [field("start_ammo", "Spare rounds", "num", int, step=6.0, low=0, high=100000),
@@ -1796,6 +1799,8 @@ class Editor:
             screen.blit(self.tiles[max(0, min(g.tile, len(self.tiles) - 1))], (rect.x + 6, rect.y + (rect.h - TILE) // 2))
             screen.blit(self.font.render(g.name, True, TEXT), (rect.x + 48, rect.y + 5))
             summary = f"{GUN_MODE_LABELS[g.mode]}   {g.damage:g} dmg   {g.fire_rate:g}/s   {g.capacity} rounds"
+            if g.shot != "single":
+                summary += f"   {SHOT_LABELS[g.shot].lower()}" + (f" x{g.pellets}" if g.shot == "multi" else "")
             screen.blit(self.small.render(summary, True, TEXT if on else DIM), (rect.x + 48, rect.y + 24))
         pygame.draw.rect(screen, BUTTON_HOT if add.collidepoint(self.mouse) else BUTTON, add, border_radius=4)
         label = self.font.render("+ Add gun", True, TEXT)
@@ -1847,6 +1852,8 @@ class Editor:
             gap = 1.0 / gun.fire_rate
             notes = (f"{GUN_MODE_LABELS[gun.mode]}: {how}.",
                      f"At {gun.fire_rate:g} shots a second, one shot every {gap:.2g} s.",
+                     {"single": "One bullet a shot.", "multi": f"{gun.pellets} bullets a shot, each with its own spread.",
+                      "projectile": "Projectile: fires as one bullet for now."}[gun.shot],
                      "Click a Sprite row, then an atlas tile,",
                      "to set that picture.", "Hand the gun out with an item whose", "effect is Give a gun.")
         else:

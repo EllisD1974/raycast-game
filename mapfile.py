@@ -66,6 +66,8 @@ EFFECT_LABELS = {"none": "None", "score": "Score", "health": "Health", "item": "
                  "gun": "Give a gun", "ammo": "Give ammo"}
 GUN_MODES = ("single", "semi", "auto")
 GUN_MODE_LABELS = {"single": "Single shot", "semi": "Semi-auto", "auto": "Full auto"}
+SHOT_TYPES = ("single", "multi", "projectile")
+SHOT_LABELS = {"single": "Single bullet", "multi": "Multi bullet", "projectile": "Projectile"}
 MAX_NAME = 24                                   # longest name of an item or gun
 ANIMATION_KINDS = ("float", "rotate")
 ANIMATION_LABELS = {"float": "Float", "rotate": "Rotate"}
@@ -91,7 +93,13 @@ class Gun:
     proj_size   size of that bullet in cells
     proj_speed  how fast it flies, in cells per second
     proj_range  how far it flies before it disappears, in cells
-    spread      random aim error in degrees (0 is dead accurate)"""
+    spread      random aim error in degrees (0 is dead accurate); each bullet of a multi shot gets its own
+    shot        what one pull of the trigger sends out:
+                single      one bullet
+                multi       `pellets` bullets at once (a shotgun), each aimed a little differently by the spread
+                projectile  reserved for things that are not simple bullets (rockets, grenades); it fires
+                            like a single bullet until that is built
+    pellets     bullets in a multi shot"""
     name: str = "Pistol"
     tile: int = 16
     size: float = 5.0
@@ -106,6 +114,8 @@ class Gun:
     proj_speed: float = 18.0
     proj_range: float = 20.0
     spread: float = 0.0
+    shot: str = "single"
+    pellets: int = 8
 
     @property
     def capacity(self):
@@ -128,7 +138,9 @@ class Gun:
                    mag_size=number("mag_size", 1, 1000, int), start_ammo=number("start_ammo", 0, 100000, int),
                    reload_time=number("reload_time", 0.0, 60.0), proj_tile=int(number("proj_tile", 0, 255, int)),
                    proj_size=number("proj_size", 0.01, 2.0), proj_speed=number("proj_speed", 0.5, 200.0),
-                   proj_range=number("proj_range", 0.5, 200.0), spread=number("spread", 0.0, 45.0))
+                   proj_range=number("proj_range", 0.5, 200.0), spread=number("spread", 0.0, 45.0),
+                   shot=data.get("shot") if data.get("shot") in SHOT_TYPES else base.shot,
+                   pellets=number("pellets", 1, 100, int))
 
 
 @dataclass

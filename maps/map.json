@@ -18,7 +18,7 @@
   ],
   "guns": [
     {"name": "TestPistol", "tile": 16, "size": 6.0, "mode": "semi", "damage": 5.0, "fire_rate": 7.0, "mag_size": 12, "start_ammo": 36, "reload_time": 1.7, "proj_tile": 14, "proj_size": 0.1, "proj_speed": 18.0, "proj_range": 20.0, "spread": 0.5},
-    {"name": "TestShotgun", "tile": 240, "size": 5.0, "mode": "semi", "damage": 18.0, "fire_rate": 0.1, "mag_size": 2, "start_ammo": 6, "reload_time": 2.0, "proj_tile": 12, "proj_size": 0.26, "proj_speed": 13.0, "proj_range": 10.0, "spread": 5.0}
+    {"name": "TestShotgun", "tile": 240, "size": 5.0, "mode": "semi", "damage": 18.0, "fire_rate": 6.6, "mag_size": 2, "start_ammo": 6, "reload_time": 2.0, "proj_tile": 12, "proj_size": 0.26, "proj_speed": 13.0, "proj_range": 10.0, "spread": 5.0}
   ],
   "grids": {
     "walls": [

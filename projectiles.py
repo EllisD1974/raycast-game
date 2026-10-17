@@ -41,7 +41,12 @@ class Projectiles:
         self.rng = rng or random.Random()
 
     def fire(self, player, gun):
-        """Shoot `gun` from the player's eye, along where they are looking (a little off if it has spread)."""
+        """One pull of the trigger: shoot `gun` from the player's eye, along where they are looking (a
+        little off if it has spread). A multi shot sends all its pellets, each aimed on its own."""
+        for _ in range(max(1, gun.pellets) if gun.shot == "multi" else 1):
+            self.fire_one(player, gun)
+
+    def fire_one(self, player, gun):
         yaw, pitch = player.angle, player.pitch
         if gun.spread > 0.0:
             spread = math.radians(gun.spread)

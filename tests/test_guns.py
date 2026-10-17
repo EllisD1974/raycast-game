@@ -330,3 +330,43 @@ def test_the_hud_draws_the_inventory_the_guns_and_the_equipped_weapon():
     assert ((red[..., 0] > 150) & (red[..., 1] < 60)).any()        # the weapon is on the picture
     plain = pygame.Surface((640, 360))
     draw_hud(plain, font, PlayerStats(), "", None, None)            # and the HUD still works without an inventory
+
+
+# ------------------------------------------------------------------ shot types
+
+def test_a_single_bullet_shot_sends_one_bullet_and_a_multi_bullet_shot_sends_every_pellet():
+    player = physics.Player(2.5, 5.5, 0.0, angle=0.0)
+    one = Projectiles()
+    one.fire(player, Gun("A", shot="single", pellets=8))
+    assert len(one.bullets) == 1
+    many = Projectiles()
+    many.fire(player, Gun("Shotgun", shot="multi", pellets=7, spread=6.0))
+    assert len(many.bullets) == 7
+    angles = [math.atan2(b.vy, b.vx) for b in many.bullets]
+    assert len(set(round(a, 5) for a in angles)) > 1                       # each pellet is aimed on its own
+    assert all(abs(a) <= math.radians(6.0) + 1e-9 for a in angles)
+    assert all(b.damage == 10 for b in many.bullets)                       # the damage is per bullet
+
+
+def test_a_projectile_shot_fires_like_a_single_bullet_until_it_is_built():
+    bullets = Projectiles()
+    bullets.fire(physics.Player(2.5, 5.5, 0.0), Gun("Launcher", shot="projectile", pellets=8))
+    assert len(bullets.bullets) == 1
+
+
+def test_a_multi_shot_uses_one_round_of_ammunition():
+    inv = Inventory()
+    inv.give_gun(Gun("Shotgun", shot="multi", pellets=8, mode="semi", mag_size=6, start_ammo=0, fire_rate=5))
+    fired = run(inv, 0.1, trigger=True)
+    assert len(fired) == 1 and inv.current().mag == 5
+
+
+def test_shot_type_and_pellets_are_saved_and_bad_values_repaired(tmp_path):
+    level = Level.blank(8, 8)
+    level.guns = [Gun("Shotgun", shot="multi", pellets=12)]
+    save_level(str(tmp_path / "s.json"), level)
+    again = load_level(str(tmp_path / "s.json"))
+    assert again.guns[0].shot == "multi" and again.guns[0].pellets == 12
+    assert Gun.from_dict({"shot": "laser", "pellets": 0}).shot == "single"
+    assert Gun.from_dict({"pellets": 0}).pellets == 1
+    assert Gun.from_dict({}).shot == "single"                               # older maps have no shot type

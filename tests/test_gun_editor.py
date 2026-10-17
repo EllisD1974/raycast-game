@@ -111,7 +111,7 @@ def test_add_select_and_delete_guns(ed):
 
 def test_the_pane_lists_every_gun_setting_and_hides_the_magazine_for_single_shot(ed):
     add_gun(ed)
-    assert keys(ed) == ["name", "tile", "size", "mode", "damage", "fire_rate", "mag_size", "start_ammo",
+    assert keys(ed) == ["name", "tile", "size", "mode", "shot", "damage", "fire_rate", "mag_size", "start_ammo",
                         "reload_time", "spread", "projectile", "proj_tile", "proj_size", "proj_speed", "proj_range"]
     choose(ed, "mode", "single")
     assert "mag_size" not in keys(ed) and ed.level.guns[0].mode == "single"
@@ -263,3 +263,19 @@ def test_the_stock_map_loads_and_everything_still_works_with_guns_in_it(tmp_path
     save_level(str(tmp_path / "g.json"), level)
     again = load_level(str(tmp_path / "g.json"))
     assert again.guns == level.guns and again.entities == level.entities
+
+
+def test_the_shot_type_is_single_bullet_by_default_and_multi_bullet_adds_a_count(ed):
+    gun = add_gun(ed)
+    assert gun.shot == "single" and "pellets" not in keys(ed)
+    assert row(ed, "shot").field.choices == ("single", "multi", "projectile")
+    choose(ed, "shot", "multi")
+    assert gun.shot == "multi" and "pellets" in keys(ed)
+    assert keys(ed).index("pellets") == keys(ed).index("shot") + 1
+    click(ed, row(ed, "pellets").plus.center)
+    assert gun.pellets == 9 and isinstance(gun.pellets, int)
+    choose(ed, "shot", "projectile")
+    assert gun.shot == "projectile" and "pellets" not in keys(ed)
+    ed.draw(pygame.display.get_surface())
+    choose(ed, "shot", "multi")
+    ed.draw(pygame.display.get_surface())
