@@ -1,0 +1,47 @@
+"""Draws the world from a player's point of view. Shared by the game and the editor's 3D preview."""
+import math
+
+import numpy as np
+import pygame
+
+from atlas import ensure_rgba
+from constants import FOG_DIST, FOV_DEG, HEIGHT, MAX_DEPTH, WIDTH
+from raykernel import render_scene
+
+BACKGROUND = np.array((18, 18, 26), np.uint8)       # shown only where the view distance ends
+
+
+class Renderer:
+    def __init__(self, textures):
+        self.textures = ensure_rgba(textures)       # uint8 array [tile, y, x, rgba]
+        self.framebuffer = np.zeros((WIDTH, HEIGHT, 3), np.uint8)    # indexed [x, y, rgb]
+        self.surface = pygame.Surface((WIDTH, HEIGHT))
+        self.half_fov_tan = math.tan(math.radians(FOV_DEG) / 2)
+        self.focal = (WIDTH / 2) / self.half_fov_tan                 # focal length in pixels
+
+    def horizon(self, player):
+        """Screen row of the horizon. Looking up moves it down the screen and looking down moves
+        it up (the view is sheared, as in classic raycasters, not tilted)."""
+        return HEIGHT / 2 + math.tan(player.pitch) * self.focal
+
+    def draw(self, world, player):
+        """Render the view from `player` and return the WIDTH x HEIGHT picture."""
+        dir_x, dir_y = math.cos(player.angle), math.sin(player.angle)
+        render_scene(
+            self.framebuffer, player.x, player.y, player.eye_z, player.span, dir_x, dir_y,
+            -dir_y * self.half_fov_tan, dir_x * self.half_fov_tan,   # camera plane: right vector
+            self.horizon(player), self.focal,
+            world.floor_plane, world.ceil_plane, world.span_on, world.solid_from, world.pane_tex,
+            world.pane_top, world.wall_tex, world.floor_tex, world.ceil_tex,
+            self.textures, MAX_DEPTH, FOG_DIST, BACKGROUND)
+        pygame.surfarray.blit_array(self.surface, self.framebuffer)
+        return self.surface
+
+
+def fit_rect(window_size, logical=(WIDTH, HEIGHT)):
+    """The largest rectangle with the picture's aspect ratio that fits the window, centred in it."""
+    window_w, window_h = window_size
+    scale = min(window_w / logical[0], window_h / logical[1])
+    w = max(1, min(window_w, round(logical[0] * scale)))        # round, not truncate: 16:9 in a 1009-high
+    h = max(1, min(window_h, round(logical[1] * scale)))        # window must still fill all 1009 rows
+    return pygame.Rect((window_w - w) // 2, (window_h - h) // 2, w, h)
