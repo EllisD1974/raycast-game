@@ -20,7 +20,7 @@ import sys
 import pygame
 
 from atlas import ATLAS_PATH, atlas_array, transparent_tiles, unpack_atlas
-from constants import HEIGHT, MOUSE_SENSITIVITY, TURN_SPEED, WIDTH
+from constants import FPS_CAP, HEIGHT, MOUSE_SENSITIVITY, TURN_SPEED, WIDTH
 from entities import Entities, PlayerStats
 from mapfile import MAP_PATH, load_or_default
 from physics import look, spawn, step
@@ -179,7 +179,7 @@ def main():
     jump_pressed = False
     running = True
     while running:
-        dt = min(clock.tick(60) / 1000, 0.05)
+        dt = min(clock.tick(FPS_CAP) / 1000, 0.05)
         for event in pygame.event.get():
             if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
                 running = False

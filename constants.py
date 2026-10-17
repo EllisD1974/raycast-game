@@ -9,6 +9,7 @@ TILE = 32                       # texture size in pixels
 WIDTH, HEIGHT = 640, 360        # internal render resolution (16:9)
 FOV_DEG = 66.0
 MAX_DEPTH = 20.0
+FPS_CAP = 120                   # the game never runs faster than this many frames a second
 FOG_DIST = 12.0                 # distance at which surfaces reach minimum brightness
 
 # player
