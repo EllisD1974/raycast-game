@@ -757,3 +757,20 @@ def test_the_player_is_never_left_wedged_in_an_invalid_spot_for_long():
             streak = 0 if fits or not player.on_ground else streak + 1
             worst = max(worst, streak)
     assert worst <= 8, f"the player stayed in a spot where the box does not fit for {worst} ticks"
+
+
+def test_strafing_in_the_air_from_a_standing_jump_reaches_full_sideways_speed_quickly():
+    world = platform_world()
+    player = physics.Player(4.5, 3.5, 1.0, 0.0, span=0)
+    physics.step(world, player, 0.0, 0.0, 0.0, True, 1 / 60)     # straight up
+    for _ in range(15):
+        physics.step(world, player, 0.0, 1.0, 0.0, False, 1 / 60)
+    assert not player.on_ground and player.vy == pytest.approx(physics.MOVE_SPEED)
+
+
+def test_turning_in_the_air_does_not_swing_the_momentum():
+    world = platform_world()
+    player = physics.Player(4.5, 3.5, 1.0, 0.0, span=0)
+    physics.step(world, player, 1.0, 0.0, 0.0, True, 1 / 60)     # jump east
+    physics.step(world, player, 0.0, 0.0, 1.0, False, 1 / 60)    # turn while airborne, no keys
+    assert player.vx == pytest.approx(physics.MOVE_SPEED) and player.vy == pytest.approx(0.0)

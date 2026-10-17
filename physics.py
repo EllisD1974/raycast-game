@@ -14,7 +14,7 @@ CORNERS = tuple((ox, oy) for ox in (-(PLAYER_RADIUS - SKIN), PLAYER_RADIUS - SKI
                 for oy in (-(PLAYER_RADIUS - SKIN), PLAYER_RADIUS - SKIN))
 
 MAX_PITCH = math.radians(MAX_PITCH_DEG)
-AIR_ACCEL = 6.0             # cells/s^2 the player can steer toward the keys in the air
+AIR_ACCEL = 15.0            # cells/s^2 the player can steer toward the keys in the air
 PUSH_SPEED = MOVE_SPEED     # cells/s the player is slid sideways out of a ceiling edge
 PUSH_STEPS = tuple(round(0.01 * i, 2) for i in range(1, int(PLAYER_RADIUS * 100) + 6))
 
@@ -126,15 +126,26 @@ def step(world, p, forward, strafe, turn, jump, dt, sprint=False):
     if p.on_ground:
         speed = MOVE_SPEED * (SPRINT_MULTIPLIER if sprint and (forward or strafe) else 1.0)
         p.vx, p.vy = wish_x * speed, wish_y * speed
-    elif wish_x or wish_y:
-        # Steer toward the keys. Walking speed is the target, but a player already moving
-        # faster (a sprinting jump) keeps that speed instead of being slowed by the keys.
-        top = max(MOVE_SPEED, math.hypot(p.vx, p.vy))
-        ax, ay = wish_x * top - p.vx, wish_y * top - p.vy
-        gap = math.hypot(ax, ay)
-        if gap > 0:
-            scale = min(1.0, AIR_ACCEL * dt / gap)
-            p.vx, p.vy = p.vx + ax * scale, p.vy + ay * scale
+    elif forward or strafe:
+        # Steer each axis whose key is held (forward/back, left/right) in the direction the player
+        # faces, and leave the other axis's momentum alone: tapping A or D during a forward jump
+        # strafes without losing the forward speed, like walking. Walking speed is the target on an
+        # axis, but a player already faster along it (a sprinting jump) keeps that speed. The total speed
+        # stays within the larger of walking speed and the speed the player had.
+        limit = max(MOVE_SPEED, math.hypot(p.vx, p.vy))
+        fx, fy = math.cos(p.angle), math.sin(p.angle)
+        rx, ry = -math.sin(p.angle), math.cos(p.angle)
+        for key, (ux, uy) in ((forward, (fx, fy)), (strafe, (rx, ry))):
+            if not key:
+                continue
+            speed = p.vx * ux + p.vy * uy
+            target = key * max(MOVE_SPEED, abs(speed))
+            change = max(-AIR_ACCEL * dt, min(AIR_ACCEL * dt, target - speed))
+            p.vx += change * ux      # (a change in the world frame, so turning does not swing the momentum)
+            p.vy += change * uy
+        speed = math.hypot(p.vx, p.vy)
+        if speed > limit:                           # steering bends the momentum, it never adds speed
+            p.vx, p.vy = p.vx * limit / speed, p.vy * limit / speed
 
     dx, dy = p.vx * dt, p.vy * dt
     if can_stand(world, p.x + dx, p.y, p.z, p.span, p.on_ground):   # axes separately: slide along walls
