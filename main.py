@@ -21,6 +21,7 @@ import pygame
 
 from atlas import ATLAS_PATH, atlas_array, transparent_tiles, unpack_atlas
 from constants import HEIGHT, MOUSE_SENSITIVITY, TURN_SPEED, WIDTH
+from entities import Entities, PlayerStats
 from mapfile import MAP_PATH, load_or_default
 from physics import look, spawn, step
 from renderer import BACKGROUND, Renderer, fit_rect  # noqa: F401  (re-exported: main.Renderer etc.)
@@ -53,6 +54,22 @@ def present(screen, frame):
     rect = fit_rect(screen.get_size())
     pygame.transform.scale(frame, rect.size, screen.subsurface(rect))
     draw_crosshair(screen, rect.center, max(6, rect.height // 60), max(1, rect.height // 450))
+
+
+def draw_hud(picture, font, stats, message):
+    """Score and health in the corner of the (unscaled) picture, and the last pickup's message."""
+    lines = [f"Health {stats.health:g}", f"Score {stats.score:g}"]
+    for i, text in enumerate(lines):
+        label = font.render(text, True, (255, 255, 255))
+        shadow = font.render(text, True, (0, 0, 0))
+        picture.blit(shadow, (9, 9 + i * 18))
+        picture.blit(label, (8, 8 + i * 18))
+    if message:
+        label = font.render(message, True, (255, 240, 120))
+        shadow = font.render(message, True, (0, 0, 0))
+        at = ((picture.get_width() - label.get_width()) // 2, picture.get_height() // 2 + 40)
+        picture.blit(shadow, (at[0] + 1, at[1] + 1))
+        picture.blit(label, at)
 
 
 # ------------------------------------------------------------------ input
@@ -136,6 +153,10 @@ def main():
     world = World(level, len(tiles), transparent_tiles(textures))   # tiles with alpha make see-through walls
     player = spawn(level, world)
     renderer = Renderer(textures)
+    items = Entities(level, world)
+    stats = PlayerStats()
+    font = pygame.font.Font(None, 22)
+    message, message_left = "", 0.0
 
     # `--snapshot out.png` renders one frame and exits (for checking).
     if "--snapshot" in sys.argv:
@@ -148,7 +169,7 @@ def main():
         pitch = arg_values("--pitch", 1)
         if pitch:
             look(player, math.radians(float(pitch[0])))
-        pygame.image.save(renderer.draw(world, player), arg_values("--snapshot", 1)[0])
+        pygame.image.save(renderer.draw(world, player, items.sprites()), arg_values("--snapshot", 1)[0])
         return
 
     maximize()                       # the game opens maximized; the picture scales to fit
@@ -176,8 +197,14 @@ def main():
         step(world, player, forward, strafe, key_turn * TURN_SPEED * dt + mouse_turn, jump_pressed, dt, sprint)
         look(player, tilt)
         jump_pressed = False
+        picked = items.update(player, stats, dt)
+        if picked:
+            message, message_left = ", ".join(picked), 1.5
+        message_left = max(0.0, message_left - dt)
 
-        present(pygame.display.get_surface(), renderer.draw(world, player))
+        picture = renderer.draw(world, player, items.sprites())
+        draw_hud(picture, font, stats, message if message_left > 0 else "")
+        present(pygame.display.get_surface(), picture)
         pygame.display.set_caption(f"simple raycaster - {clock.get_fps():.0f} fps")
         pygame.display.flip()
     mouse.set_captured(False)

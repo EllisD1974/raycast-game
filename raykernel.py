@@ -64,7 +64,7 @@ def _put(fb, x, r, textures, tex, tx, ty, shade):
 
 
 @njit(cache=True)
-def _wall(fb, x, z_low, z_high, ytop, ybot, t, tx, tex, shade, eye_z, horizon, focal, textures):
+def _wall(fb, zb, x, z_low, z_high, ytop, ybot, t, tx, tex, shade, eye_z, horizon, focal, textures):
     """Draw a vertical wall strip between two world heights, clipped to the window."""
     if z_high <= z_low:
         return
@@ -75,10 +75,11 @@ def _wall(fb, x, z_low, z_high, ytop, ybot, t, tx, tex, shade, eye_z, horizon, f
         z = eye_z + (horizon - (r + 0.5)) * t / focal     # world height of this row
         ty = int(math.floor(-z * tsize)) & (tsize - 1)    # world-aligned, one repeat per unit
         _put(fb, x, r, textures, tex, tx, ty, shade)
+        zb[x, r] = t
 
 
 @njit(cache=True)
-def _surface(fb, x, r0, r1, y_near, y_far, t0, t1, px, py, rdx, rdy, tex, textures, fog_dist):
+def _surface(fb, zb, x, r0, r1, y_near, y_far, t0, t1, px, py, rdx, rdy, tex, textures, fog_dist):
     """Texture rows r0..r1 of a floor or ceiling that spans screen rows y_near..y_far."""
     tsize = textures.shape[1]
     tmask = tsize - 1
@@ -93,6 +94,7 @@ def _surface(fb, x, r0, r1, y_near, y_far, t0, t1, px, py, rdx, rdy, tex, textur
         tx = int((wx - math.floor(wx)) * tsize) & tmask
         ty = int((wy - math.floor(wy)) * tsize) & tmask
         _put(fb, x, r, textures, tex, tx, ty, _shade(t, fog_dist))
+        zb[x, r] = t
 
 
 @njit(cache=True)
@@ -129,7 +131,7 @@ def _composite_panes(fb, x, n, pane_t, pane_tx, pane_id, pane_zlo, pane_zhi, pan
 
 
 @njit(cache=True)
-def _render_column(fb, x, px, py, eye_z, eye_span, rdx, rdy, horizon, focal,
+def _render_column(fb, zb, x, px, py, eye_z, eye_span, rdx, rdy, horizon, focal,
                    floor_plane, ceil_plane, span_on, solid_from, pane_tex, pane_top, wall_tex, floor_tex, ceil_tex,
                    textures, max_dist, fog_dist, bg):
     height = fb.shape[1]
@@ -232,19 +234,19 @@ def _render_column(fb, x, px, py, eye_z, eye_span, rdx, rdy, horizon, focal,
             r0 = max(int(math.ceil(yf1)), ytop)
             r1 = min(int(math.ceil(yf0)), ybot)
             if r1 > r0:
-                _surface(fb, x, r0, r1, yf0, yf1, t0, t1, px, py, rdx, rdy,
+                _surface(fb, zb, x, r0, r1, yf0, yf1, t0, t1, px, py, rdx, rdy,
                          floor_tex[s, cy, cx], textures, fog_dist)
             # ceiling: rows between the near edge (yc0) and the far edge (yc1)
             r0 = max(int(math.ceil(yc0)), ytop)
             r1 = min(int(math.ceil(yc1)), ybot)
             if r1 > r0:
-                _surface(fb, x, r0, r1, yc0, yc1, t0, t1, px, py, rdx, rdy,
+                _surface(fb, zb, x, r0, r1, yc0, yc1, t0, t1, px, py, rdx, rdy,
                          ceil_tex[s, cy, cx], textures, fog_dist)
 
             # Boundary: this span covers heights zf1..zc1 at distance t1.
             if next_solid:
                 wtex = wall_tex[ny, nx] if inside else 0
-                _wall(fb, x, zf1, zc1, ytop, ybot, t1, wtx, wtex, shade,
+                _wall(fb, zb, x, zf1, zc1, ytop, ybot, t1, wtx, wtex, shade,
                       eye_z, horizon, focal, textures)
                 continue
 
@@ -260,7 +262,7 @@ def _render_column(fb, x, px, py, eye_z, eye_span, rdx, rdy, horizon, focal,
                     continue             # this span lies entirely below what is left
                 if zfn > cur:            # solid below it: riser or slab side, up to its floor
                     top = min(zfn, zc1)
-                    _wall(fb, x, cur, top, ytop, ybot, t1, wtx, floor_tex[k, ny, nx], shade,
+                    _wall(fb, zb, x, cur, top, ytop, ybot, t1, wtx, floor_tex[k, ny, nx], shade,
                           eye_z, horizon, focal, textures)
                     cur = top
                     if cur >= zc1:
@@ -289,7 +291,7 @@ def _render_column(fb, x, px, py, eye_z, eye_span, rdx, rdy, horizon, focal,
             if cur < zc1:                # solid above the last span: the drop under a ceiling
                 if inside and solid_from[ny, nx] < nspans:      # a wall above this floor: its side shows
                     tex_above = wall_tex[ny, nx]
-                _wall(fb, x, cur, zc1, ytop, ybot, t1, wtx, tex_above, shade,
+                _wall(fb, zb, x, cur, zc1, ytop, ybot, t1, wtx, tex_above, shade,
                       eye_z, horizon, focal, textures)
 
         for b in range(n_next):
@@ -308,17 +310,70 @@ def _render_column(fb, x, px, py, eye_z, eye_span, rdx, rdy, horizon, focal,
 
 
 @njit(cache=True, parallel=True)
-def render_scene(fb, px, py, eye_z, eye_span, dir_x, dir_y, plane_x, plane_y, horizon, focal,
-                 floor_plane, ceil_plane, span_on, solid_from, pane_tex, pane_top, wall_tex, floor_tex, ceil_tex,
-                 textures, max_dist, fog_dist, bg):
-    """Fill `fb` (shape (W, H, 3) uint8) with the view from the given camera.
+def render_scene_depth(fb, zb, px, py, eye_z, eye_span, dir_x, dir_y, plane_x, plane_y, horizon, focal,
+                       floor_plane, ceil_plane, span_on, solid_from, pane_tex, pane_top, wall_tex, floor_tex,
+                       ceil_tex, textures, max_dist, fog_dist, bg):
+    """Fill `fb` (shape (W, H, 3) uint8) with the view from the given camera, and `zb` (W, H) with the
+    perpendicular distance of what was drawn in each pixel (for sprites to hide behind it).
 
     `textures` is uint8 [tile, y, x, rgba]. pane_tex (H, W) is the tile index of a see-through
     wall in a cell, or -1 for every other cell."""
     width = fb.shape[0]
     for x in prange(width):
+        zb[x, :] = 1e9
         camera_x = 2.0 * (x + 0.5) / width - 1.0
-        _render_column(fb, x, px, py, eye_z, eye_span,
+        _render_column(fb, zb, x, px, py, eye_z, eye_span,
                        dir_x + plane_x * camera_x, dir_y + plane_y * camera_x,
                        horizon, focal, floor_plane, ceil_plane, span_on, solid_from, pane_tex, pane_top,
                        wall_tex, floor_tex, ceil_tex, textures, max_dist, fog_dist, bg)
+
+
+@njit(cache=True)
+def render_scene(fb, px, py, eye_z, eye_span, dir_x, dir_y, plane_x, plane_y, horizon, focal,
+                 floor_plane, ceil_plane, span_on, solid_from, pane_tex, pane_top, wall_tex, floor_tex, ceil_tex,
+                 textures, max_dist, fog_dist, bg):
+    """render_scene_depth without the depth picture, for callers that only want the walls."""
+    zb = np.empty((fb.shape[0], fb.shape[1]), np.float32)
+    render_scene_depth(fb, zb, px, py, eye_z, eye_span, dir_x, dir_y, plane_x, plane_y, horizon, focal,
+                       floor_plane, ceil_plane, span_on, solid_from, pane_tex, pane_top, wall_tex, floor_tex,
+                       ceil_tex, textures, max_dist, fog_dist, bg)
+
+
+@njit(cache=True, parallel=True)
+def draw_sprites(fb, zb, px, py, eye_z, dir_x, dir_y, plane_x, plane_y, horizon, focal,
+                 sp_x, sp_y, sp_z, sp_size, sp_tex, textures, max_dist, fog_dist):
+    """Draw flat sprites that always face the camera, over a picture already drawn by
+    render_scene_depth. The sprites must be sorted farthest first. sp_z is the height of a sprite's
+    bottom, sp_size its height and width in world units. A sprite pixel shows only where it is
+    nearer than what is already there (zb), so walls, ledges and floors hide it; texture alpha
+    blends it (0 is see-through, 255 opaque)."""
+    width, height = fb.shape[0], fb.shape[1]
+    tsize = textures.shape[1]
+    det = dir_x * plane_y - dir_y * plane_x
+    n = sp_x.shape[0]
+    for x in prange(width):
+        for i in range(n):
+            dx, dy = sp_x[i] - px, sp_y[i] - py
+            depth = (dx * plane_y - dy * plane_x) / det
+            if depth < 0.05 or depth > max_dist:
+                continue
+            centre = ((dir_x * dy - dir_y * dx) / det / depth + 1.0) * 0.5 * width
+            half = sp_size[i] * focal / depth * 0.5
+            if x + 0.5 < centre - half or x + 0.5 >= centre + half:
+                continue
+            tx = min(tsize - 1, int((x + 0.5 - (centre - half)) / (2.0 * half) * tsize))
+            ytop = _proj(sp_z[i] + sp_size[i], depth, eye_z, horizon, focal)
+            ybot = _proj(sp_z[i], depth, eye_z, horizon, focal)
+            if ybot <= ytop:
+                continue
+            shade = _shade(depth, fog_dist)
+            for r in range(max(0, int(math.ceil(ytop))), min(height, int(math.ceil(ybot)))):
+                if depth >= zb[x, r]:
+                    continue
+                ty = min(tsize - 1, int((r + 0.5 - ytop) / (ybot - ytop) * tsize))
+                alpha = textures[sp_tex[i], ty, tx, 3]
+                if alpha == 0:
+                    continue
+                a = alpha / 255.0
+                for c in range(3):
+                    fb[x, r, c] = np.uint8(textures[sp_tex[i], ty, tx, c] * shade * a + fb[x, r, c] * (1.0 - a))

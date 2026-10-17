@@ -23,6 +23,10 @@ cells where you give it a room; between two floors lies solid material (the floo
     ceil_tex      tile id of the ceiling (also the drop where a ceiling gets lower)
     ramp          0 = none, else the direction the floor rises: 1 east, 2 west, 3 south, 4 north
 
+Entities (items in the world) are not a grid: the level keeps a list of them, each with a position,
+the floor it stands on, a sprite tile, what happens when the player touches it and how it behaves
+afterwards (see Entity). They are saved under "entities" in the map file.
+
 A higher floor has a room in a cell where its ceil_h > floor_h (the default 0 / 0 means none).
 Floors must be in height order: where several floors have a room in the same cell, each floor
 must start at or above the ceiling of the one below it.
@@ -35,6 +39,7 @@ touches a neighbouring cell's room on the higher floor, which is how you step ac
 """
 import json
 import os
+from dataclasses import asdict, dataclass, replace
 
 from constants import PLAYER_HEIGHT
 
@@ -52,6 +57,54 @@ SOLID_OUTSIDE = 1       # walls value reported outside the grid: a wall
 _GROUND_DEFAULTS = {"walls": 0, "wall_h": 0.0, "wall_ceil": 0.0, "wall_floor": 0, "floor_tex": 5, "ceil_tex": 6,
                     "floor_h": 0.0, "ceil_h": 1.0, "ramp": 0}
 _UPPER_DEFAULTS = {"floor_tex": 3, "ceil_tex": 6, "floor_h": 0.0, "ceil_h": 0.0, "ramp": 0}
+
+
+ENTITY_MODES = ("once", "respawn", "persistent")
+ENTITY_EFFECTS = ("none", "score", "health")
+MODE_LABELS = {"once": "Pick up once", "respawn": "Respawns", "persistent": "Stays"}
+
+
+@dataclass
+class Entity:
+    """An item standing in the world as a sprite that always faces the player.
+
+    x, y     position on the map, in cells (cell centre = .5)
+    span     the floor it stands on
+    tile     0-based atlas tile drawn as its sprite (tiles with transparent pixels work best)
+    mode     what touching it does to the item itself:
+             once        picked up and gone for good
+             respawn     picked up and gone, back after `respawn` seconds
+             persistent  picked up (the effect happens) but it stays where it is; touching it again
+                         only counts after you have stepped away from it
+    effect   what the player gets: none, score (+amount points) or health (+amount, capped)
+    amount   size of the effect
+    respawn  seconds until a respawning item comes back
+    size     sprite height in world units (it is as wide as it is tall)
+    lift     height of the sprite's bottom above the floor"""
+    x: float
+    y: float
+    span: int = 0
+    tile: int = 6
+    mode: str = "once"
+    effect: str = "score"
+    amount: float = 10.0
+    respawn: float = 10.0
+    size: float = 0.4
+    lift: float = 0.0
+
+    @classmethod
+    def from_dict(cls, data):
+        """Read one entity from a file, replacing anything unusable with the default."""
+        base = cls(float(data["x"]), float(data["y"]))
+        return replace(base,
+                       span=max(0, int(data.get("span", 0))),
+                       tile=max(0, int(data.get("tile", base.tile))),
+                       mode=data.get("mode") if data.get("mode") in ENTITY_MODES else base.mode,
+                       effect=data.get("effect") if data.get("effect") in ENTITY_EFFECTS else base.effect,
+                       amount=float(data.get("amount", base.amount)),
+                       respawn=max(0.0, float(data.get("respawn", base.respawn))),
+                       size=max(0.05, float(data.get("size", base.size))),
+                       lift=float(data.get("lift", base.lift)))
 
 
 def grid_name(layer, floor):
@@ -87,8 +140,10 @@ def default_floor_name(index):
 
 
 class Level:
-    def __init__(self, grids, start_x=1.5, start_y=1.5, start_angle=0.0, start_span=0, names=None):
+    def __init__(self, grids, start_x=1.5, start_y=1.5, start_angle=0.0, start_span=0, names=None,
+                 entities=None):
         self.grids = grids
+        self.entities = list(entities or [])        # items in the world (see Entity)
         self.start_x, self.start_y = start_x, start_y
         self.start_angle = start_angle              # radians, 0 faces +x (right on the grid)
         self.start_span = start_span                # index of the floor the player starts on
@@ -114,7 +169,8 @@ class Level:
 
     def copy(self):
         return Level({k: [row[:] for row in g] for k, g in self.grids.items()},
-                     self.start_x, self.start_y, self.start_angle, self.start_span, self.names)
+                     self.start_x, self.start_y, self.start_angle, self.start_span, self.names,
+                     [replace(e) for e in self.entities])
 
     # ----------------------------------------------------------- floors
 
@@ -159,6 +215,8 @@ class Level:
         for layer in SPAN_LAYERS:
             del self.grids[grid_name(layer, self.floor_count - 1)]
         del self.names[floor]
+        self.entities = [replace(e, span=e.span - 1 if e.span > floor else e.span)
+                         for e in self.entities if e.span != floor]
         wall_floor = self.grids["wall_floor"]
         for row in wall_floor:                      # walls that began above the removed floor follow it down
             for x, value in enumerate(row):
@@ -336,6 +394,7 @@ class Level:
             ]
         self.start_x = min(self.start_x, width - 0.5)
         self.start_y = min(self.start_y, height - 0.5)
+        self.entities = [e for e in self.entities if e.x < width and e.y < height]
 
     def resize_edges(self, left=0, right=0, top=0, bottom=0):
         """Add (positive) or remove (negative) columns and rows along each side, keeping the cells
@@ -355,6 +414,8 @@ class Level:
             ]
         self.start_x = min(max(self.start_x + left, 0.5), width - 0.5)
         self.start_y = min(max(self.start_y + top, 0.5), height - 0.5)
+        self.entities = [replace(e, x=e.x + left, y=e.y + top) for e in self.entities
+                         if 0 <= e.x + left < width and 0 <= e.y + top < height]
         return left, top
 
     @staticmethod
@@ -558,6 +619,10 @@ def load_level(path):
     level.start_x, level.start_y = float(start.get("x", 1.5)), float(start.get("y", 1.5))
     level.start_angle = float(start.get("angle", 0.0))
     level.start_span = min(int(start.get("span", 0)), count - 1)
+    for item in data.get("entities", []):
+        entity = Entity.from_dict(item)
+        if 0 <= entity.x < w and 0 <= entity.y < h and entity.span < count:
+            level.entities.append(entity)
     return level
 
 
@@ -574,6 +639,8 @@ def save_level(path, level):
         f'  "width": {level.width},\n  "height": {level.height},\n'
         f'  "floors": {json.dumps(level.names)},\n'
         f'  "start": {json.dumps(start)},\n'
+        + ('  "entities": [\n' + ",\n".join("    " + json.dumps(asdict(e)) for e in level.entities) + "\n  ],\n"
+           if level.entities else "") +
         '  "grids": {\n' + ",\n".join(blocks) + "\n  }\n}\n"
     )
     with open(path, "w", encoding="utf-8") as f:

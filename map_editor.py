@@ -55,6 +55,14 @@ editing; click it again to rotate), T stairs (drag a line on the FloorH layer: h
 the Step each cell, starting at the brush value). Ctrl+Z / Ctrl+Y undo / redo, Ctrl+S save,
 F5 save and play, Home reset view, Tab / Shift+Tab switch floor, F2 rename floor.
 
+Items (the Entity tool, N): pick a sprite tile in the atlas, set the Item buttons in the second
+row, and click a cell to put an item in the middle of it on the floor you are editing (right click
+removes one; clicking an occupied cell replaces it). Mode: "Pick up once" (touching it gives the
+effect and it is gone), "Respawns" (gone, then back after the set seconds) or "Stays" (touching
+gives the effect each visit but it is never removed). Effect: none, score or health, with an
+amount; Size and Lift set how big the sprite is and how far it floats above the floor. Items show
+on the map ringed white / cyan / green by mode, and in the 3D view as sprites that face you.
+
 The 3D view (V or the 3D button shows and hides it) is a live picture of the level at the right of
 the window, drawn by the game's own renderer, and it follows every edit as you make it, even
 mid-stroke. Drag inside it to look around; with the mouse over it, W A S D / arrows walk and turn
@@ -69,6 +77,7 @@ ring when the start is on another floor), red outlines on problem cells, faded f
 ramp arrows and height colours.
 """
 import math
+from dataclasses import replace
 import os
 import subprocess
 import sys
@@ -78,7 +87,8 @@ import pygame
 
 from atlas import ATLAS_PATH, atlas_array, transparent_tiles, unpack_atlas
 from constants import HEIGHT, MOUSE_SENSITIVITY, PLAYER_HEIGHT, TILE, WIDTH
-from mapfile import (DEFAULTS, EDIT_LAYERS, MAP_PATH, MAX_NAME_LENGTH, MIN_WALL_GAP, Level, default_level,
+from mapfile import (DEFAULTS, EDIT_LAYERS, ENTITY_EFFECTS, ENTITY_MODES, MAP_PATH, MAX_NAME_LENGTH, MIN_WALL_GAP,
+                     MODE_LABELS, Entity, Level, default_level,
                      grid_name, load_level, save_level, split_grid_name)
 from preview import Preview
 from window import maximize
@@ -133,9 +143,13 @@ VALUE_LAYERS = ROOM_HEIGHT_LAYERS + ("wall_h",)             # every layer painte
 LAYER_LABELS = {"walls": "Walls", "floor_tex": "FloorTex", "ceil_tex": "CeilTex",
                 "floor_h": "FloorH", "ceil_h": "CeilH", "ramp": "Ramps", "wall_h": "WallH"}
 LAYER_KEYS = {pygame.K_1 + i: name for i, name in enumerate(EDIT_LAYERS)}
-TOOLS = {"paint": "B", "erase": "E", "fill": "F", "pick": "I", "start": "S", "stairs": "T", "camera": "C"}
+TOOLS = {"paint": "B", "erase": "E", "fill": "F", "pick": "I", "start": "S", "stairs": "T", "camera": "C",
+         "entity": "N"}
 TOOL_KEYS = {pygame.K_b: "paint", pygame.K_e: "erase", pygame.K_f: "fill",
-             pygame.K_i: "pick", pygame.K_s: "start", pygame.K_t: "stairs", pygame.K_c: "camera"}
+             pygame.K_i: "pick", pygame.K_s: "start", pygame.K_t: "stairs", pygame.K_c: "camera",
+             pygame.K_n: "entity"}
+ENTITY_MODE_COLOURS = {"once": (255, 255, 255), "respawn": (90, 210, 255), "persistent": (110, 230, 120)}
+ENTITY_FIRST_TILE = 6                           # the first item sprite in the stock atlas (the gem)
 RAMP_NAMES = {1: "East", 2: "West", 3: "South", 4: "North"}
 RAMP_VECTORS = {1: (1, 0), 2: (-1, 0), 3: (0, 1), 4: (0, -1)}
 
@@ -247,6 +261,7 @@ class Editor:
         self.rename = None                      # text being typed while renaming a floor
         self.layer = "walls"
         self.tool = "paint"
+        self.entity_brush = Entity(0.0, 0.0, tile=ENTITY_FIRST_TILE)   # settings the Entity tool places with
         self.selection = {0}                    # selected atlas tile indices (0-based)
         self.value = {}                         # height brush per stored grid; see brush()
         self.ramp_dir = 1
@@ -402,6 +417,18 @@ class Editor:
         if self.tool == "stairs":
             row2 += [None, ("btn", "Step-", "step-"), ("btn", "Step+", "step+"),
                      ("txt", f"step {fmt(self.stair_step)}", ACCENT)]
+        if self.tool == "entity":
+            e = self.entity_brush
+            row2 += [None, ("txt", "Item:", DIM), ("btn", MODE_LABELS[e.mode], "ent:mode"),
+                     ("btn", f"Effect: {e.effect}", "ent:effect")]
+            if e.effect != "none":
+                row2 += [("btn", "-", "ent:amount-"), ("txt", f"amount {e.amount:g}", ACCENT),
+                         ("btn", "+", "ent:amount+")]
+            if e.mode == "respawn":
+                row2 += [("btn", "-", "ent:respawn-"), ("txt", f"back after {e.respawn:g}s", ACCENT),
+                         ("btn", "+", "ent:respawn+")]
+            row2 += [("btn", "-", "ent:size-"), ("txt", f"size {e.size:g}", ACCENT), ("btn", "+", "ent:size+"),
+                     ("btn", "-", "ent:lift-"), ("txt", f"lift {e.lift:g}", ACCENT), ("btn", "+", "ent:lift+")]
         row3 = [("btn", f"{name.capitalize()}({key})", f"tool:{name}") for name, key in TOOLS.items()]
         row3 += [None, ("btn", "Undo", "undo"), ("btn", "Redo", "redo"), None,
                  ("btn", "Border", "border"), ("txt", "Edge", DIM),
@@ -682,6 +709,9 @@ class Editor:
 
     def map_click(self, cell, button):
         """Start of a click on the map: left uses the active tool, right always erases."""
+        if button == 3 and self.tool == "entity":
+            self.remove_entities(cell)
+            return
         if button == 3:
             self.begin_edit()
             self.stroke, self.last_cell = "erase", cell
@@ -700,11 +730,53 @@ class Editor:
             self.place_start(cell)
         elif tool == "camera":
             self.place_camera(cell, self.map_point(self.mouse))
+        elif tool == "entity":
+            self.place_entity(cell)
         elif tool == "stairs":
             if self.layer != "floor_h":
                 self.layer = "floor_h"
                 self.say("Stairs paint floor heights: switched to the FloorH layer")
             self.stairs_drag = (cell, cell)
+
+    def entities_in(self, cell):
+        """The entities standing in this cell on the floor being edited."""
+        return [e for e in self.level.entities
+                if (math.floor(e.x), math.floor(e.y)) == tuple(cell) and e.span == self.floor]
+
+    def place_entity(self, cell):
+        """Entity tool: put an item with the current settings in the middle of the cell, on the floor
+        being edited, replacing any item already there."""
+        level = self.level
+        if not level.in_bounds(*cell):
+            return
+        if not level.span_present(self.floor, *cell):
+            self.say("An item needs an open floor to stand on: no room in this cell on this floor")
+            return
+        self.begin_edit()
+        for old in self.entities_in(cell):
+            level.entities.remove(old)
+        level.entities.append(replace(self.entity_brush, x=cell[0] + 0.5, y=cell[1] + 0.5, span=self.floor))
+        self.say(f"Placed an item ({MODE_LABELS[self.entity_brush.mode].lower()}, effect {self.entity_brush.effect})")
+
+    def remove_entities(self, cell):
+        found = self.entities_in(cell)
+        if found:
+            self.begin_edit()
+            for e in found:
+                self.level.entities.remove(e)
+
+    def entity_action(self, action):
+        """The Item buttons: cycle the mode / effect, or step amount, respawn time, size and lift."""
+        e, what = self.entity_brush, action[4:]
+        if what == "mode":
+            e.mode = ENTITY_MODES[(ENTITY_MODES.index(e.mode) + 1) % len(ENTITY_MODES)]
+        elif what == "effect":
+            e.effect = ENTITY_EFFECTS[(ENTITY_EFFECTS.index(e.effect) + 1) % len(ENTITY_EFFECTS)]
+        else:
+            name, sign = what[:-1], 1 if what.endswith("+") else -1
+            step, low, high = {"amount": (5.0, 0.0, 1000.0), "respawn": (1.0, 0.0, 600.0),
+                               "size": (0.1, 0.1, 3.0), "lift": (0.1, -2.0, 5.0)}[name]
+            setattr(e, name, round(max(low, min(high, getattr(e, name) + sign * step)), 3))
 
     def place_camera(self, cell, point):
         """Camera tool: stand the 3D view's camera in this cell, on the floor being edited (or the
@@ -774,6 +846,10 @@ class Editor:
         else:
             self.selection |= picked
         self.atlas_drag = None
+        if self.tool == "entity":                       # the tile chosen here is the item's sprite
+            self.entity_brush.tile = min(picked)
+            self.say(f"Item sprite: tile {self.entity_brush.tile + 1}")
+            return
         if self.tool in ("erase", "pick", "start", "stairs"):
             self.tool = "paint"
         if self.layer not in STAMP_LAYERS:
@@ -830,7 +906,9 @@ class Editor:
             self.confirm = None
         if action != "dropdown":
             self.dropdown_open = False
-        if action.startswith("tool:"):
+        if action.startswith("ent:"):
+            self.entity_action(action)
+        elif action.startswith("tool:"):
             self.tool = action[5:]
             if self.tool == "camera" and not self.show_preview:
                 self.set_preview(True)
@@ -1337,10 +1415,26 @@ class Editor:
         for cx, cy in self.problem_cells():             # cells the status bar warns about, in red
             if x0 <= cx < x1 and y0 <= cy < y1:
                 draw_problem_outline(screen, self.cell_rect(cx, cy))
+        self.draw_entities(screen)
         self.draw_start(screen)
         self.draw_camera(screen)
         self.draw_cursor(screen, area)
         screen.set_clip(None)
+
+    def draw_entities(self, screen):
+        """Items on the floor being edited: their sprite on the map, ringed in the colour of their mode
+        (white once, cyan respawning, green staying)."""
+        z = self.zoom
+        origin = self.cell_rect(0, 0)
+        size = max(8, int(z * 0.7))
+        for e in self.level.entities:
+            if e.span != self.floor:
+                continue
+            cx, cy = round(origin.x + e.x * z), round(origin.y + e.y * z)
+            sprite = pygame.transform.scale(self.tiles[max(0, min(e.tile, len(self.tiles) - 1))], (size, size))
+            pygame.draw.circle(screen, (20, 20, 30), (cx, cy), size // 2 + 2)
+            screen.blit(sprite, sprite.get_rect(center=(cx, cy)))
+            pygame.draw.circle(screen, ENTITY_MODE_COLOURS[e.mode], (cx, cy), size // 2 + 2, 2)
 
     def draw_start(self, screen):
         z, level = self.zoom, self.level

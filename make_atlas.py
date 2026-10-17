@@ -12,7 +12,9 @@ The atlas is COLUMNS x ROWS tiles (16x16 = 256 slots, 512x512 px). Only the tile
 TEXTURES below are drawn; every other slot shows a magenta/black "missing texture"
 checker so an unpopulated map id is obvious. To add a texture, write a function
 like brick() and append it to TEXTURES. Its index (row-major) is its map id - 1.
-Tile order: 0 brick, 1 mossy stone, 2 wood, 3 blue tiles, 4 floor, 5 ceiling.
+Tile order: 0 brick, 1 mossy stone, 2 wood, 3 blue tiles, 4 floor, 5 ceiling, 6 gem, 7 heart,
+8 coin, 9 key. The last four are item sprites for map entities: they have transparent corners, so
+only the shape is drawn.
 Map ids are index + 1; mapfile.DEFAULTS uses ids 5 and 6 as the default floor and ceiling.
 """
 import os
@@ -121,7 +123,54 @@ def ceiling_panel(rng):
     return s
 
 
-TEXTURES = (brick, mossy_stone, wood, blue_tiles, floor_tile, ceiling_panel)   # append new textures here
+def _sprite():
+    return pygame.Surface((TILE, TILE), pygame.SRCALPHA)
+
+
+def gem(rng):
+    """Item sprite: a cyan diamond."""
+    s = _sprite()
+    points = ((16, 4), (26, 14), (16, 28), (6, 14))
+    pygame.draw.polygon(s, (60, 200, 230), points)
+    pygame.draw.polygon(s, (200, 250, 255), ((16, 4), (26, 14), (16, 14), (6, 14)))
+    pygame.draw.polygon(s, (20, 90, 140), points, 2)
+    return s
+
+
+def heart(rng):
+    """Item sprite: a red heart (health)."""
+    s = _sprite()
+    pygame.draw.circle(s, (220, 50, 70), (11, 12), 7)
+    pygame.draw.circle(s, (220, 50, 70), (21, 12), 7)
+    pygame.draw.polygon(s, (220, 50, 70), ((5, 15), (27, 15), (16, 28)))
+    pygame.draw.circle(s, (255, 170, 180), (9, 9), 2)
+    return s
+
+
+def coin(rng):
+    """Item sprite: a gold coin."""
+    s = _sprite()
+    pygame.draw.circle(s, (230, 180, 40), (16, 16), 11)
+    pygame.draw.circle(s, (150, 105, 20), (16, 16), 11, 2)
+    pygame.draw.circle(s, (250, 220, 110), (16, 16), 6, 2)
+    return s
+
+
+def key(rng):
+    """Item sprite: a golden key."""
+    s = _sprite()
+    gold, dark = (235, 190, 50), (140, 100, 20)
+    pygame.draw.circle(s, gold, (10, 10), 6)
+    pygame.draw.circle(s, (0, 0, 0, 0), (10, 10), 2)
+    pygame.draw.rect(s, gold, (14, 14, 5, 14))
+    pygame.draw.rect(s, gold, (19, 22, 6, 3))
+    pygame.draw.rect(s, gold, (19, 17, 4, 3))
+    pygame.draw.circle(s, dark, (10, 10), 6, 1)
+    return s
+
+
+TEXTURES = (brick, mossy_stone, wood, blue_tiles, floor_tile, ceiling_panel,
+            gem, heart, coin, key)                  # append new textures here
 
 
 ATLAS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "textures.png")
@@ -137,7 +186,7 @@ def main(path=ATLAS_FILE, force=False):
     rng = random.Random(1)
     if len(TEXTURES) > COLUMNS * ROWS:
         raise SystemExit(f"{len(TEXTURES)} textures do not fit in a {COLUMNS}x{ROWS} atlas")
-    atlas = pygame.Surface((TILE * COLUMNS, TILE * ROWS))
+    atlas = pygame.Surface((TILE * COLUMNS, TILE * ROWS), pygame.SRCALPHA)
     for i in range(COLUMNS * ROWS):
         make = TEXTURES[i] if i < len(TEXTURES) else missing
         atlas.blit(make(rng), ((i % COLUMNS) * TILE, (i // COLUMNS) * TILE))

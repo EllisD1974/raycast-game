@@ -6,7 +6,7 @@ import pygame
 
 from atlas import ensure_rgba
 from constants import FOG_DIST, FOV_DEG, HEIGHT, MAX_DEPTH, WIDTH
-from raykernel import render_scene
+from raykernel import draw_sprites, render_scene_depth
 
 BACKGROUND = np.array((18, 18, 26), np.uint8)       # shown only where the view distance ends
 
@@ -16,6 +16,7 @@ class Renderer:
         self.textures = ensure_rgba(textures)       # uint8 array [tile, y, x, rgba]
         self.framebuffer = np.zeros((WIDTH, HEIGHT, 3), np.uint8)    # indexed [x, y, rgb]
         self.surface = pygame.Surface((WIDTH, HEIGHT))
+        self.depth = np.zeros((WIDTH, HEIGHT), np.float32)           # distance of what is drawn in each pixel
         self.half_fov_tan = math.tan(math.radians(FOV_DEG) / 2)
         self.focal = (WIDTH / 2) / self.half_fov_tan                 # focal length in pixels
 
@@ -24,16 +25,26 @@ class Renderer:
         it up (the view is sheared, as in classic raycasters, not tilted)."""
         return HEIGHT / 2 + math.tan(player.pitch) * self.focal
 
-    def draw(self, world, player):
-        """Render the view from `player` and return the WIDTH x HEIGHT picture."""
+    def draw(self, world, player, sprites=()):
+        """Render the view from `player` and return the WIDTH x HEIGHT picture. `sprites` are
+        (x, y, z, size, tile) items drawn as flat pictures that face the player."""
         dir_x, dir_y = math.cos(player.angle), math.sin(player.angle)
-        render_scene(
-            self.framebuffer, player.x, player.y, player.eye_z, player.span, dir_x, dir_y,
-            -dir_y * self.half_fov_tan, dir_x * self.half_fov_tan,   # camera plane: right vector
+        plane_x, plane_y = -dir_y * self.half_fov_tan, dir_x * self.half_fov_tan
+        render_scene_depth(
+            self.framebuffer, self.depth, player.x, player.y, player.eye_z, player.span, dir_x, dir_y,
+            plane_x, plane_y,                                        # camera plane: right vector
             self.horizon(player), self.focal,
             world.floor_plane, world.ceil_plane, world.span_on, world.solid_from, world.pane_tex,
             world.pane_top, world.wall_tex, world.floor_tex, world.ceil_tex,
             self.textures, MAX_DEPTH, FOG_DIST, BACKGROUND)
+        if sprites:
+            far_first = sorted(sprites, key=lambda s: -((s[0] - player.x) ** 2 + (s[1] - player.y) ** 2))
+            cols = np.array(far_first, np.float64).reshape(-1, 5)
+            draw_sprites(self.framebuffer, self.depth, player.x, player.y, player.eye_z, dir_x, dir_y,
+                         plane_x, plane_y, self.horizon(player), self.focal,
+                         np.ascontiguousarray(cols[:, 0]), np.ascontiguousarray(cols[:, 1]),
+                         np.ascontiguousarray(cols[:, 2]), np.ascontiguousarray(cols[:, 3]),
+                         np.clip(cols[:, 4], 0, len(self.textures) - 1).astype(np.int64), self.textures, MAX_DEPTH, FOG_DIST)
         pygame.surfarray.blit_array(self.surface, self.framebuffer)
         return self.surface
 

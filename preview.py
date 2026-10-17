@@ -12,6 +12,7 @@ import time
 
 import physics
 from atlas import ensure_rgba, transparent_tiles
+from entities import Entities
 from renderer import Renderer
 from world import World
 
@@ -27,6 +28,7 @@ class Preview:
         self.transparent = transparent_tiles(self.textures)
         self.renderer = Renderer(self.textures)
         self.world = None
+        self.items = None                    # the level's entities, all shown (nothing is picked up here)
         self.player = None
         self.built_revision = None
         self.last_build = -1e9
@@ -62,6 +64,7 @@ class Preview:
             if revision == self.built_revision or now - self.last_build < REBUILD_INTERVAL:
                 return False
         self.world = World(level, len(self.textures), self.transparent)
+        self.items = Entities(level, self.world)
         self.built_revision, self.last_build = revision, now
         if self.player is None or self.reset_requested:
             self.player = physics.spawn(level, self.world)
@@ -164,4 +167,4 @@ class Preview:
 
     def render(self):
         """The current view as a WIDTH x HEIGHT surface (the same picture the game would draw)."""
-        return self.renderer.draw(self.world, self.player)
+        return self.renderer.draw(self.world, self.player, self.items.sprites() if self.items else ())
