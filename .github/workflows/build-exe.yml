@@ -1,0 +1,51 @@
+name: Build exe
+
+# Run by hand: GitHub > Actions > "Build exe" > Run workflow (pick the branch to build).
+on:
+  workflow_dispatch:
+    inputs:
+      run_tests:
+        description: Run the tests before building
+        type: boolean
+        default: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      SDL_VIDEODRIVER: dummy        # no screen on the runner: pygame draws to nothing
+      SDL_AUDIODRIVER: dummy
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install (Python version from .python-version, packages from uv.lock)
+        run: uv sync --group dev
+
+      - name: Run the tests
+        if: ${{ inputs.run_tests }}
+        run: uv run pytest -q
+
+      - name: Build the game and the editor
+        run: uv run pyinstaller raycast-game.spec --noconfirm
+
+      - name: Check the built game runs (it renders one frame and exits)
+        shell: bash
+        run: |
+          dist/RaycastGame/RaycastGame.exe --snapshot smoke.png
+          test -s smoke.png
+
+      - name: Zip it
+        shell: pwsh
+        run: Compress-Archive -Path dist/RaycastGame -DestinationPath RaycastGame-windows.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RaycastGame-windows-${{ github.run_number }}
+          path: RaycastGame-windows.zip
+          if-no-files-found: error
+          retention-days: 30

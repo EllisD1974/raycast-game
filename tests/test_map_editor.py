@@ -352,3 +352,16 @@ def test_escape_does_not_quit_the_editor(ed):
     assert ed.running
     ed.handle_event(pygame.event.Event(pygame.QUIT))            # closing the window still quits
     assert not ed.running
+
+
+# ------------------------------------------------------------------ starting the game from the editor
+
+def test_play_starts_main_py_with_this_python_and_the_built_game_when_frozen(monkeypatch):
+    import sys
+    command, folder = map_editor.Editor.game_command()
+    assert command[0] == sys.executable and command[1].endswith("main.py") and os.path.dirname(command[1]) == folder
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", os.path.join("C:\\", "games", "RaycastGame", "RaycastEditor.exe"))
+    command, folder = map_editor.Editor.game_command()
+    assert command == [os.path.join(os.path.dirname(sys.executable), "RaycastGame.exe")]
+    assert folder == os.path.dirname(sys.executable)

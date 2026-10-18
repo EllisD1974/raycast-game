@@ -70,6 +70,22 @@ to joiners; everyone needs the same code and textures.
 Add `--port N` to either to use another port (and `--bind 127.0.0.1` to the host to accept only this
 machine). Over the internet the host needs the port forwarded, or a VPN such as Tailscale.
 
+## Build an exe (Windows)
+
+GitHub: **Actions > Build exe > Run workflow** (choose the branch; it runs the tests first unless you untick that). When it
+finishes, download the `RaycastGame-windows-<run number>` artifact from the run's page: unzip it and run
+`RaycastGame.exe` (the game) or `RaycastEditor.exe` (the map editor; its Play button starts the game next to it). The
+flags work as on the command line, e.g. `RaycastGame.exe --host SECRET`.
+
+To build the same thing on your own machine:
+
+    uv sync --group dev
+    uv run pyinstaller raycast-game.spec --noconfirm        # makes dist/RaycastGame/
+
+The first start compiles the renderer (about 20 seconds); it is cached in `%LOCALAPPDATA%aycast-game
+umba-cache`, so
+later starts take a second or two. Maps are read from and saved to the `maps` folder next to the programs.
+
 ## Test
 
     uv run pytest

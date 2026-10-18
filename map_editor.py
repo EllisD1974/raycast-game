@@ -2083,9 +2083,19 @@ class Editor:
     def play(self):
         if self.dirty or not os.path.exists(self.path):
             self.save()
-        game = os.path.join(os.path.dirname(os.path.abspath(__file__)), "main.py")
-        subprocess.Popen([sys.executable, game, "--map", self.path], cwd=os.path.dirname(game))
+        command, folder = self.game_command()
+        subprocess.Popen(command + ["--map", self.path], cwd=folder)
         self.say("Launched the game with this map")
+
+    @staticmethod
+    def game_command():
+        """(the command that starts the game, the folder to start it in): main.py with this Python, or when running
+        from the built programs, RaycastGame.exe in the same folder as this one."""
+        if getattr(sys, "frozen", False):
+            folder = os.path.dirname(sys.executable)
+            return [os.path.join(folder, "RaycastGame.exe")], folder
+        game = os.path.join(os.path.dirname(os.path.abspath(__file__)), "main.py")
+        return [sys.executable, game], os.path.dirname(game)
 
     def issues(self):
         """The level's (message, cell) problems, recomputed only after an edit."""
