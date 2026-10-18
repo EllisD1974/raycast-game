@@ -26,6 +26,9 @@ z up), or with **Heading** axes, x ahead and y to the right of the automatic dir
 item that uses an effect can also **override** the start offset for itself (its *Start offset* row), always along
 the heading (map axes for an item).
 
+- a gun's **Bullets ahead / right / up** say where its bullets come from (and where its muzzle effect and flash start);
+  rather than typing numbers, drag the orange disc (bullets) and the cyan diamond (muzzle effect) in the two views under
+  the gun preview (from above and from the side); the wheel scrolls the Guns section if it does not all fit;
 - a gun's **Muzzle effect** plays where it fires (the Guns section shows it live: tick *Fire continuously* to see the
   gun fire, reload, and play its effects and lights on repeat);
 - an ammo type's **Trail effect** follows its bullets through the air;

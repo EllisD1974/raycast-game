@@ -13,7 +13,7 @@ from constants import PLAYER_HEIGHT
 from entities import Entities, PlayerStats
 from inventory import Inventory
 from physics import look, spawn, step
-from projectiles import MUZZLE, Projectiles
+from projectiles import MUZZLE, Projectiles, muzzle_shift
 
 
 MAX_STEP_DT = 0.05              # longest time one player's step may cover (main.py caps frames at this too)
@@ -61,12 +61,14 @@ def move_body(world, body, wish, dt):
     look(body, wish.tilt)
 
 
-def muzzle_event(effect, body, offset=None):
+def muzzle_event(effect, body, offset=None, shift=(0.0, 0.0, 0.0)):
     """(effect, x, y, z, dx, dy, dz[, ox, oy, oz]): `effect` played at the muzzle of a gun fired by `body`, along
-    its aim, starting at `offset` from the muzzle if the gun overrides the effect's own."""
+    its aim, starting at `offset` from the muzzle if the gun overrides the effect's own. `shift` moves the muzzle
+    itself (where the gun's bullets come from: see projectiles.muzzle_shift)."""
     cp = math.cos(body.pitch)
     dx, dy, dz = math.cos(body.angle) * cp, math.sin(body.angle) * cp, math.sin(body.pitch)
-    event = (effect, body.x + dx * MUZZLE, body.y + dy * MUZZLE, body.eye_z - 0.03 + dz * MUZZLE, dx, dy, dz)
+    event = (effect, body.x + dx * MUZZLE + shift[0], body.y + dy * MUZZLE + shift[1],
+             body.eye_z - 0.03 + dz * MUZZLE + shift[2], dx, dy, dz)
     return event + tuple(offset) if offset is not None else event
 
 
@@ -130,11 +132,12 @@ class Game:
         fired = inventory.update(dt, wish.fire, wish.reload)
         for gun in fired:
             self.projectiles.fire(body, gun, self.level.ammo_for(gun))
+            shift = muzzle_shift(gun, body.angle)
             if gun.muzzle:
                 self.fx.append(muzzle_event(gun.muzzle, body, (gun.muzzle_offset_x, gun.muzzle_offset_y, gun.muzzle_offset_z)
-                                            if gun.muzzle_override else None))
+                                            if gun.muzzle_override else None, shift))
             if gun.flash:
-                self.flashes.append(muzzle_event(gun.flash, body)[:4])
+                self.flashes.append(muzzle_event(gun.flash, body, None, shift)[:4])
         return len(fired)
 
     def take_fx(self):

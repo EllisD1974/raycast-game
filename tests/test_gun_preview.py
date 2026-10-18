@@ -1,4 +1,5 @@
 """The live gun preview: the game itself firing a gun down a corridor, and its controls in the editor's Guns section."""
+import math
 import os
 import sys
 
@@ -342,3 +343,87 @@ def test_a_prefab_carries_its_override_to_its_copies(ed):
     choose(ed, "emits_override", True)
     click(ed, row(ed, "emits_offset_x").plus.center)
     assert (ed.level.entities[0].emits_override, ed.level.entities[0].emits_offset_x) == (True, 0.05)
+
+
+# ------------------------------------------------------------------ where the bullets come from
+
+def fire_from(gun, angle=0.0, pitch=0.0, effects=(), lights=()):
+    """Fire `gun` once from a player at (4, 4) facing `angle`; returns the session so bullets and effects can be read."""
+    import random
+    from game import Game, Inputs
+    from session import LocalSession
+    from world import World
+    level = Level.blank(12, 12)
+    level.guns, level.effects, level.lights = [gun], list(effects), list(lights)
+    session = LocalSession(Game(level, World(level, 16), random.Random(1)))
+    body = session.me.body
+    body.x, body.y, body.angle, body.pitch = 4.0, 4.0, angle, pitch
+    session.me.inventory.give_gun(gun)
+    session.step(Inputs(fire=True), 0.001)
+    return session
+
+
+def test_bullets_come_from_the_usual_muzzle_point_unless_the_gun_says_otherwise():
+    session = fire_from(Gun("G", mode="auto"))
+    bullet, body = session.game.projectiles.bullets[0], session.me.body
+    assert (bullet.x, bullet.y) == pytest.approx((body.x + 0.25, body.y), abs=0.03)      # (it has flown a hair already)
+    assert bullet.z == pytest.approx(body.eye_z - 0.03, abs=0.01)
+
+
+def test_the_bullet_offset_is_ahead_right_and_up_of_the_aim():
+    gun = Gun("G", mode="auto", bullet_offset_x=0.5, bullet_offset_y=0.3, bullet_offset_z=-0.25)
+    plain = fire_from(Gun("G", mode="auto"))
+    shifted = fire_from(gun)
+    a, b = plain.game.projectiles.bullets[0], shifted.game.projectiles.bullets[0]
+    assert (b.x - a.x, b.y - a.y, b.z - a.z) == pytest.approx((0.5, 0.3, -0.25), abs=0.01)    # facing +x: right is +y
+    assert (b.vx, b.vy, b.vz) == pytest.approx((a.vx, a.vy, a.vz))                              # still flies along the aim
+    turned = fire_from(gun, angle=math.pi / 2).game.projectiles.bullets[0]                     # facing +y: ahead is +y, right is -x
+    plain_turned = fire_from(Gun("G", mode="auto"), angle=math.pi / 2).game.projectiles.bullets[0]
+    assert (turned.x - plain_turned.x, turned.y - plain_turned.y) == pytest.approx((-0.3, 0.5), abs=0.01)
+
+
+def test_every_pellet_of_a_shotgun_comes_from_the_offset_point():
+    gun = Gun("S", mode="auto", shot="multi", pellets=5, spread=4.0, bullet_offset_y=0.4)
+    bullets = fire_from(gun).game.projectiles.bullets
+    assert len(bullets) == 5 and all(abs(b.y - 4.4) < 0.05 for b in bullets)
+
+
+def test_the_muzzle_effect_and_flash_start_at_the_bullet_origin():
+    gun = Gun("G", mode="auto", muzzle="Puff", flash="Flash", bullet_offset_x=0.5, bullet_offset_y=0.3, bullet_offset_z=-0.25)
+    session = fire_from(gun, effects=[Effect("Puff", count=1, spread=0.0, speed=0.0, life=5.0, collide=False)],
+                        lights=[Light("Flash", duration=1.0)])
+    bullet = session.game.projectiles.bullets[0]
+    puff, = session.particles.particles
+    assert (puff.x, puff.y, puff.z) == pytest.approx((bullet.x, bullet.y, bullet.z), abs=0.03)
+    flash, = session.lights.flashes
+    assert tuple(flash[1:4]) == pytest.approx((bullet.x, bullet.y, bullet.z), abs=0.03)
+
+
+def test_the_bullet_offset_survives_saving_and_bad_values_are_clamped():
+    import json
+    from mapfile import level_text, parse_level
+    level = Level.blank(6, 6)
+    level.guns = [Gun("G", bullet_offset_x=0.5, bullet_offset_y=-0.3, bullet_offset_z=0.1)]
+    assert parse_level(json.loads(level_text(level))).guns == level.guns
+    bad = Gun.from_dict({"bullet_offset_x": 99, "bullet_offset_y": "right"})
+    assert bad.bullet_offset_x == 5.0 and bad.bullet_offset_y == 0.0
+
+
+def test_the_live_preview_fires_from_the_offset(textures):
+    gun = Gun("Pistol", mode="auto", fire_rate=2.0, bullet_offset_y=0.4, bullet_offset_z=-0.2)
+    preview = GunPreview(textures)
+    preview.build(level_with(gun), "Pistol")
+    preview.update(DT, True)
+    body = preview.session.me.body
+    bullet = preview.session.game.projectiles.bullets[0]
+    assert bullet.y == pytest.approx(body.y + 0.4, abs=0.02) and bullet.z == pytest.approx(body.eye_z - 0.23, abs=0.02)
+
+
+def test_the_pane_has_rows_for_where_the_bullets_come_from(ed):
+    gun = add_gun(ed)
+    assert keys(ed)[keys(ed).index("spread") + 1:keys(ed).index("spread") + 4] == [
+        "bullet_offset_x", "bullet_offset_y", "bullet_offset_z"]
+    click(ed, row(ed, "bullet_offset_y").plus.center)
+    click(ed, row(ed, "bullet_offset_z").minus.center)
+    shown = ed.level.guns[0]
+    assert (shown.bullet_offset_y, shown.bullet_offset_z) == (0.05, -0.05) and gun.name == shown.name

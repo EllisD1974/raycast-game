@@ -295,6 +295,10 @@ class Gun:
     pellets     bullets in a multi shot
     muzzle      name of the Effect played at the muzzle each time it fires ("" for none)
     flash       name of the Light that flashes at the muzzle each time it fires ("" for none)
+    bullet_offset_x, bullet_offset_y, bullet_offset_z
+                where the bullets come from, in cells from the usual muzzle point in front of the eye: x ahead
+                along the aim, y to the right, z up (a gun held low and to the right is about 0, 0.3, -0.25).
+                The bullets still fly along the aim. The muzzle effect and flash come from this point too.
     muzzle_override, muzzle_offset_x, muzzle_offset_y, muzzle_offset_z
                 true: the muzzle effect starts at this offset from the muzzle (x ahead along the aim, y to the
                 right, z up, in cells) instead of the effect's own start offset"""
@@ -311,6 +315,9 @@ class Gun:
     spread: float = 0.0
     shot: str = "single"
     pellets: int = 8
+    bullet_offset_x: float = 0.0
+    bullet_offset_y: float = 0.0
+    bullet_offset_z: float = 0.0
     muzzle: str = ""
     flash: str = ""
     muzzle_override: bool = False
@@ -340,7 +347,9 @@ class Gun:
                    reload_time=number("reload_time", 0.0, 60.0), ammo=str(data.get("ammo", ""))[:MAX_NAME],
                    spread=number("spread", 0.0, 45.0),
                    shot=data.get("shot") if data.get("shot") in SHOT_TYPES else base.shot,
-                   pellets=number("pellets", 1, 100, int), muzzle=str(data.get("muzzle", ""))[:MAX_NAME],
+                   pellets=number("pellets", 1, 100, int), bullet_offset_x=number("bullet_offset_x", -5.0, 5.0),
+                   bullet_offset_y=number("bullet_offset_y", -5.0, 5.0), bullet_offset_z=number("bullet_offset_z", -5.0, 5.0),
+                   muzzle=str(data.get("muzzle", ""))[:MAX_NAME],
                    flash=str(data.get("flash", ""))[:MAX_NAME], muzzle_override=bool(data.get("muzzle_override", False)),
                    muzzle_offset_x=number("muzzle_offset_x", -10.0, 10.0), muzzle_offset_y=number("muzzle_offset_y", -10.0, 10.0),
                    muzzle_offset_z=number("muzzle_offset_z", -10.0, 10.0))

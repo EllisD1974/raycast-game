@@ -15,6 +15,14 @@ MAX_STEP = 0.1                  # cells a bullet moves between collision checks
 MUZZLE = 0.25                   # how far in front of the eye a bullet starts
 
 
+def muzzle_shift(gun, angle):
+    """(dx, dy, dz) in the world that moves a bullet's starting point from the usual muzzle point to where the
+    gun says bullets come from: its offset is x ahead along the aim `angle`, y to the right of that, z up."""
+    c, s = math.cos(angle), math.sin(angle)
+    return (c * gun.bullet_offset_x - s * gun.bullet_offset_y, s * gun.bullet_offset_x + c * gun.bullet_offset_y,
+            gun.bullet_offset_z)
+
+
 @dataclass
 class Projectile:
     x: float
@@ -64,8 +72,9 @@ class Projectiles:
             pitch += self.rng.uniform(-spread, spread)
         cp = math.cos(pitch)
         dx, dy, dz = math.cos(yaw) * cp, math.sin(yaw) * cp, math.sin(pitch)
+        sx, sy, sz = muzzle_shift(gun, player.angle)
         self.bullets.append(Projectile(
-            player.x + dx * MUZZLE, player.y + dy * MUZZLE, player.eye_z - 0.03 + dz * MUZZLE,
+            player.x + dx * MUZZLE + sx, player.y + dy * MUZZLE + sy, player.eye_z - 0.03 + dz * MUZZLE + sz,
             dx * ammo.speed, dy * ammo.speed, dz * ammo.speed,
             ammo.tile, ammo.size, gun.damage * ammo.damage_mult, ammo.range, self.next_ident, ammo.trail, ammo.light,
             (ammo.trail_offset_x, ammo.trail_offset_y, ammo.trail_offset_z) if ammo.trail_override else None))
