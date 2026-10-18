@@ -7,6 +7,7 @@ import pygame
 from atlas import ensure_rgba
 from constants import FOG_DIST, FOV_DEG, HEIGHT, MAX_DEPTH, WIDTH
 from raykernel import draw_sprites, render_scene_depth
+from raylight import apply_lights, sprite_light
 from raypitch import render_scene_pitch
 
 BACKGROUND = np.array((18, 18, 26), np.uint8)       # shown only where the view distance ends
@@ -27,9 +28,10 @@ class Renderer:
         screen and looking down moves it up."""
         return HEIGHT / 2 + math.tan(player.pitch) * self.focal
 
-    def draw(self, world, player, sprites=()):
+    def draw(self, world, player, sprites=(), lighting=None):
         """Render the view from `player` and return the WIDTH x HEIGHT picture. `sprites` are
-        (x, y, z, size, tile[, spin]) items drawn as flat pictures that face the player.
+        (x, y, z, size, tile[, spin[, alpha[, glow]]]) items drawn as flat pictures that face the player.
+        `lighting` (lighting.Lighting, or None for a map with no lights and full ambient) lights the picture.
 
         A level view is drawn a column at a time (fast). A tilted view is drawn with one real 3D ray
         per pixel (raypitch.py), so looking up and down is a true rotation, not a shear."""
@@ -45,15 +47,23 @@ class Renderer:
             render_scene_pitch(
                 self.framebuffer, self.depth, player.x, player.y, player.eye_z, player.span, dir_x, dir_y,
                 player.pitch, self.focal, *scene, self.textures, MAX_DEPTH, FOG_DIST, BACKGROUND)
+        ambient = 1.0
+        if lighting is not None:
+            ambient = lighting.ambient
+            apply_lights(self.framebuffer, self.depth, player.x, player.y, player.eye_z, dir_x, dir_y, player.pitch,
+                         self.focal, lighting.lights, lighting.vis, lighting.occluder, ambient, FOG_DIST)
         if sprites:
             far_first = sorted(sprites, key=lambda s: -((s[0] - player.x) ** 2 + (s[1] - player.y) ** 2))
-            cols = np.array([tuple(s) + (0.0,) * (6 - len(s)) for s in far_first], np.float64).reshape(-1, 6)
+            cols = np.array([tuple(s) + (0.0, 1.0, 0.0)[len(s) - 5:] for s in far_first], np.float64).reshape(-1, 8)
+            xs, ys, zs, sizes = (np.ascontiguousarray(cols[:, i]) for i in range(4))
+            lit = np.zeros((len(cols), 3), np.float64)
+            if lighting is not None:
+                sprite_light(xs, ys, zs, sizes, lighting.lights, lighting.vis, lighting.occluder, lit)
             draw_sprites(self.framebuffer, self.depth, player.x, player.y, player.eye_z, dir_x, dir_y,
-                         player.pitch, self.focal,
-                         np.ascontiguousarray(cols[:, 0]), np.ascontiguousarray(cols[:, 1]),
-                         np.ascontiguousarray(cols[:, 2]), np.ascontiguousarray(cols[:, 3]),
+                         player.pitch, self.focal, xs, ys, zs, sizes,
                          np.clip(cols[:, 4], 0, len(self.textures) - 1).astype(np.int64),
-                         np.ascontiguousarray(cols[:, 5]), self.textures, MAX_DEPTH, FOG_DIST)
+                         np.ascontiguousarray(cols[:, 5]), np.ascontiguousarray(cols[:, 6]), lit,
+                         np.ascontiguousarray(cols[:, 7]), ambient, self.textures, MAX_DEPTH, FOG_DIST)
         pygame.surfarray.blit_array(self.surface, self.framebuffer)
         return self.surface
 

@@ -13,6 +13,8 @@ import time
 import physics
 from atlas import ensure_rgba, transparent_tiles
 from entities import Entities
+from lighting import LightSystem, item_lights
+from particles import ParticleSystem, emitters_in_view
 from renderer import Renderer
 from world import World
 
@@ -29,6 +31,8 @@ class Preview:
         self.renderer = Renderer(self.textures)
         self.world = None
         self.items = None                    # the level's entities, all shown (nothing is picked up here)
+        self.particles = None                # the effects the level's items emit, playing in the view
+        self.lights = None                   # the level's lights (and ambient), lighting the view
         self.player = None
         self.built_revision = None
         self.last_build = -1e9
@@ -65,6 +69,8 @@ class Preview:
                 return False
         self.world = World(level, len(self.textures), self.transparent)
         self.items = Entities(level, self.world)
+        self.particles = ParticleSystem(level.effects, self.world)
+        self.lights = LightSystem(level, self.world)
         self.built_revision, self.last_build = revision, now
         if self.player is None or self.reset_requested:
             self.player = physics.spawn(level, self.world)
@@ -154,6 +160,12 @@ class Preview:
             return
         if self.items is not None:
             self.items.clock += dt                      # items animate in the editor's 3D view too
+        if self.particles is not None and self.items is not None:
+            keys = emitters_in_view(self.particles, self.items, (self.player.x, self.player.y), dt)
+            self.particles.keep(keys)
+            self.particles.update(dt)
+            self.lights.keep(item_lights(self.lights, self.items, (self.player.x, self.player.y)))
+            self.lights.update(dt)
         jump, self.jump_pending = self.jump_pending, False
         physics.step(self.world, self.player, forward, strafe, turn, jump, min(dt, 0.05), sprint)
 
@@ -169,4 +181,8 @@ class Preview:
 
     def render(self):
         """The current view as a WIDTH x HEIGHT surface (the same picture the game would draw)."""
-        return self.renderer.draw(self.world, self.player, self.items.sprites() if self.items else ())
+        sprites = (self.items.sprites() if self.items else []) + (self.particles.sprites() if self.particles else [])
+        lighting = None
+        if self.lights is not None:
+            lighting = self.lights.prepare((self.player.x, self.player.y, self.player.eye_z), self.particles)
+        return self.renderer.draw(self.world, self.player, sprites, lighting)

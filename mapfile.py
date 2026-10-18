@@ -59,19 +59,142 @@ _GROUND_DEFAULTS = {"walls": 0, "wall_h": 0.0, "wall_ceil": 0.0, "wall_floor": 0
 _UPPER_DEFAULTS = {"floor_tex": 3, "ceil_tex": 6, "floor_h": 0.0, "ceil_h": 0.0, "ramp": 0}
 
 
-ENTITY_MODES = ("once", "respawn", "persistent")
-PREFAB_FIELDS = ("tile", "mode", "effect", "amount", "respawn", "size", "lift", "item", "gun", "ammo")
+ENTITY_MODES = ("once", "respawn", "persistent", "scenery")
+PREFAB_FIELDS = ("tile", "mode", "effect", "amount", "respawn", "size", "lift", "item", "gun", "ammo",
+                 "shown", "emits", "light")
 ENTITY_EFFECTS = ("none", "score", "health", "item", "gun", "ammo")
-MODE_LABELS = {"once": "Pick up once", "respawn": "Respawns", "persistent": "Stays"}
+MODE_LABELS = {"once": "Pick up once", "respawn": "Respawns", "persistent": "Stays", "scenery": "Scenery"}
 EFFECT_LABELS = {"none": "None", "score": "Score", "health": "Health", "item": "Inventory item",
                  "gun": "Give a gun", "ammo": "Give ammo"}
 GUN_MODES = ("single", "semi", "auto")
 GUN_MODE_LABELS = {"single": "Single shot", "semi": "Semi-auto", "auto": "Full auto"}
 SHOT_TYPES = ("single", "multi", "projectile")
 SHOT_LABELS = {"single": "Single bullet", "multi": "Multi bullet", "projectile": "Projectile"}
-MAX_NAME = 24                                   # longest name of an item or gun
+MIN_AMBIENT = 0.02                              # the darkest a map can be made
+EFFECT_KINDS = ("burst", "stream")
+EFFECT_KIND_LABELS = {"burst": "Burst", "stream": "Stream"}
+MAX_NAME = 24                                   # longest name of an item, gun or particle effect
 ANIMATION_KINDS = ("float", "rotate")
 ANIMATION_LABELS = {"float": "Float", "rotate": "Rotate"}
+
+
+@dataclass
+class Light:
+    """A light that things in the world can carry. The map keeps a list of them (the editor's Lights
+    section) and guns, ammo types, particle effects, items and wall tiles refer to them by name, so
+    one light is designed once and used anywhere. Like particles, lights only change how things look and
+    are worked out on each player's own machine.
+
+    name           what it is called (also how things refer to it)
+    r, g, b        its colour, 0 to 255 each
+    intensity      how bright it is (1 lights a surface next to it as much as it was; more overexposes it)
+    radius         how far it reaches, in cells; the light fades smoothly to nothing at that distance
+    flicker        0 steady, up to 1 for a light that wobbles all the way down to nothing
+    flicker_speed  how fast it wobbles, per second
+    duration       a light that flashes once (a gun's muzzle) fades out over this many seconds
+    wall_tile      the wall tile (atlas index, -1 for none) that glows with this light: every wall made
+                   from it lights up the open cells beside it
+
+    Walls stop light, so a lit room does not light the room behind its wall. Lights do not know about
+    floors above or below, so a light reaches through the floor a little."""
+    name: str = "Light"
+    r: int = 255
+    g: int = 200
+    b: int = 120
+    intensity: float = 1.5
+    radius: float = 4.0
+    flicker: float = 0.0
+    flicker_speed: float = 8.0
+    duration: float = 0.12
+    wall_tile: int = -1
+
+    @classmethod
+    def from_dict(cls, data):
+        base = cls()
+
+        def number(key, low, high, cast=float):
+            try:
+                return cast(max(low, min(high, float(data.get(key, getattr(base, key))))))
+            except (TypeError, ValueError):
+                return getattr(base, key)
+        name = str(data.get("name", base.name)).strip()[:MAX_NAME] or base.name
+        return cls(name=name, r=number("r", 0, 255, int), g=number("g", 0, 255, int), b=number("b", 0, 255, int),
+                   intensity=number("intensity", 0.0, 20.0), radius=number("radius", 0.5, 20.0),
+                   flicker=number("flicker", 0.0, 1.0), flicker_speed=number("flicker_speed", 0.1, 60.0),
+                   duration=number("duration", 0.02, 5.0), wall_tile=number("wall_tile", -1, 255, int))
+
+
+@dataclass
+class Effect:
+    """A particle effect: what an emitter sends out. The map keeps a list of them (the editor's Effects
+    section) and guns, ammo types and items refer to them by name, so one effect is designed once and
+    used anywhere. Effects only make things look good: they are worked out on each player's own
+    machine and never change the game.
+
+    name         what it is called (also how guns, ammo and items refer to it)
+    tile         atlas tile every particle is drawn with (tiles with transparent pixels work best)
+    kind         burst: `count` particles at once (a puff, a muzzle flash, an impact);
+                 stream: `rate` particles a second (smoke, sparks, a trail)
+    count        burst: how many particles
+    rate         stream: particles per second
+    duration     stream played once (a muzzle flash): seconds it runs (0 is a short default). Streams that
+                 stay attached (a trail, an item that emits) run for as long as they are attached
+    interval     burst that stays attached (an item that emits): seconds between repeats (0 plays it once)
+    life         seconds a particle lives; life_var is how much that varies, as a fraction (0.5 = +-50%)
+    speed        cells per second a particle starts with; speed_var varies it the same way
+    spread       half angle in degrees of the cone the particles leave in, around the emitter's direction
+                 (up for an item, the aim for a gun, backwards for a trail); 180 is every direction
+    radius       particles start up to this far (in cells) from the emitter
+    gravity      cells per second squared pulling them down (negative: they float up)
+    drag         how fast they slow down, per second (0 none, 1 loses most speed in a second)
+    size_start, size_end    size in cells at birth and at death (they change smoothly)
+    alpha_start, alpha_end  how solid they are at birth and at death (1 opaque, 0 invisible)
+    collide      particles end when they hit a wall, floor or ceiling
+    light        name of the Light every particle carries ("" for none); it fades with the particle, and the
+                 particles are drawn at full brightness so they glow in a dark map"""
+    name: str = "Effect"
+    tile: int = 14
+    kind: str = "burst"
+    count: int = 12
+    rate: float = 30.0
+    duration: float = 0.0
+    interval: float = 0.0
+    life: float = 0.6
+    life_var: float = 0.3
+    speed: float = 2.0
+    speed_var: float = 0.4
+    spread: float = 40.0
+    radius: float = 0.0
+    gravity: float = 0.0
+    drag: float = 0.0
+    size_start: float = 0.15
+    size_end: float = 0.0
+    alpha_start: float = 1.0
+    alpha_end: float = 0.0
+    collide: bool = True
+    light: str = ""
+
+    @classmethod
+    def from_dict(cls, data):
+        base = cls()
+
+        def number(key, low, high, cast=float):
+            try:
+                return cast(max(low, min(high, float(data.get(key, getattr(base, key))))))
+            except (TypeError, ValueError):
+                return getattr(base, key)
+        name = str(data.get("name", base.name)).strip()[:MAX_NAME] or base.name
+        return cls(name=name, tile=number("tile", 0, 255, int),
+                   kind=data.get("kind") if data.get("kind") in EFFECT_KINDS else base.kind,
+                   count=number("count", 1, 200, int), rate=number("rate", 0.5, 500.0),
+                   duration=number("duration", 0.0, 60.0), interval=number("interval", 0.0, 600.0),
+                   life=number("life", 0.05, 30.0), life_var=number("life_var", 0.0, 1.0),
+                   speed=number("speed", 0.0, 50.0), speed_var=number("speed_var", 0.0, 1.0),
+                   spread=number("spread", 0.0, 180.0), radius=number("radius", 0.0, 5.0),
+                   gravity=number("gravity", -50.0, 50.0), drag=number("drag", 0.0, 20.0),
+                   size_start=number("size_start", 0.0, 3.0), size_end=number("size_end", 0.0, 3.0),
+                   alpha_start=number("alpha_start", 0.0, 1.0), alpha_end=number("alpha_end", 0.0, 1.0),
+                   collide=bool(data.get("collide", base.collide)), light=str(data.get("light", ""))[:MAX_NAME])
 
 
 @dataclass
@@ -84,13 +207,17 @@ class AmmoType:
     size         size of that bullet in cells
     speed        how fast it flies, in cells per second
     range        how far it flies before it disappears, in cells
-    damage_mult  multiplies the damage of the gun that fires it (1.0 leaves it as it is)"""
+    damage_mult  multiplies the damage of the gun that fires it (1.0 leaves it as it is)
+    trail        name of the Effect that follows the bullet through the air ("" for none)
+    light        name of the Light the bullet carries as it flies ("" for none)"""
     name: str = "Bullet"
     tile: int = 14
     size: float = 0.1
     speed: float = 18.0
     range: float = 20.0
     damage_mult: float = 1.0
+    trail: str = ""
+    light: str = ""
 
     @classmethod
     def from_dict(cls, data):
@@ -104,7 +231,8 @@ class AmmoType:
         name = str(data.get("name", base.name)).strip()[:MAX_NAME] or base.name
         return cls(name=name, tile=number("tile", 0, 255, int), size=number("size", 0.01, 2.0),
                    speed=number("speed", 0.5, 200.0), range=number("range", 0.5, 200.0),
-                   damage_mult=number("damage_mult", 0.0, 100.0))
+                   damage_mult=number("damage_mult", 0.0, 100.0), trail=str(data.get("trail", ""))[:MAX_NAME],
+                   light=str(data.get("light", ""))[:MAX_NAME])
 
 
 @dataclass
@@ -131,7 +259,9 @@ class Gun:
                 multi       `pellets` bullets at once (a shotgun), each aimed a little differently by the spread
                 projectile  reserved for things that are not simple bullets (rockets, grenades); it fires
                             like a single bullet until that is built
-    pellets     bullets in a multi shot"""
+    pellets     bullets in a multi shot
+    muzzle      name of the Effect played at the muzzle each time it fires ("" for none)
+    flash       name of the Light that flashes at the muzzle each time it fires ("" for none)"""
     name: str = "Pistol"
     tile: int = 16
     size: float = 5.0
@@ -145,6 +275,8 @@ class Gun:
     spread: float = 0.0
     shot: str = "single"
     pellets: int = 8
+    muzzle: str = ""
+    flash: str = ""
 
     @property
     def capacity(self):
@@ -168,7 +300,8 @@ class Gun:
                    reload_time=number("reload_time", 0.0, 60.0), ammo=str(data.get("ammo", ""))[:MAX_NAME],
                    spread=number("spread", 0.0, 45.0),
                    shot=data.get("shot") if data.get("shot") in SHOT_TYPES else base.shot,
-                   pellets=number("pellets", 1, 100, int))
+                   pellets=number("pellets", 1, 100, int), muzzle=str(data.get("muzzle", ""))[:MAX_NAME],
+                   flash=str(data.get("flash", ""))[:MAX_NAME])
 
 
 @dataclass
@@ -212,7 +345,12 @@ class Entity:
     name, prefab  a prefab is an Entity kept in the level's list of prefabs, with a name and its settings
                 (its x, y and span mean nothing). An item placed from it has prefab set to that name and
                 takes every setting except its place from it (Level.apply_prefabs), so editing the prefab
-                changes all of them at once. Clearing `prefab` detaches an item: it keeps what it had."""
+                changes all of them at once. Clearing `prefab` detaches an item: it keeps what it had.
+    shown    whether the sprite is drawn (an item that only emits particles can hide it)
+    emits    name of the particle Effect the item sends out while it is there ("" for none; it points up)
+    light    name of the Light the item gives off while it is there ("" for none); with Scenery and a hidden
+             sprite an item is just a light placed in the map
+    A "scenery" item cannot be touched or picked up: it is only there to look at (a torch, a vent)."""
     x: float
     y: float
     span: int = 0
@@ -227,6 +365,9 @@ class Entity:
     item: str = ""                  # effect "item": the name of the thing put in the inventory
     gun: str = ""                   # effect "gun": the name of the gun it hands out
     ammo: str = ""                  # effect "ammo": the name of the ammo type it gives (amount rounds)
+    shown: bool = True              # draw the sprite
+    emits: str = ""                 # the particle effect it sends out
+    light: str = ""                 # the light it gives off
     name: str = ""                  # a prefab's name (an item placed in the map has none)
     prefab: str = ""                # the prefab this item is an instance of ("" for a plain item)
 
@@ -252,6 +393,8 @@ class Entity:
                                    if isinstance(a, dict)],
                        item=str(data.get("item", ""))[:MAX_NAME], gun=str(data.get("gun", ""))[:MAX_NAME],
                        ammo=str(data.get("ammo", ""))[:MAX_NAME],
+                       shown=bool(data.get("shown", base.shown)), emits=str(data.get("emits", ""))[:MAX_NAME],
+                       light=str(data.get("light", ""))[:MAX_NAME],
                        name=str(data.get("name", ""))[:MAX_NAME], prefab=str(data.get("prefab", ""))[:MAX_NAME])
 
 
@@ -289,8 +432,11 @@ def default_floor_name(index):
 
 class Level:
     def __init__(self, grids, start_x=1.5, start_y=1.5, start_angle=0.0, start_span=0, names=None,
-                 entities=None, guns=None, ammo_types=None, prefabs=None):
+                 entities=None, guns=None, ammo_types=None, prefabs=None, effects=None, lights=None, ambient=1.0):
         self.grids = grids
+        self.lights = list(lights or [])            # lights defined for this map (see Light)
+        self.ambient = ambient                      # how bright the map is without lights: 1 is as before, less is dark
+        self.effects = list(effects or [])          # particle effects defined for this map (see Effect)
         self.guns = list(guns or [])                # weapons defined for this map (see Gun)
         self.ammo_types = list(ammo_types or [])    # kinds of ammunition defined for this map (see AmmoType)
         self.prefabs = list(prefabs or [])          # reusable items defined for this map (see Entity)
@@ -322,7 +468,8 @@ class Level:
         return Level({k: [row[:] for row in g] for k, g in self.grids.items()},
                      self.start_x, self.start_y, self.start_angle, self.start_span, self.names,
                      [e.clone() for e in self.entities], [replace(g) for g in self.guns],
-                     [replace(a) for a in self.ammo_types], [p.clone() for p in self.prefabs])
+                     [replace(a) for a in self.ammo_types], [p.clone() for p in self.prefabs],
+                     [replace(f) for f in self.effects], [replace(light) for light in self.lights], self.ambient)
 
     def prefab_named(self, name):
         for prefab in self.prefabs:
@@ -343,6 +490,20 @@ class Level:
             for key in PREFAB_FIELDS:
                 setattr(e, key, getattr(prefab, key))
             e.animations = [replace(a) for a in prefab.animations]
+
+    def light_named(self, name):
+        """The Light with that name, or None (an empty or unknown name is no light)."""
+        for light in self.lights:
+            if light.name == name:
+                return light
+        return None
+
+    def effect_named(self, name):
+        """The Effect with that name, or None (an empty or unknown name is no effect)."""
+        for effect in self.effects:
+            if effect.name == name:
+                return effect
+        return None
 
     def ammo_for(self, gun):
         """The AmmoType a gun fires. A gun that names none (or one that no longer exists) fires a plain
@@ -778,6 +939,12 @@ def default_level():
 def load_level(path):
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
+    return parse_level(data, path)
+
+
+def parse_level(data, label="level"):
+    """The Level for the JSON data of a map file (already parsed). `label` names it in error messages."""
+    path = label
     if "grids" in data:
         raw = data["grids"]
     else:                                           # version 1: only the walls grid
@@ -833,6 +1000,20 @@ def load_level(path):
                 "speed": item.get("proj_speed", 18.0), "range": item.get("proj_range", 20.0)}))
             gun.ammo = name
         level.guns.append(gun)
+    try:
+        level.ambient = max(MIN_AMBIENT, min(1.0, float(data.get("ambient", 1.0))))
+    except (TypeError, ValueError):
+        level.ambient = 1.0
+    for item in data.get("lights", []):
+        if isinstance(item, dict):
+            light = Light.from_dict(item)
+            if level.light_named(light.name) is None:
+                level.lights.append(light)
+    for item in data.get("effects", []):
+        if isinstance(item, dict):
+            effect = Effect.from_dict(item)
+            if level.effect_named(effect.name) is None:
+                level.effects.append(effect)
     for item in data.get("prefabs", []):
         if isinstance(item, dict) and "x" in item:
             prefab = Entity.from_dict(item)
@@ -847,7 +1028,12 @@ def load_level(path):
 
 
 def save_level(path, level):
-    """Write JSON with one grid row per line so the file is easy to read and diff."""
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(level_text(level))
+
+
+def level_text(level):
+    """The map file's JSON as text, with one grid row per line so it is easy to read and diff."""
     blocks = []
     for name in level.grid_names():
         rows = ",\n".join("      " + json.dumps(row) for row in level.grids[name])
@@ -865,12 +1051,16 @@ def save_level(path, level):
            if level.ammo_types else "")
         + ('  "guns": [\n' + ",\n".join("    " + json.dumps(asdict(g)) for g in level.guns) + "\n  ],\n"
            if level.guns else "")
+        + (f'  "ambient": {level.ambient:g},\n' if level.ambient < 1.0 else "")
+        + ('  "lights": [\n' + ",\n".join("    " + json.dumps(asdict(light)) for light in level.lights) + "\n  ],\n"
+           if level.lights else "")
+        + ('  "effects": [\n' + ",\n".join("    " + json.dumps(asdict(f)) for f in level.effects) + "\n  ],\n"
+           if level.effects else "")
         + ('  "prefabs": [\n' + ",\n".join("    " + json.dumps(asdict(p)) for p in level.prefabs) + "\n  ],\n"
            if level.prefabs else "") +
         '  "grids": {\n' + ",\n".join(blocks) + "\n  }\n}\n"
     )
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(text)
+    return text
 
 
 def load_or_default(path=MAP_PATH):

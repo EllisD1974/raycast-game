@@ -5,7 +5,7 @@ it knows which are present, when the ones that respawn come back, and applies wh
 the player (PlayerStats). No pygame: main.py draws the sprites and the HUD.
 """
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from constants import PLAYER_HEIGHT
 
@@ -28,7 +28,7 @@ class Item:
     z: float                    # height of the sprite's bottom
     present: bool = True
     back_at: float = None       # clock time a respawning item comes back
-    touching: bool = False      # the player is on it (a persistent item waits for them to step off)
+    touching: set = field(default_factory=set)   # who is on it (a persistent item waits for them to step off)
 
 
 def describe(entity):
@@ -63,11 +63,11 @@ class Entities:
                 self.items.append(Item(e, world.floor_of(e.span, e.x, e.y) + e.lift))
 
     def sprites(self):
-        """(x, y, z, size, tile, spin) of every item that is there, for the renderer. Animations are
+        """(x, y, z, size, tile, spin, alpha, glow) of every item that is there, for the renderer. Animations are
         applied here: a float adds a bob to the height, a rotate sets the spin angle in radians."""
         out = []
         for item in self.items:
-            if not item.present:
+            if not item.present or not item.entity.shown:
                 continue
             e = item.entity
             z, spin = item.z, 0.0
@@ -79,7 +79,7 @@ class Entities:
                     z += a.amount * (1.0 + math.sin(t))     # 0 .. 2*amount above its rest height
                 elif a.kind == "rotate":
                     spin += t
-            out.append((e.x, e.y, z, e.size, e.tile, spin))
+            out.append((e.x, e.y, z, e.size, e.tile, spin, 1.0, 1.0 if e.light else 0.0))   # (an item with a light glows)
         return out
 
     @staticmethod
@@ -89,29 +89,41 @@ class Entities:
             return False
         return player.z < item.z + e.size and player.z + PLAYER_HEIGHT > item.z      # the heights overlap
 
-    def update(self, player, stats, dt, inventory=None):
-        """Advance dt seconds: bring back respawning items and pick up what the player touches.
-        Returns the messages of the pickups made this tick. Pickups that go in the inventory (an item,
-        a gun, ammo) need `inventory`; without one they are still picked up but give nothing."""
+    def advance(self, dt):
+        """Move the clock on dt seconds and bring back the respawning items whose time is up."""
         self.clock += dt
+        for item in self.items:
+            if not item.present and item.back_at is not None and self.clock >= item.back_at:
+                item.present, item.back_at = True, None
+
+    def touch(self, player, stats, inventory=None, who=None):
+        """Pick up what `player` touches. `who` tells players apart (a persistent item counts again for
+        each of them separately once they step away and return). Returns the messages of the pickups
+        made. Pickups that go in the inventory (an item, a gun, ammo) need `inventory`; without one
+        they are still picked up but give nothing."""
         messages = []
         for item in self.items:
+            if not item.present or item.entity.mode == "scenery":
+                continue
             e = item.entity
-            if not item.present:
-                if item.back_at is not None and self.clock >= item.back_at:
-                    item.present, item.back_at = True, None
-                else:
-                    continue
             touching = self._touched(item, player)
-            if touching and not item.touching:
+            if touching and who not in item.touching:
                 self._apply(e, stats, inventory, self.guns)
                 messages.append(describe(e))
                 if e.mode == "once":
                     item.present = False
                 elif e.mode == "respawn":
                     item.present, item.back_at = False, self.clock + e.respawn
-            item.touching = touching
+            if touching:
+                item.touching.add(who)
+            else:
+                item.touching.discard(who)
         return messages
+
+    def update(self, player, stats, dt, inventory=None):
+        """Advance dt seconds and pick up what the one player touches: advance() then touch()."""
+        self.advance(dt)
+        return self.touch(player, stats, inventory)
 
     @staticmethod
     def _apply(entity, stats, inventory=None, guns=None):

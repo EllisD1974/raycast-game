@@ -344,14 +344,19 @@ def render_scene(fb, px, py, eye_z, eye_span, dir_x, dir_y, plane_x, plane_y, ho
 
 @njit(cache=True, parallel=True)
 def draw_sprites(fb, zb, px, py, eye_z, dir_x, dir_y, pitch, focal,
-                 sp_x, sp_y, sp_z, sp_size, sp_tex, sp_spin, textures, max_dist, fog_dist):
+                 sp_x, sp_y, sp_z, sp_size, sp_tex, sp_spin, sp_alpha, sp_lit, sp_glow, ambient, textures, max_dist,
+                 fog_dist):
     """Draw flat sprites that always face the camera, over a picture already drawn by
     render_scene_depth (or raypitch.render_scene_pitch). The camera looks along (dir_x, dir_y),
     tilted up by `pitch` radians. The sprites must be sorted farthest first. sp_z is the height of a
     sprite's bottom, sp_size its height and width in world units. A sprite pixel shows only where it
     is nearer than what is already there (zb), so walls, ledges and floors hide it; texture alpha
     blends it (0 is see-through, 255 opaque). sp_spin is an angle in radians: the sprite turns around
-    its vertical axis, so it narrows to a sliver edge-on and shows mirrored once it has turned its back."""
+    its vertical axis, so it narrows to a sliver edge-on and shows mirrored once it has turned its back.
+    sp_alpha (0..1) makes the whole sprite that solid, on top of the texture's own alpha (particles fade).
+    Lighting (see raylight.py): sp_lit[i] is the light (r, g, b) falling on sprite i and `ambient` how bright
+    the map is without lights, so a sprite is its picture * (fog shade * ambient + light); sp_glow[i] (0..1) is
+    how much it lights itself: a glowing sprite is never darker than that fraction of its own colours."""
     width, height = fb.shape[0], fb.shape[1]
     tsize = textures.shape[1]
     cp, sp = math.cos(pitch), math.sin(pitch)
@@ -381,6 +386,9 @@ def draw_sprites(fb, zb, px, py, eye_z, dir_x, dir_y, pitch, focal,
             if ybot <= ytop:
                 continue
             shade = _shade(depth, fog_dist)
+            lit_r = max(shade * ambient + sp_lit[i, 0], sp_glow[i])
+            lit_g = max(shade * ambient + sp_lit[i, 1], sp_glow[i])
+            lit_b = max(shade * ambient + sp_lit[i, 2], sp_glow[i])
             for r in range(max(0, int(math.ceil(ytop))), min(height, int(math.ceil(ybot)))):
                 if depth >= zb[x, r]:
                     continue
@@ -388,6 +396,7 @@ def draw_sprites(fb, zb, px, py, eye_z, dir_x, dir_y, pitch, focal,
                 alpha = textures[sp_tex[i], ty, tx, 3]
                 if alpha == 0:
                     continue
-                a = alpha / 255.0
-                for c in range(3):
-                    fb[x, r, c] = np.uint8(textures[sp_tex[i], ty, tx, c] * shade * a + fb[x, r, c] * (1.0 - a))
+                a = alpha / 255.0 * sp_alpha[i]
+                fb[x, r, 0] = np.uint8(min(255.0, textures[sp_tex[i], ty, tx, 0] * lit_r) * a + fb[x, r, 0] * (1.0 - a))
+                fb[x, r, 1] = np.uint8(min(255.0, textures[sp_tex[i], ty, tx, 1] * lit_g) * a + fb[x, r, 1] * (1.0 - a))
+                fb[x, r, 2] = np.uint8(min(255.0, textures[sp_tex[i], ty, tx, 2] * lit_b) * a + fb[x, r, 2] * (1.0 - a))

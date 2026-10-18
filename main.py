@@ -7,6 +7,9 @@ Run:  python make_atlas.py   (once: creates assets/textures.png, the 32x32 textu
           SPACE jump, TAB let go of / take back the mouse, ESC quit, F11 fullscreen
       The game opens maximized and can be resized; the picture keeps its aspect ratio.
       python main.py --map other.json   (play a different map)
+Multiplayer (one player hosts, the others join with the password):
+      python main.py --host PASSWORD [--port 7777] [--bind 0.0.0.0]
+      python main.py --join ADDRESS PASSWORD [--port 7777]
 Edit the map with:  python map_editor.py
 Debug: python main.py --snapshot out.png [--at X Y ANGLE_RADIANS [--span 0|1]] [--pitch DEGREES]
        (render one frame without a window; --span N stands on floor N, counting from 0)
@@ -16,21 +19,24 @@ The first start compiles the renderer with numba (some seconds); later starts us
 import math
 import os
 import sys
+import time
 
 import pygame
 
+import net
 from atlas import ATLAS_PATH, atlas_array, transparent_tiles, unpack_atlas
+from character import character_tiles
 from constants import FPS_CAP, HEIGHT, MOUSE_SENSITIVITY, TURN_SPEED, WIDTH
-from entities import Entities, PlayerStats
+from game import Game, Inputs
 from hud import draw_hud
-from inventory import Inventory
 from mapfile import MAP_PATH, load_or_default
-from physics import look, spawn, step
-from projectiles import Projectiles
+from physics import look
 from renderer import BACKGROUND, Renderer, fit_rect  # noqa: F401  (re-exported: main.Renderer etc.)
+from session import ClientSession, HostSession, LocalSession
 from window import maximize
 from world import World
 
+JOIN_TIMEOUT = 15.0                            # seconds to wait for the host's map after joining
 CROSSHAIR = (255, 255, 255)
 CROSSHAIR_OUTLINE = (0, 0, 0)
 
@@ -121,6 +127,23 @@ def arg_values(flag, count):
     return sys.argv[i + 1:i + 1 + count]
 
 
+def join(address, password, port, make_world, character_tile):
+    """Connect to a host and wait for its map and first snapshot; exits with a message if that fails."""
+    session = ClientSession(net.Client(address, port, password), make_world, character_tile)
+    print(f"Joining {address}:{port}...")
+    give_up = time.monotonic() + JOIN_TIMEOUT
+    while not session.ready and not session.ended:
+        pygame.event.pump()
+        session.step(Inputs(), 0.0)
+        if time.monotonic() > give_up:
+            session.close()
+            sys.exit("the host did not send the game")
+        time.sleep(0.01)
+    if session.ended:
+        sys.exit(f"could not join: {session.ended}")
+    return session
+
+
 def main():
     pygame.init()
     # A normal resizable window: the picture is scaled onto it by present(), not by pygame, so
@@ -132,24 +155,41 @@ def main():
         sys.exit("textures.png not found - run `python make_atlas.py` first")
     tiles = unpack_atlas(ATLAS_PATH)
 
-    map_path = (arg_values("--map", 1) or [MAP_PATH])[0]
-    if "--map" in sys.argv and not os.path.exists(map_path):
-        sys.exit(f"map file not found: {map_path}")          # don't silently play another map
-    level = load_or_default(map_path)
-    textures = atlas_array(tiles)
-    world = World(level, len(tiles), transparent_tiles(textures))   # tiles with alpha make see-through walls
-    player = spawn(level, world)
+    textures = atlas_array(tiles + character_tiles())       # the character pictures follow the atlas's tiles
+    character_tile = len(tiles)
+    see_through = transparent_tiles(textures)[:len(tiles)]   # tiles with alpha make see-through walls
+
+    def make_world(level):
+        return World(level, len(tiles), see_through)
+
     renderer = Renderer(textures)
-    items = Entities(level, world)
-    stats = PlayerStats()
-    inventory = Inventory()
-    projectiles = Projectiles()
+    port = int((arg_values("--port", 1) or [net.DEFAULT_PORT])[0])
+    if arg_values("--join", 2):
+        address, password = arg_values("--join", 2)
+        session = join(address, password, port, make_world, character_tile)
+    else:
+        map_path = (arg_values("--map", 1) or [MAP_PATH])[0]
+        if "--map" in sys.argv and not os.path.exists(map_path):
+            sys.exit(f"map file not found: {map_path}")      # don't silently play another map
+        level = load_or_default(map_path)
+        game = Game(level, make_world(level), character_tile=character_tile)
+        if arg_values("--host", 1):
+            bind = (arg_values("--bind", 1) or ["0.0.0.0"])[0]
+            try:
+                host = net.Host(arg_values("--host", 1)[0], port, bind)
+            except OSError as e:
+                sys.exit(f"cannot host on {bind}:{port}: {e}")
+            session = HostSession(game, host)
+            print(f"Hosting on {bind}:{host.port}; others join with --join <your address> <password>")
+        else:
+            session = LocalSession(game)
     kick = 0.0                                    # 1 right after a shot, fading to 0 (the gun's recoil)
     font = pygame.font.Font(None, 22)
     message, message_left = "", 0.0
 
     # `--snapshot out.png` renders one frame and exits (for checking).
     if "--snapshot" in sys.argv:
+        player, world = session.me.body, session.game.world
         at = arg_values("--at", 3)
         if at:
             player.x, player.y, player.angle = (float(v) for v in at)
@@ -159,7 +199,7 @@ def main():
         pitch = arg_values("--pitch", 1)
         if pitch:
             look(player, math.radians(float(pitch[0])))
-        pygame.image.save(renderer.draw(world, player, items.sprites()), arg_values("--snapshot", 1)[0])
+        pygame.image.save(renderer.draw(world, player, session.game.items.sprites(), session.lighting()), arg_values("--snapshot", 1)[0])
         return
 
     maximize()                       # the game opens maximized; the picture scales to fit
@@ -167,9 +207,11 @@ def main():
     mouse.set_captured(True)
     print("Compiling the renderer (first run only; later runs use the cache)...")
     jump_pressed = reload_pressed = False
+    equips, cycle = [], 0
     running = True
     while running:
-        dt = min(clock.tick(FPS_CAP) / 1000, 0.05)
+        elapsed = clock.tick(FPS_CAP) / 1000
+        dt = min(elapsed, 0.05)
         for event in pygame.event.get():
             if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
                 running = False
@@ -182,35 +224,37 @@ def main():
             elif event.type == pygame.KEYDOWN and event.key == pygame.K_r:
                 reload_pressed = True
             elif event.type == pygame.KEYDOWN and pygame.K_1 <= event.key <= pygame.K_9:
-                inventory.equip(event.key - pygame.K_1)        # 1-9 take out that gun (again: put it away)
+                equips.append(event.key - pygame.K_1)          # 1-9 take out that gun (again: put it away)
             elif event.type == pygame.MOUSEWHEEL and mouse.captured:
-                inventory.cycle(-event.y)                      # the wheel steps through the guns
+                cycle -= event.y                               # the wheel steps through the guns
             else:
                 mouse.handle_event(event)
 
         forward, strafe, key_turn, sprint = read_movement(pygame.key.get_pressed())
         mouse_turn, tilt = mouse.take()
-        step(world, player, forward, strafe, key_turn * TURN_SPEED * dt + mouse_turn, jump_pressed, dt, sprint)
-        look(player, tilt)
-        jump_pressed = False
-        trigger = mouse.captured and pygame.mouse.get_pressed()[0]
-        for gun in inventory.update(dt, trigger, reload_pressed):
-            projectiles.fire(player, gun, level.ammo_for(gun))
+        wish = Inputs(forward, strafe, key_turn * TURN_SPEED * dt + mouse_turn, tilt, jump_pressed, sprint,
+                      mouse.captured and pygame.mouse.get_pressed()[0], reload_pressed, tuple(equips), cycle)
+        jump_pressed = reload_pressed = False
+        equips, cycle = [], 0
+        happened = session.step(wish, dt, elapsed)
+        if session.ended:
+            print(f"Game over: {session.ended}")
+            running = False
+        if happened.fired:
             kick = 1.0
-        reload_pressed = False
         kick = max(0.0, kick - dt * 8.0)
-        projectiles.update(world, dt)
-        picked = items.update(player, stats, dt, inventory)
-        if picked:
-            message, message_left = ", ".join(picked), 1.5
+        if happened.picked:
+            message, message_left = ", ".join(happened.picked), 1.5
         message_left = max(0.0, message_left - dt)
 
-        picture = renderer.draw(world, player, items.sprites() + projectiles.sprites())
-        draw_hud(picture, font, stats, message if message_left > 0 else "", inventory, tiles, kick)
+        me = session.me
+        picture = renderer.draw(session.world, me.body, session.sprites(), session.lighting())
+        draw_hud(picture, font, me.stats, message if message_left > 0 else "", me.inventory, tiles, kick)
         present(pygame.display.get_surface(), picture)
-        pygame.display.set_caption(f"simple raycaster - {clock.get_fps():.0f} fps")
+        pygame.display.set_caption(f"simple raycaster - {clock.get_fps():.0f} fps{session.status()}")
         pygame.display.flip()
     mouse.set_captured(False)
+    session.close()
     pygame.quit()
 
 

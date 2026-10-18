@@ -83,6 +83,24 @@ multiplier, and guns of the same type share one pool of spare rounds. Click a Sp
 out with an item whose effect is "Give a gun" (or "Give ammo"); an "Inventory item" effect puts a
 named thing in the player's inventory instead. Choosing a map tool goes back to the map.
 
+The Effects section (X or the Effects button) is where you design particle effects: "+ Add effect", then
+shape it in the Details pane (the particle picture from the atlas, a burst or a stream, how many, how long
+they live, speed, spread, gravity, drag, size and fade) while a live side view plays it. Effects are
+saved in the map and reused by name: a gun's "Muzzle effect" plays where it fires, an ammo type's "Trail
+effect" follows its bullets, and an item's "Emits" sends the effect up from the item (set its Mode to
+Scenery so it cannot be picked up, and Sprite to Hidden to see only the particles). They are only for looks
+and are worked out on each player's own machine.
+
+The Lights section (L or the Lights button) is where you design lights: "+ Add light", then set its colour,
+brightness, reach, flicker and flash length in the Details pane while a preview shows it from above. Lights
+are saved in the map and used by name: a gun's "Muzzle light" flashes where it fires, an ammo type's "Bullet
+light" travels with its bullets, an effect's "Particle light" makes every particle glow (and be drawn at full
+brightness), and an item's "Light" lights up around it (a Scenery item with a hidden sprite is just a light
+placed in the map). "Glowing wall tile" makes every wall made from that atlas tile light the open cells beside
+it. The first row, "Map ambient light", sets how bright the map is without lights: lower it to make the map
+dark so lights show. Walls stop light. Lights only change how things look and are worked out on each player's
+own machine.
+
 The 3D view (V or the 3D button shows and hides it) is a live picture of the level at the right of
 the window, drawn by the game's own renderer, and it follows every edit as you make it, even
 mid-stroke. Drag inside it to look around; with the mouse over it, W A S D / arrows walk and turn
@@ -101,20 +119,24 @@ import os
 import subprocess
 import sys
 import time
+from dataclasses import astuple
 
+import numpy as np
 import pygame
 
 from atlas import ATLAS_PATH, atlas_array, transparent_tiles, unpack_atlas
 from constants import HEIGHT, MOUSE_SENSITIVITY, PLAYER_HEIGHT, TILE, WIDTH
 from mapfile import (ANIMATION_KINDS, ANIMATION_LABELS, DEFAULTS, EDIT_LAYERS, EFFECT_LABELS, ENTITY_EFFECTS,
                      ENTITY_MODES, GUN_MODE_LABELS, GUN_MODES, MAP_PATH, MAX_NAME, MAX_NAME_LENGTH, MIN_WALL_GAP,
-                     MODE_LABELS, SHOT_LABELS, SHOT_TYPES, Animation, AmmoType, Entity, Gun, Level, default_level,
+                     EFFECT_KIND_LABELS, EFFECT_KINDS, MIN_AMBIENT, MODE_LABELS, SHOT_LABELS, SHOT_TYPES, Animation, AmmoType, Effect,
+                     Entity, Gun, Level, Light, default_level,
                      grid_name, load_level, save_level, split_grid_name)
 import details
 import hud
 from entities import describe
 from details import PANE_WIDTH, Field
 from inventory import GunState
+from particles import UP, ParticleSystem
 from preview import Preview
 from window import maximize
 
@@ -173,7 +195,21 @@ TOOLS = {"paint": "B", "erase": "E", "fill": "F", "pick": "I", "start": "S", "st
 TOOL_KEYS = {pygame.K_b: "paint", pygame.K_e: "erase", pygame.K_f: "fill",
              pygame.K_i: "pick", pygame.K_s: "start", pygame.K_t: "stairs", pygame.K_c: "camera",
              pygame.K_n: "entity"}
-ENTITY_MODE_COLOURS = {"once": (255, 255, 255), "respawn": (90, 210, 255), "persistent": (110, 230, 120)}
+ENTITY_MODE_COLOURS = {"once": (255, 255, 255), "respawn": (90, 210, 255), "persistent": (110, 230, 120),
+                       "scenery": (200, 150, 255)}
+FX_CELL = 70                                    # pixels a cell is drawn at in an effect's preview
+FX_BASE = 0.35                                  # cells above the preview's floor that the effect starts
+FX_CAP = 400                                    # particles drawn in the preview at most
+LIGHT_CELL = 44                                 # pixels a cell is drawn at in a light's preview
+AMBIENT_ROW = -1                                # light_selected value for the map's ambient light, listed first
+
+
+class PreviewFloor:
+    """The only thing in an effect's preview for particles to hit: a floor at height 0."""
+
+    @staticmethod
+    def point_open(x, y, z):
+        return z > 0.0
 ENTITY_FIRST_TILE = 10                          # the first item sprite in the stock atlas (the gem)
 RAMP_NAMES = {1: "East", 2: "West", 3: "South", 4: "North"}
 RAMP_VECTORS = {1: (1, 0), 2: (-1, 0), 3: (0, 1), 4: (0, -1)}
@@ -295,6 +331,13 @@ class Editor:
         self.ammo_selected = None               # index in level.ammo_types of the ammo type being edited
         self.prefabs_mode = False               # the Prefabs section is showing instead of the map
         self.prefab_selected = None             # index in level.prefabs of the prefab being edited
+        self.lights_mode = False                # the Lights section is showing instead of the map
+        self.light_selected = None              # index in level.lights of the light being edited, or AMBIENT_ROW
+        self.light_clock = 0.0                  # time for the flicker in a light's preview
+        self.effects_mode = False               # the Effects section is showing instead of the map
+        self.effect_selected = None             # index in level.effects of the effect being edited
+        self.fx_sim = None                      # [ParticleSystem, settings it was made from, time to next burst]
+        self.fx_scaled = {}                     # (tile, pixels) -> a particle picture at that size
         self.place_prefab = ""                  # the prefab the Entity tool places ("" = a plain item)
         self.tile_target = "tile"               # the tile field the atlas sets while a pane is open
         self.selection = {0}                    # selected atlas tile indices (0-based)
@@ -407,13 +450,28 @@ class Editor:
         return None
 
     def section_open(self):
-        """True while a section (Guns, Prefabs) is showing in place of the map."""
-        return self.guns_mode or self.prefabs_mode
+        """True while a section (Guns, Prefabs, Effects) is showing in place of the map."""
+        return self.guns_mode or self.prefabs_mode or self.effects_mode or self.lights_mode
 
     def selected_prefab(self):
         """The prefab being edited in the Prefabs section, or None."""
         if self.prefabs_mode and self.prefab_selected is not None and 0 <= self.prefab_selected < len(self.level.prefabs):
             return self.level.prefabs[self.prefab_selected]
+        return None
+
+    def selected_light(self):
+        """The light being edited in the Lights section, or None (also None while the map's ambient is chosen)."""
+        if self.lights_mode and self.light_selected is not None and 0 <= self.light_selected < len(self.level.lights):
+            return self.level.lights[self.light_selected]
+        return None
+
+    def ambient_chosen(self):
+        return self.lights_mode and self.light_selected == AMBIENT_ROW
+
+    def selected_effect(self):
+        """The particle effect being edited in the Effects section, or None."""
+        if self.effects_mode and self.effect_selected is not None and 0 <= self.effect_selected < len(self.level.effects):
+            return self.level.effects[self.effect_selected]
         return None
 
     def editing_entity(self):
@@ -438,7 +496,8 @@ class Editor:
         return None
 
     def details_width(self):
-        chosen = self.selected_entity() or self.selected_gun() or self.selected_ammo() or self.selected_prefab()
+        chosen = (self.selected_entity() or self.selected_gun() or self.selected_ammo() or self.selected_prefab()
+                  or self.selected_effect() or self.selected_light() or (self.ambient_chosen() or None))
         return PANE_WIDTH if chosen is not None or self.palette_active() else 0
 
     def details_rect(self):
@@ -451,6 +510,14 @@ class Editor:
 
     def details_fields(self):
         """Fields describing the selected thing: a gun in the Guns section, else an item."""
+        light = self.selected_light()
+        if light is not None:
+            return self.light_fields(light)
+        if self.ambient_chosen():
+            return self.ambient_fields()
+        effect = self.selected_effect()
+        if effect is not None:
+            return self.effect_fields(effect)
         gun = self.selected_gun()
         if gun is not None:
             return self.gun_fields(gun)
@@ -511,7 +578,10 @@ class Editor:
         if e.mode == "respawn":
             fields.append(field("respawn", "Respawn", "num", step=1.0, low=0.0, high=600.0, unit="s"))
         fields += [field("size", "Size", "num", step=0.1, low=0.1, high=3.0),
-                   field("lift", "Lift", "num", step=0.1, low=-2.0, high=5.0)]
+                   field("lift", "Lift", "num", step=0.1, low=-2.0, high=5.0),
+                   field("shown", "Sprite", "enum", choices=(True, False), labels={True: "Shown", False: "Hidden"}),
+                   field("emits", "Emits", "enum", choices=self.effect_choices(), labels=self.effect_labels()),
+                   field("light", "Light", "enum", choices=self.light_choices(), labels=self.light_labels())]
         fields.append(Field("animations", "Animations (none)" if not e.animations else "Animations",
                             "header", None, None))
         for i, a in enumerate(e.animations):
@@ -556,6 +626,9 @@ class Editor:
         names = ("",) + tuple(a.name for a in self.level.ammo_types)
         fields.append(field("ammo", "Ammo type", "enum", choices=names,
                             labels={"": "(default bullet)", **{n: n for n in names}}))
+        fields.append(field("muzzle", "Muzzle effect", "enum", choices=self.effect_choices(),
+                            labels=self.effect_labels()))
+        fields.append(field("flash", "Muzzle light", "enum", choices=self.light_choices(), labels=self.light_labels()))
         return fields
 
     def ammo_fields(self, a):
@@ -569,7 +642,9 @@ class Editor:
                 field("size", "Bullet size", "num", step=0.02, low=0.01, high=2.0),
                 field("speed", "Bullet speed", "num", step=1.0, low=0.5, high=200.0, unit="/s"),
                 field("range", "Bullet range", "num", step=1.0, low=0.5, high=200.0),
-                field("damage_mult", "Damage x", "num", step=0.1, low=0.0, high=100.0)]
+                field("damage_mult", "Damage x", "num", step=0.1, low=0.0, high=100.0),
+                field("trail", "Trail effect", "enum", choices=self.effect_choices(), labels=self.effect_labels()),
+                field("light", "Bullet light", "enum", choices=self.light_choices(), labels=self.light_labels())]
 
     def details_rows(self):
         rect = self.details_rect()
@@ -774,6 +849,202 @@ class Editor:
                 self.place_prefab = ""
             self.prefab_selected = None
 
+    # ---------------------------------------------------------------- particle effects
+
+    def effect_choices(self):
+        return ("",) + tuple(f.name for f in self.level.effects)
+
+    def effect_labels(self):
+        return {"": "(none)", **{f.name: f.name for f in self.level.effects}}
+
+    def effect_fields(self, f):
+        """The settings of one particle effect, for the Details pane in the Effects section."""
+        def field(name, label, kind, cast=None, **options):
+            return Field(name, label, kind, (lambda n=name: getattr(f, n)),
+                         (lambda v, n=name, c=cast: self.set_effect(n, c(v) if c else v)), **options)
+
+        fields = [field("name", "Name", "text"),
+                  field("tile", "Particle", "tile", int, low=0, high=len(self.tiles) - 1),
+                  field("kind", "Kind", "enum", choices=EFFECT_KINDS, labels=EFFECT_KIND_LABELS)]
+        if f.kind == "burst":
+            fields += [field("count", "Particles", "num", int, step=1.0, low=1, high=200),
+                       field("interval", "Repeat every", "num", step=0.25, low=0.0, high=600.0, unit="s")]
+        else:
+            fields += [field("rate", "Per second", "num", step=5.0, low=0.5, high=500.0, unit="/s"),
+                       field("duration", "Plays for", "num", step=0.05, low=0.0, high=60.0, unit="s")]
+        fields += [field("life", "Life", "num", step=0.1, low=0.05, high=30.0, unit="s"),
+                   field("life_var", "Life varies", "num", step=0.1, low=0.0, high=1.0),
+                   field("speed", "Speed", "num", step=0.25, low=0.0, high=50.0, unit="/s"),
+                   field("speed_var", "Speed varies", "num", step=0.1, low=0.0, high=1.0),
+                   field("spread", "Spread", "num", step=5.0, low=0.0, high=180.0, unit=" deg"),
+                   field("radius", "Start radius", "num", step=0.05, low=0.0, high=5.0),
+                   field("gravity", "Gravity", "num", step=0.5, low=-50.0, high=50.0),
+                   field("drag", "Drag", "num", step=0.25, low=0.0, high=20.0),
+                   field("size_start", "Size at start", "num", step=0.02, low=0.0, high=3.0),
+                   field("size_end", "Size at end", "num", step=0.02, low=0.0, high=3.0),
+                   field("alpha_start", "Solid at start", "num", step=0.1, low=0.0, high=1.0),
+                   field("alpha_end", "Solid at end", "num", step=0.1, low=0.0, high=1.0),
+                   field("collide", "Hits walls", "enum", choices=(True, False), labels={True: "Stops", False: "Passes through"}),
+                   field("light", "Particle light", "enum", choices=self.light_choices(), labels=self.light_labels())]
+        return fields
+
+    def new_effect_name(self, base="Effect", skip=None):
+        taken = {f.name for i, f in enumerate(self.level.effects) if i != skip}
+        if base not in taken:
+            return base
+        n = 2
+        while f"{base} {n}"[:MAX_NAME] in taken:
+            n += 1
+        return f"{base} {n}"[:MAX_NAME]
+
+    def add_effect(self):
+        """Add a particle effect (a small puff) and select it."""
+        self.begin_edit()
+        self.level.effects.append(Effect(name=self.new_effect_name("Effect")))
+        self.effect_selected = len(self.level.effects) - 1
+        self.tile_target = "tile"
+        self.say("Added an effect: shape it in the Details pane, then give it to a gun, an ammo type or an item")
+
+    def set_effect(self, name, value):
+        """Change one setting of the selected effect (one undo step). Renaming keeps the guns, ammo types
+        and items that use it pointing at it."""
+        f = self.selected_effect()
+        if f is None or getattr(f, name) == value:
+            return
+        if name == "name":
+            value = self.new_effect_name(str(value).strip()[:MAX_NAME], skip=self.effect_selected) \
+                if str(value).strip() else f.name
+            if value == f.name:
+                return
+        self.begin_edit()
+        if name == "name":
+            for g in self.level.guns:
+                if g.muzzle == f.name:
+                    g.muzzle = value
+            for a in self.level.ammo_types:
+                if a.trail == f.name:
+                    a.trail = value
+            for e in self.level.entities + self.level.prefabs:
+                if e.emits == f.name:
+                    e.emits = value
+        setattr(f, name, value)
+
+    def delete_effect(self):
+        f = self.selected_effect()
+        if f is None:
+            return
+        self.begin_edit()
+        for g in self.level.guns:                       # whatever used it simply has no effect now
+            if g.muzzle == f.name:
+                g.muzzle = ""
+        for a in self.level.ammo_types:
+            if a.trail == f.name:
+                a.trail = ""
+        for e in self.level.entities + self.level.prefabs:
+            if e.emits == f.name:
+                e.emits = ""
+        self.level.effects.remove(f)
+        self.effect_selected = None
+
+    # ---------------------------------------------------------------- lights
+
+    def light_choices(self):
+        return ("",) + tuple(light.name for light in self.level.lights)
+
+    def light_labels(self):
+        return {"": "(none)", **{light.name: light.name for light in self.level.lights}}
+
+    def ambient_fields(self):
+        """The map's ambient light, for the Details pane in the Lights section."""
+        return [Field("ambient", "Ambient light", "num", (lambda: self.level.ambient), self.set_ambient,
+                      step=0.05, low=MIN_AMBIENT, high=1.0)]
+
+    def set_ambient(self, value):
+        value = max(MIN_AMBIENT, min(1.0, float(value)))
+        if value != self.level.ambient:
+            self.begin_edit()
+            self.level.ambient = round(value, 4)
+
+    def light_fields(self, light):
+        """The settings of one light, for the Details pane in the Lights section."""
+        def field(name, label, kind, cast=None, **options):
+            return Field(name, label, kind, (lambda n=name: getattr(light, n)),
+                         (lambda v, n=name, c=cast: self.set_light(n, c(v) if c else v)), **options)
+
+        return [field("name", "Name", "text"),
+                field("r", "Red", "num", int, step=15.0, low=0, high=255),
+                field("g", "Green", "num", int, step=15.0, low=0, high=255),
+                field("b", "Blue", "num", int, step=15.0, low=0, high=255),
+                field("intensity", "Brightness", "num", step=0.25, low=0.0, high=20.0),
+                field("radius", "Reach", "num", step=0.5, low=0.5, high=20.0, unit=" cells"),
+                field("flicker", "Flicker", "num", step=0.1, low=0.0, high=1.0),
+                field("flicker_speed", "Flicker speed", "num", step=1.0, low=0.1, high=60.0, unit="/s"),
+                field("duration", "Flash length", "num", step=0.02, low=0.02, high=5.0, unit="s"),
+                field("wall_tile", "Glowing wall tile", "tile", int, low=-1, high=len(self.tiles) - 1)]
+
+    def new_light_name(self, base="Light", skip=None):
+        taken = {light.name for i, light in enumerate(self.level.lights) if i != skip}
+        if base not in taken:
+            return base
+        n = 2
+        while f"{base} {n}"[:MAX_NAME] in taken:
+            n += 1
+        return f"{base} {n}"[:MAX_NAME]
+
+    def add_light(self):
+        """Add a light (a warm one) and select it."""
+        self.begin_edit()
+        self.level.lights.append(Light(name=self.new_light_name("Light")))
+        self.light_selected = len(self.level.lights) - 1
+        self.tile_target = "wall_tile"
+        self.say("Added a light: set its colour and reach in the Details pane, then give it to a gun, item, ammo or effect")
+
+    def set_light(self, name, value):
+        """Change one setting of the selected light (one undo step). Renaming keeps what carries it pointing at it."""
+        light = self.selected_light()
+        if light is None or getattr(light, name) == value:
+            return
+        if name == "name":
+            value = self.new_light_name(str(value).strip()[:MAX_NAME], skip=self.light_selected) \
+                if str(value).strip() else light.name
+            if value == light.name:
+                return
+        self.begin_edit()
+        if name == "name":
+            for g in self.level.guns:
+                if g.flash == light.name:
+                    g.flash = value
+            for a in self.level.ammo_types:
+                if a.light == light.name:
+                    a.light = value
+            for f in self.level.effects:
+                if f.light == light.name:
+                    f.light = value
+            for e in self.level.entities + self.level.prefabs:
+                if e.light == light.name:
+                    e.light = value
+        setattr(light, name, value)
+
+    def delete_light(self):
+        light = self.selected_light()
+        if light is None:
+            return
+        self.begin_edit()
+        for g in self.level.guns:
+            if g.flash == light.name:
+                g.flash = ""
+        for a in self.level.ammo_types:
+            if a.light == light.name:
+                a.light = ""
+        for f in self.level.effects:
+            if f.light == light.name:
+                f.light = ""
+        for e in self.level.entities + self.level.prefabs:
+            if e.light == light.name:
+                e.light = ""
+        self.level.lights.remove(light)
+        self.light_selected = None
+
     def select_entity(self, entity):
         self.field_edit = None
         self.selected = None
@@ -783,9 +1054,16 @@ class Editor:
 
     def deselect(self):
         self.selected, self.field_edit, self.menu_open = None, None, None
-        self.gun_selected = self.ammo_selected = self.prefab_selected = None
+        self.gun_selected = self.ammo_selected = self.prefab_selected = self.effect_selected = None
+        self.light_selected = None
 
     def delete_selected(self):
+        if self.selected_light() is not None:
+            self.delete_light()
+            return
+        if self.selected_effect() is not None:
+            self.delete_effect()
+            return
         if self.selected_gun() is not None:
             self.delete_gun()
             return
@@ -835,6 +1113,10 @@ class Editor:
 
     def details_delete_label(self):
         """Text of the Details pane's delete button for what is selected ('' for none: the palette)."""
+        if self.selected_light() is not None:
+            return "Delete light"
+        if self.selected_effect() is not None:
+            return "Delete effect"
         if self.selected_gun() is not None:
             return "Delete gun"
         if self.selected_ammo() is not None:
@@ -920,7 +1202,7 @@ class Editor:
         if self.floor > 0:
             row1.append(("btn", "Del", "delfloor"))
         row1.append(("txt", f"floor {self.floor + 1} of {count}", DIM))
-        row1 += [None, ("btn", "Guns(G)", "guns"), ("btn", "Prefabs(P)", "prefabs"),
+        row1 += [None, ("btn", "Guns(G)", "guns"), ("btn", "Prefabs(P)", "prefabs"), ("btn", "Effects(X)", "effects"), ("btn", "Lights(L)", "lights"),
                  ("btn", "Key(K)", "legend"), ("btn", "3D(V)", "preview"),
                  ("btn", "Reload tex(F6)", "textures")]
         if self.show_preview:
@@ -1362,6 +1644,20 @@ class Editor:
             else:
                 self.say("Select a prefab first (or add one), then click a tile")
             return
+        if self.lights_mode:                            # the Lights section: the wall tile that glows with the light
+            if self.selected_light() is not None:
+                self.set_light("wall_tile", min(picked))
+                self.say(f"Walls made from tile {min(picked) + 1} now glow with this light")
+            else:
+                self.say("Select a light first (or add one), then click a wall tile to make it glow")
+            return
+        if self.effects_mode:                           # the Effects section: what each particle looks like
+            if self.selected_effect() is not None:
+                self.set_effect("tile", min(picked))
+                self.say(f"Particle picture: tile {min(picked) + 1}")
+            else:
+                self.say("Select an effect first (or add one), then click a tile")
+            return
         if self.guns_mode:                              # the Guns section: the picture of the gun or its bullet
             if self.selected_gun() is not None:
                 self.set_gun("tile", min(picked))
@@ -1440,6 +1736,10 @@ class Editor:
             self.ammo_selected = None
         if self.prefab_selected is not None and not 0 <= self.prefab_selected < len(self.level.prefabs):
             self.prefab_selected = None
+        if self.effect_selected is not None and not 0 <= self.effect_selected < len(self.level.effects):
+            self.effect_selected = None
+        if self.light_selected not in (None, AMBIENT_ROW) and not 0 <= self.light_selected < len(self.level.lights):
+            self.light_selected = None
         if self.place_prefab and self.level.prefab_named(self.place_prefab) is None:
             self.place_prefab = ""
         self.dropdown_open = False
@@ -1449,18 +1749,31 @@ class Editor:
             self.confirm = None
         if action != "dropdown":
             self.dropdown_open = False
-        if action == "guns":
-            self.guns_mode, self.prefabs_mode = not self.guns_mode, False
+        if action == "lights":
+            self.lights_mode, self.effects_mode, self.guns_mode, self.prefabs_mode = not self.lights_mode, False, False, False
+            self.deselect()
+            self.say("Lights: add one, set its colour and reach, then give it to a gun, item, ammo or effect"
+                     if self.lights_mode else "Back to the map")
+        elif action == "effects":
+            self.effects_mode, self.guns_mode, self.prefabs_mode = not self.effects_mode, False, False
+            self.lights_mode = False
+            self.deselect()
+            self.say("Effects: add one, shape it in the Details pane, then give it to a gun, ammo or item"
+                     if self.effects_mode else "Back to the map")
+        elif action == "guns":
+            self.guns_mode, self.prefabs_mode, self.effects_mode = not self.guns_mode, False, False
+            self.lights_mode = False
             self.deselect()
             self.say("Guns: add a gun, then edit it in the Details pane" if self.guns_mode else "Back to the map")
         elif action == "prefabs":
-            self.prefabs_mode, self.guns_mode = not self.prefabs_mode, False
+            self.prefabs_mode, self.guns_mode, self.effects_mode = not self.prefabs_mode, False, False
+            self.lights_mode = False
             self.deselect()
             self.say("Prefabs: add one, set its icon and settings, then place it with the Entity tool"
                      if self.prefabs_mode else "Back to the map")
         elif action.startswith("tool:"):
             self.tool = action[5:]
-            self.guns_mode = self.prefabs_mode = False
+            self.guns_mode = self.prefabs_mode = self.effects_mode = self.lights_mode = False
             if self.tool != "entity":
                 self.deselect()
             if self.tool == "camera" and not self.show_preview:
@@ -1535,6 +1848,8 @@ class Editor:
         """Per-frame work: keep the 3D world in step with the level, and walk the camera with the
         keys held while the mouse is over the 3D view (or is dragging in it)."""
         self.watch_textures()
+        self.step_fx_preview(dt)
+        self.light_clock += dt
         if not self.show_preview:
             return
         preview = self.ensure_preview()
@@ -1762,6 +2077,10 @@ class Editor:
             self.do("guns")
         elif e.key == pygame.K_p:
             self.do("prefabs")
+        elif e.key == pygame.K_x:
+            self.do("effects")
+        elif e.key == pygame.K_l:
+            self.do("lights")
         elif e.key == pygame.K_v:
             self.do("preview")
         elif e.key in LAYER_KEYS:
@@ -1826,6 +2145,12 @@ class Editor:
             elif self.prefabs_mode:
                 if e.button == 1:
                     self.prefabs_click(e.pos)
+            elif self.effects_mode:
+                if e.button == 1:
+                    self.effects_click(e.pos)
+            elif self.lights_mode:
+                if e.button == 1:
+                    self.lights_click(e.pos)
             elif e.button in (1, 3):
                 self.confirm = None
                 self.map_click(self.cell_at(e.pos), e.button)
@@ -1896,6 +2221,10 @@ class Editor:
             self.draw_guns(screen)
         elif self.prefabs_mode:
             self.draw_prefabs(screen)
+        elif self.effects_mode:
+            self.draw_effects(screen)
+        elif self.lights_mode:
+            self.draw_lights(screen)
         else:
             self.draw_map(screen)
         self.draw_panel(screen)
@@ -2255,17 +2584,282 @@ class Editor:
             self._draw_wrapped(screen, lines, card.x, card.bottom + 12, max(200, area.right - card.x - 20))
         screen.set_clip(None)
 
+    # ---------------------------------------------------------------- the Effects section
+
+    EFFECT_ROW_H = 46
+
+    def effect_rows(self):
+        """[(rect, effect index)] for the list of effects, and the rect of the Add button after it."""
+        area = self.map_area()
+        width = min(area.w - 40, 440)
+        rows = [(pygame.Rect(area.x + 20, area.y + 74 + i * self.EFFECT_ROW_H, width, self.EFFECT_ROW_H - 4), i)
+                for i in range(len(self.level.effects))]
+        top = area.y + 74 + len(rows) * self.EFFECT_ROW_H
+        return rows, pygame.Rect(area.x + 20, top, 170, 34)
+
+    def effects_click(self, pos):
+        rows, add = self.effect_rows()
+        if add.collidepoint(pos):
+            self.add_effect()
+            return
+        for rect, i in rows:
+            if rect.collidepoint(pos):
+                self.effect_selected = i
+                self.tile_target = "tile"
+                self.field_edit = self.menu_open = None
+                return
+
+    def effect_users(self, effect):
+        """Short names of what uses an effect: guns (muzzle), ammo types (trail) and how many items emit it."""
+        users = [f"{g.name} muzzle" for g in self.level.guns if g.muzzle == effect.name]
+        users += [f"{a.name} trail" for a in self.level.ammo_types if a.trail == effect.name]
+        emitting = sum(1 for e in self.level.entities if e.emits == effect.name)
+        if emitting:
+            users.append(f"{emitting} item{'s' if emitting != 1 else ''}")
+        return users
+
+    def effect_summary(self, f):
+        how = f"burst of {f.count}" if f.kind == "burst" else f"{f.rate:g} a second"
+        return f"{how}   life {f.life:g}s   speed {f.speed:g}   spread {f.spread:g} deg"
+
+    def step_fx_preview(self, dt):
+        """Keep the Effects section's live preview playing: restarted whenever the effect is changed,
+        a burst repeating after it dies away and a stream running all the time."""
+        f = self.selected_effect()
+        if f is None:
+            self.fx_sim = None
+            return
+        key = (self.effect_selected, astuple(f))
+        if self.fx_sim is None or self.fx_sim[1] != key:
+            self.fx_sim = [ParticleSystem([f], PreviewFloor()), key, 0.0]
+        sim, _, wait = self.fx_sim
+        if f.kind == "stream":
+            sim.attach("preview", f.name, 0.0, 0.0, FX_BASE, UP, dt)
+        else:
+            wait -= dt
+            if wait <= 0:
+                sim.play(f.name, 0.0, 0.0, FX_BASE, UP)
+                wait = max(f.interval, f.life * (1 + f.life_var) + 0.3)
+            self.fx_sim[2] = wait
+        sim.update(dt)
+
+    def draw_fx_preview(self, screen, card):
+        """The selected effect playing side on, over a floor: x across, height up. A cell is FX_CELL pixels."""
+        pygame.draw.rect(screen, (30, 33, 44), card)
+        floor_y = card.bottom - 26
+        pygame.draw.rect(screen, (58, 54, 50), (card.x, floor_y, card.w, card.bottom - floor_y))
+        centre = card.centerx
+        start_y = floor_y - FX_BASE * FX_CELL
+        pygame.draw.circle(screen, ACCENT, (centre, round(start_y)), 3)
+        for x in range(centre % FX_CELL, card.w, FX_CELL):          # a one cell grid so sizes can be judged
+            pygame.draw.line(screen, (44, 48, 60), (card.x + x, card.y), (card.x + x, floor_y))
+        if self.fx_sim is not None:
+            screen.set_clip(card)
+            for (x, y, z, size, tile, _spin, alpha, _glow) in self.fx_sim[0].sprites()[:FX_CAP]:
+                pixels = max(2, round(size * FX_CELL))
+                picture = self.fx_scaled.get((tile, pixels))
+                if picture is None:
+                    picture = pygame.transform.scale(self.tiles[max(0, min(tile, len(self.tiles) - 1))], (pixels, pixels))
+                    if len(self.fx_scaled) > 600:
+                        self.fx_scaled.clear()
+                    self.fx_scaled[(tile, pixels)] = picture
+                picture.set_alpha(round(255 * alpha))
+                screen.blit(picture, picture.get_rect(center=(round(centre + x * FX_CELL),
+                                                              round(floor_y - (z + size / 2) * FX_CELL))))
+            screen.set_clip(None)
+        pygame.draw.rect(screen, GRID, card.inflate(2, 2), 1)
+        screen.blit(self.small.render("side view, one grid square = 1 cell", True, DIM), (card.x + 8, card.bottom - 20))
+
+    def draw_effects(self, screen):
+        """The Effects section: the map's particle effects as a list, and a live preview of the selected one."""
+        area = self.map_area()
+        screen.set_clip(area)
+        pygame.draw.rect(screen, BG, area)
+        screen.blit(self.font.render("Particle effects in this map", True, ACCENT), (area.x + 20, area.y + 14))
+        screen.blit(self.small.render("Design an effect here, then give it to a gun (muzzle), an ammo type (trail) or an item.",
+                                      True, DIM), (area.x + 20, area.y + 40))
+        rows, add = self.effect_rows()
+        for rect, i in rows:
+            f = self.level.effects[i]
+            on = i == self.effect_selected
+            pygame.draw.rect(screen, BUTTON_ON if on else (BUTTON_HOT if rect.collidepoint(self.mouse) else BUTTON),
+                             rect, border_radius=4)
+            screen.set_clip(rect.clip(area))
+            screen.blit(self.tiles[max(0, min(f.tile, len(self.tiles) - 1))], (rect.x + 6, rect.y + (rect.h - TILE) // 2))
+            screen.blit(self.font.render(f.name, True, TEXT), (rect.x + 48, rect.y + 5))
+            screen.blit(self.small.render(self.effect_summary(f), True, TEXT if on else DIM), (rect.x + 48, rect.y + 24))
+            screen.set_clip(area)
+        self._draw_add_button(screen, add, "+ Add effect")
+        right = area.x + 20 + min(area.w - 40, 440) + 24
+        f = self.selected_effect()
+        if f is None:
+            note = "No effects yet: add one." if not self.level.effects else "Select an effect to edit it."
+            narrow = area.right - right <= 200
+            screen.blit(self.small.render(note, True, DIM), (add.x if narrow else right,
+                                                           add.bottom + 14 if narrow else area.y + 74))
+        else:
+            width = min(420, area.right - right - 20)
+            card = pygame.Rect(right, area.y + 74, width, 330)
+            if width < 220:
+                card = pygame.Rect(add.x, add.bottom + 20, min(420, max(160, area.w - 40)), 330)
+            self.draw_fx_preview(screen, card)
+            users = self.effect_users(f)
+            self._draw_wrapped(screen, (self.effect_summary(f), "used by: " + (", ".join(users) if users else "nothing yet")),
+                               card.x, card.bottom + 12, card.w)
+        screen.set_clip(None)
+
+    # ---------------------------------------------------------------- the Lights section
+
+    LIGHT_ROW_H = 46
+
+    def light_rows(self):
+        """(ambient row rect, [(rect, light index)], Add button rect) for the Lights section's list."""
+        area = self.map_area()
+        width = min(area.w - 40, 440)
+        ambient = pygame.Rect(area.x + 20, area.y + 74, width, self.LIGHT_ROW_H - 4)
+        rows = [(pygame.Rect(area.x + 20, area.y + 74 + (i + 1) * self.LIGHT_ROW_H, width, self.LIGHT_ROW_H - 4), i)
+                for i in range(len(self.level.lights))]
+        top = area.y + 74 + (len(rows) + 1) * self.LIGHT_ROW_H
+        return ambient, rows, pygame.Rect(area.x + 20, top, 170, 34)
+
+    def lights_click(self, pos):
+        ambient, rows, add = self.light_rows()
+        if add.collidepoint(pos):
+            self.add_light()
+            return
+        if ambient.collidepoint(pos):
+            self.light_selected = AMBIENT_ROW
+            self.field_edit = self.menu_open = None
+            return
+        for rect, i in rows:
+            if rect.collidepoint(pos):
+                self.light_selected = i
+                self.tile_target = "wall_tile"
+                self.field_edit = self.menu_open = None
+                return
+
+    def light_users(self, light):
+        """Short names of what carries a light: guns (muzzle), ammo (bullet), effects (particles), items and wall tiles."""
+        users = [f"{g.name} muzzle" for g in self.level.guns if g.flash == light.name]
+        users += [f"{a.name} bullet" for a in self.level.ammo_types if a.light == light.name]
+        users += [f"{f.name} particles" for f in self.level.effects if f.light == light.name]
+        carried = sum(1 for e in self.level.entities if e.light == light.name)
+        if carried:
+            users.append(f"{carried} item{'s' if carried != 1 else ''}")
+        if light.wall_tile >= 0:
+            users.append(f"wall tile {light.wall_tile + 1}")
+        return users
+
+    def light_summary(self, light):
+        shape = f"reach {light.radius:g}   brightness {light.intensity:g}"
+        return shape + (f"   flicker {light.flicker:g}" if light.flicker > 0 else "")
+
+    def draw_light_preview(self, screen, card, light):
+        """The light seen from above on a floor of one cell squares, with a wall along its right side that the
+        light cannot pass: how far it reaches, its colour and how it flickers (the same falloff the game uses)."""
+        pygame.draw.rect(screen, (22, 24, 30), card)
+        w, h = card.size
+        cx, cy = w // 2, h // 2
+        xs = (np.arange(w) - cx) / LIGHT_CELL
+        ys = (np.arange(h) - cy) / LIGHT_CELL
+        d2 = xs[None, :] ** 2 + ys[:, None] ** 2
+        r2 = light.radius ** 2
+        falloff = np.clip(1.0 - d2 / r2, 0.0, 1.0) ** 2
+        falloff[:, xs > 1.5] = 0.0                                  # the wall at 1.5 cells to the right stops it
+        wobble = 1.0
+        if light.flicker > 0:
+            t = self.light_clock * light.flicker_speed * math.tau
+            wobble = 1.0 - light.flicker * (1.0 - (0.5 + 0.25 * math.sin(t) + 0.25 * math.sin(t * 2.31)))
+        gain = light.intensity * wobble * falloff
+        colour = np.array((light.r, light.g, light.b), np.float64) / 255.0
+        floor = np.array((70, 66, 60), np.float64)
+        lit = np.clip(floor[None, None, :] * (0.25 + gain[:, :, None] * colour[None, None, :] * 1.6), 0, 255)
+        picture = pygame.surfarray.make_surface(lit.astype(np.uint8).swapaxes(0, 1))
+        screen.blit(picture, card)
+        for gx in range(cx % LIGHT_CELL, w, LIGHT_CELL):            # a one cell grid so the reach can be judged
+            pygame.draw.line(screen, (36, 38, 46), (card.x + gx, card.y), (card.x + gx, card.bottom))
+        for gy in range(cy % LIGHT_CELL, h, LIGHT_CELL):
+            pygame.draw.line(screen, (36, 38, 46), (card.x, card.y + gy), (card.right, card.y + gy))
+        wall = pygame.Rect(card.x + cx + round(1.5 * LIGHT_CELL), card.y, card.w, card.h)
+        pygame.draw.rect(screen, (120, 70, 60), wall.clip(card))
+        pygame.draw.circle(screen, (255, 255, 255), (card.x + cx, card.y + cy), 4)
+        pygame.draw.rect(screen, GRID, card.inflate(2, 2), 1)
+        screen.blit(self.small.render("from above, one grid square = 1 cell, wall on the right", True, DIM),
+                    (card.x + 8, card.bottom - 20))
+
+    def draw_lights(self, screen):
+        """The Lights section: the map's ambient light and lights as a list, and a preview of the selected light."""
+        area = self.map_area()
+        screen.set_clip(area)
+        pygame.draw.rect(screen, BG, area)
+        screen.blit(self.font.render("Lights in this map", True, ACCENT), (area.x + 20, area.y + 14))
+        screen.blit(self.small.render("Design a light here, then give it to a gun (muzzle), ammo (bullet), effect (particles) or item;",
+                                      True, DIM), (area.x + 20, area.y + 36))
+        screen.blit(self.small.render("or make a wall tile glow. Lower the ambient light to make a map dark.", True, DIM),
+                    (area.x + 20, area.y + 52))
+        ambient, rows, add = self.light_rows()
+        on = self.light_selected == AMBIENT_ROW
+        pygame.draw.rect(screen, BUTTON_ON if on else (BUTTON_HOT if ambient.collidepoint(self.mouse) else BUTTON),
+                         ambient, border_radius=4)
+        shade = round(255 * self.level.ambient)
+        pygame.draw.rect(screen, (shade, shade, shade), (ambient.x + 6, ambient.y + 7, 32, 28), border_radius=3)
+        screen.blit(self.font.render("Map ambient light", True, TEXT), (ambient.x + 48, ambient.y + 5))
+        screen.blit(self.small.render(f"{self.level.ambient:g}   (1 is fully lit, as maps always were)", True,
+                                      TEXT if on else DIM), (ambient.x + 48, ambient.y + 24))
+        for rect, i in rows:
+            light = self.level.lights[i]
+            on = i == self.light_selected
+            pygame.draw.rect(screen, BUTTON_ON if on else (BUTTON_HOT if rect.collidepoint(self.mouse) else BUTTON),
+                             rect, border_radius=4)
+            pygame.draw.rect(screen, (light.r, light.g, light.b), (rect.x + 6, rect.y + 7, 32, 28), border_radius=3)
+            screen.set_clip(rect.clip(area))
+            screen.blit(self.font.render(light.name, True, TEXT), (rect.x + 48, rect.y + 5))
+            screen.blit(self.small.render(self.light_summary(light), True, TEXT if on else DIM), (rect.x + 48, rect.y + 24))
+            screen.set_clip(area)
+        self._draw_add_button(screen, add, "+ Add light")
+        right = area.x + 20 + min(area.w - 40, 440) + 24
+        light = self.selected_light()
+        if light is None:
+            note = ("Select the ambient light or a light to edit it."
+                    if self.level.lights or self.light_selected != AMBIENT_ROW else "")
+            narrow = area.right - right <= 200
+            screen.blit(self.small.render(note, True, DIM), (add.x if narrow else right,
+                                                           add.bottom + 14 if narrow else area.y + 74))
+        else:
+            width = min(420, area.right - right - 20)
+            card = pygame.Rect(right, area.y + 74, width, 330)
+            if width < 220:
+                card = pygame.Rect(add.x, add.bottom + 20, min(420, max(160, area.w - 40)), 330)
+            self.draw_light_preview(screen, card, light)
+            users = self.light_users(light)
+            self._draw_wrapped(screen, (self.light_summary(light), "used by: " + (", ".join(users) if users else "nothing yet")),
+                               card.x, card.bottom + 12, card.w)
+        screen.set_clip(None)
+
     def draw_details(self, screen):
         """The docked Details pane (only while something is selected)."""
         rect = self.details_rect()
         if rect is None:
             return
         e, gun, ammo = self.selected_entity(), self.selected_gun(), self.selected_ammo()
-        prefab = self.selected_prefab()
+        prefab, effect = self.selected_prefab(), self.selected_effect()
+        light, ambient = self.selected_light(), self.ambient_chosen()
         theme = {"panel": PANEL_BG, "grid": GRID, "text": TEXT, "dim": DIM, "accent": ACCENT, "button": BUTTON,
                  "button_hot": BUTTON_HOT, "field": (28, 29, 34), "field_edit": (50, 52, 64),
                  "danger": (120, 50, 55), "danger_hot": (160, 64, 70), "button_on": BUTTON_ON}
-        if prefab is not None:
+        if ambient:
+            notes = ("How bright the map is without any", "light: 1 is fully lit, as maps were",
+                     "before lights; lower is darker, so", "lights show. Walls, items and the",
+                     "player are all dimmed by it.")
+        elif light is not None:
+            notes = ("Lights stop at walls. Flash length is how", "long a muzzle flash takes to fade.",
+                     "Click a wall tile in the atlas to make", "every wall of it glow with this light.",
+                     "Give it to a gun (Muzzle light), ammo", "(Bullet light), an effect (Particle", "light) or an item (Light).")
+        elif effect is not None:
+            notes = ("Plays on every player's own screen:", "it never changes the game.",
+                     "Click an atlas tile to set the particle.", "Give it to a gun (Muzzle effect), an ammo",
+                     "type (Trail effect) or an item (Emits).")
+        elif prefab is not None:
             used = sum(1 for i in self.level.entities if i.prefab == prefab.name)
             notes = (f"Placed {used} time{'s' if used != 1 else ''} in this map.",
                      "Changes here update every one of them.", "Click an atlas tile to set the icon.",
@@ -2296,8 +2890,8 @@ class Editor:
             notes = (f"Cell ({math.floor(e.x)}, {math.floor(e.y)}) on {self.level.names[e.span]}",
                      "Wheel over a row steps it.", "Click a number to type one.",
                      "Click an atlas tile: sets the sprite.", "Esc closes this; Del removes the item.")
-        title = ("Gun" if gun is not None else "Ammo type" if ammo is not None else "Prefab" if prefab is not None
-                 else "Prefab to place" if e is None else "Item")
+        title = ("Ambient light" if ambient else "Light" if light is not None else "Effect" if effect is not None else "Gun" if gun is not None else "Ammo type" if ammo is not None
+                 else "Prefab" if prefab is not None else "Prefab to place" if e is None else "Item")
         details.draw(screen, rect, title, self.details_rows(), theme, (self.font, self.small), focus=self.tile_target,
                      button_label=self.details_delete_label(),
                      editing=self.field_edit, hover=self.mouse, open_menu=self.menu_open, tile_surface=lambda i: self.tiles[max(0, min(i, len(self.tiles) - 1))],
@@ -2615,7 +3209,7 @@ class Editor:
                 continue
             active = action in (f"tool:{self.tool}", f"layer:{self.layer}") \
                 or (action == "legend" and self.show_legend) or (action == "guns" and self.guns_mode) \
-                or (action == "prefabs" and self.prefabs_mode)
+                or (action == "prefabs" and self.prefabs_mode) or (action == "effects" and self.effects_mode) or (action == "lights" and self.lights_mode)
             colour = BUTTON_ON if active else (BUTTON_HOT if rect.collidepoint(self.mouse) else BUTTON)
             pygame.draw.rect(screen, colour, rect, border_radius=4)
             text = self.font.render(label, True, TEXT)

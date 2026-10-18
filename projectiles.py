@@ -27,6 +27,9 @@ class Projectile:
     size: float
     damage: float
     range_left: float           # cells it can still fly
+    ident: int = 0              # tells bullets apart (for the trail that follows each)
+    trail: str = ""             # name of the particle Effect that follows it
+    light: str = ""             # name of the Light it carries
 
 
 @dataclass
@@ -40,6 +43,7 @@ class Hit:
 class Projectiles:
     def __init__(self, rng=None):
         self.bullets = []
+        self.next_ident = 1
         self.rng = rng or random.Random()
 
     def fire(self, player, gun, ammo=None):
@@ -62,7 +66,8 @@ class Projectiles:
         self.bullets.append(Projectile(
             player.x + dx * MUZZLE, player.y + dy * MUZZLE, player.eye_z - 0.03 + dz * MUZZLE,
             dx * ammo.speed, dy * ammo.speed, dz * ammo.speed,
-            ammo.tile, ammo.size, gun.damage * ammo.damage_mult, ammo.range))
+            ammo.tile, ammo.size, gun.damage * ammo.damage_mult, ammo.range, self.next_ident, ammo.trail, ammo.light))
+        self.next_ident += 1
 
     def update(self, world, dt):
         """Move every bullet dt seconds. Returns the Hit of each bullet that struck something."""
@@ -87,5 +92,5 @@ class Projectiles:
         return hits
 
     def sprites(self):
-        """(x, y, z, size, tile) of every bullet for the renderer (z is the bottom of the sprite)."""
-        return [(b.x, b.y, b.z - b.size / 2, b.size, b.tile) for b in self.bullets]
+        """(x, y, z, size, tile, spin, alpha, glow) of every bullet for the renderer (z is the bottom of the sprite)."""
+        return [(b.x, b.y, b.z - b.size / 2, b.size, b.tile, 0.0, 1.0, 1.0 if b.light else 0.0) for b in self.bullets]

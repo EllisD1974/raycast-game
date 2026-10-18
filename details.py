@@ -26,6 +26,7 @@ import pygame
 
 PANE_WIDTH = 340
 ROW_H = 34
+MIN_ROW_H = 26                                  # rows shrink to this when a pane has too many for the window
 TITLE_H = 34
 BUTTON_W = 28
 MENU_ITEM_H = 28
@@ -57,7 +58,7 @@ class Field:
         if self.kind == "enum":
             return self.labels.get(value, str(value))
         if self.kind == "tile":
-            return f"#{value + 1}"
+            return f"#{value + 1}" if value >= 0 else "none"
         return f"{value:g}{self.unit}"
 
     def stepped(self, direction, notches=1):
@@ -87,15 +88,23 @@ class Row:
     plus: pygame.Rect
 
 
+def row_height(rect, count):
+    """Height of each row: ROW_H, or less (down to MIN_ROW_H) when that many rows and the delete button
+    would not otherwise fit in the pane."""
+    room = rect.h - TITLE_H - 10 - 32 - 6
+    return max(MIN_ROW_H, min(ROW_H, room // max(1, count)))
+
+
 def rows_for(rect, fields):
     """Place one Row per field down the pane (below its title)."""
     rows = []
+    height = row_height(rect, len(fields))
     for i, f in enumerate(fields):
-        y = rect.y + TITLE_H + i * ROW_H
-        row = pygame.Rect(rect.x, y, rect.w, ROW_H)
-        plus = pygame.Rect(rect.right - 8 - BUTTON_W, y + 3, BUTTON_W, ROW_H - 6)
-        value = pygame.Rect(plus.x - 4 - 118, y + 3, 118, ROW_H - 6)
-        minus = pygame.Rect(value.x - 4 - BUTTON_W, y + 3, BUTTON_W, ROW_H - 6)
+        y = rect.y + TITLE_H + i * height
+        row = pygame.Rect(rect.x, y, rect.w, height)
+        plus = pygame.Rect(rect.right - 8 - BUTTON_W, y + 3, BUTTON_W, height - 6)
+        value = pygame.Rect(plus.x - 4 - 118, y + 3, 118, height - 6)
+        minus = pygame.Rect(value.x - 4 - BUTTON_W, y + 3, BUTTON_W, height - 6)
         rows.append(Row(f, row, minus, value, plus))
     return rows
 
@@ -181,7 +190,7 @@ def draw(screen, rect, title, rows, theme, fonts, editing=None, hover=None, tile
         typing = editing is not None and editing[0] == f.key
         box(row.value, theme["field_edit"] if typing else (theme["button_hot"] if hot(row.value) else theme["field"]),
             border=typing or open_menu == f.key or (f.kind == "tile" and focus == f.key))
-        if f.kind == "tile" and tile_surface is not None:
+        if f.kind == "tile" and tile_surface is not None and f.get() >= 0:
             picture = pygame.transform.scale(tile_surface(f.get()), (row.value.h - 4, row.value.h - 4))
             screen.blit(picture, (row.value.x + 4, row.value.y + 2))
             text = small.render(f.text(), True, theme["text"])

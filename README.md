@@ -13,6 +13,33 @@ Requires [uv](https://docs.astral.sh/uv/). It installs Python 3.13 and the depen
     uv run python main.py            # play (uses maps/map.json)
     uv run python map_editor.py      # edit a map (F5 saves and plays)
 
+## Particle effects
+
+Design effects in the editor's Effects section (X): pick a particle picture from the atlas, choose a burst
+or a stream, and shape how many, how long they live, speed, spread, gravity, drag, size and fade while a
+live side view plays them. Effects are saved in the map and used by name:
+
+- a gun's **Muzzle effect** plays where it fires;
+- an ammo type's **Trail effect** follows its bullets through the air;
+- an item's **Emits** sends the effect up from the item. Set its Mode to *Scenery* (it cannot be picked
+  up) and Sprite to *Hidden* to see only the particles.
+
+Effects only change how things look. Each player's machine works the particles out itself; when you host,
+joiners are only told "play this effect here" (for shots), and bullet trails and item emitters are drawn
+from what they already see. Particles need small pictures in `assets/textures.png` (a soft dot with
+transparent edges works best).
+
+## Multiplayer
+
+One player hosts with a password and the others join with it. The host runs the game and sends the map
+to joiners; everyone needs the same code and textures.
+
+    uv run python main.py --host SECRET                      # host (listens on 0.0.0.0:7777)
+    uv run python main.py --join 127.0.0.1 SECRET            # join (use the host's address)
+
+Add `--port N` to either to use another port (and `--bind 127.0.0.1` to the host to accept only this
+machine). Over the internet the host needs the port forwarded, or a VPN such as Tailscale.
+
 ## Test
 
     uv run pytest
