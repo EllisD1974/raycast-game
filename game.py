@@ -133,7 +133,7 @@ class Game:
         move_body(self.world, body, wish, dt)
         fired = inventory.update(dt, wish.fire, wish.reload)
         for gun in fired:
-            self.projectiles.fire(body, gun, self.level.ammo_for(gun))
+            self.projectiles.fire(body, gun, self.level.ammo_for(gun), player_id)
             shift = muzzle_shift(gun, body.angle)
             if gun.muzzle:
                 self.fx.append(muzzle_event(gun.muzzle, body, (gun.muzzle_offset_x, gun.muzzle_offset_y, gun.muzzle_offset_z)
@@ -141,6 +141,16 @@ class Game:
             if gun.flash:
                 self.flashes.append(muzzle_event(gun.flash, body, None, shift)[:4])
         return len(fired)
+
+    def hurt(self, player_id, damage):
+        """Take `damage` off a player's health. At zero they are out: back at the level's start, with full
+        health and only what a new player carries (their score stays)."""
+        state = self.players[player_id]
+        state.stats.health = max(0.0, state.stats.health - damage)
+        if state.stats.health <= 0.0:
+            state.body = spawn(self.level, self.world)              # in place: sessions hold on to this PlayerState
+            state.stats = PlayerStats(score=state.stats.score)
+            state.inventory = Inventory()
 
     def take_fx(self):
         """The particle effects to play since the last call (a muzzle flash for each shot fired)."""
@@ -153,9 +163,12 @@ class Game:
         return out
 
     def advance_world(self, dt):
-        """The shared part of dt seconds: bullets fly, items come back, players pick up what they touch.
-        Returns {player id: pickup messages}."""
-        self.projectiles.update(self.world, dt)
+        """The shared part of dt seconds: bullets fly (and hurt the players they strike), items come back,
+        players pick up what they touch. Returns {player id: pickup messages}."""
+        targets = [(pid, state.body.x, state.body.y, state.body.z) for pid, state in self.players.items()]
+        for hit in self.projectiles.update(self.world, dt, targets):
+            if hit.target in self.players:
+                self.hurt(hit.target, hit.damage)
         self.items.advance(dt)
         return {pid: self.items.touch(state.body, state.stats, state.inventory, who=pid)
                 for pid, state in self.players.items()}

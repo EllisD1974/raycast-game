@@ -2,13 +2,15 @@
 
 A projectile flies in a straight line, in small steps so it cannot skip through a thin wall, until
 it runs out of range or is no longer in open space (inside a wall, a floor, a ceiling or glass).
-Nothing in the game takes damage yet, so a hit only removes the bullet and is reported (position and
-the damage it carries) for whatever wants to use it later.
+A bullet also stops in any player it passes through other than the one who fired it (a player is an
+upright cylinder PLAYER_RADIUS wide and PLAYER_HEIGHT tall). Either way a hit removes the bullet and is
+reported (position, the damage it carries, who fired it and who it struck) for the game to act on.
 """
 import math
 import random
 from dataclasses import dataclass
 
+from constants import PLAYER_HEIGHT, PLAYER_RADIUS
 from mapfile import AmmoType
 
 MAX_STEP = 0.1                  # cells a bullet moves between collision checks
@@ -39,6 +41,16 @@ class Projectile:
     trail: str = ""             # name of the particle Effect that follows it
     light: str = ""             # name of the Light it carries
     trail_offset: tuple = None  # where its trail starts if the ammo type overrides the effect's offset, else None
+    owner: int = None           # id of the player who fired it (it passes through them), None if nobody
+
+
+def struck_player(targets, owner, x, y, z):
+    """The id of the player (other than `owner`) whose body contains the point, or None."""
+    for pid, tx, ty, tz in targets:
+        if (pid != owner and tz <= z <= tz + PLAYER_HEIGHT
+                and (x - tx) ** 2 + (y - ty) ** 2 <= PLAYER_RADIUS * PLAYER_RADIUS):
+            return pid
+    return None
 
 
 @dataclass
@@ -47,6 +59,8 @@ class Hit:
     y: float
     z: float
     damage: float
+    owner: int = None           # who fired the bullet
+    target: int = None          # the player it struck, None if it hit a wall, floor or ceiling
 
 
 class Projectiles:
@@ -55,16 +69,16 @@ class Projectiles:
         self.next_ident = 1
         self.rng = rng or random.Random()
 
-    def fire(self, player, gun, ammo=None):
+    def fire(self, player, gun, ammo=None, owner=None):
         """One pull of the trigger: shoot `gun` from the player's eye, along where they are looking (a
         little off if it has spread). `ammo` is the AmmoType it fires (what the bullet looks like and
         how it flies); None is a plain default bullet. A multi shot sends all its pellets, each aimed on
-        its own."""
+        its own. `owner` is the id of the player firing."""
         ammo = ammo or AmmoType()
         for _ in range(max(1, gun.pellets) if gun.shot == "multi" else 1):
-            self.fire_one(player, gun, ammo)
+            self.fire_one(player, gun, ammo, owner)
 
-    def fire_one(self, player, gun, ammo):
+    def fire_one(self, player, gun, ammo, owner=None):
         yaw, pitch = player.angle, player.pitch
         if gun.spread > 0.0:
             spread = math.radians(gun.spread)
@@ -77,11 +91,12 @@ class Projectiles:
             player.x + dx * MUZZLE + sx, player.y + dy * MUZZLE + sy, player.eye_z - 0.03 + dz * MUZZLE + sz,
             dx * ammo.speed, dy * ammo.speed, dz * ammo.speed,
             ammo.tile, ammo.size, gun.damage * ammo.damage_mult, ammo.range, self.next_ident, ammo.trail, ammo.light,
-            (ammo.trail_offset_x, ammo.trail_offset_y, ammo.trail_offset_z) if ammo.trail_override else None))
+            (ammo.trail_offset_x, ammo.trail_offset_y, ammo.trail_offset_z) if ammo.trail_override else None, owner))
         self.next_ident += 1
 
-    def update(self, world, dt):
-        """Move every bullet dt seconds. Returns the Hit of each bullet that struck something."""
+    def update(self, world, dt, targets=()):
+        """Move every bullet dt seconds. Returns the Hit of each bullet that struck something. `targets` are
+        the players a bullet can strike, (id, x, y, z of the feet)."""
         hits, alive = [], []
         for b in self.bullets:
             speed = math.sqrt(b.vx * b.vx + b.vy * b.vy + b.vz * b.vz)
@@ -92,7 +107,12 @@ class Projectiles:
                 move = distance / steps
                 nx, ny, nz = (b.x + b.vx / speed * move, b.y + b.vy / speed * move, b.z + b.vz / speed * move)
                 if not world.point_open(nx, ny, nz):
-                    hits.append(Hit(b.x, b.y, b.z, b.damage))
+                    hits.append(Hit(b.x, b.y, b.z, b.damage, b.owner))
+                    struck = True
+                    break
+                target = struck_player(targets, b.owner, nx, ny, nz)
+                if target is not None:
+                    hits.append(Hit(nx, ny, nz, b.damage, b.owner, target))
                     struck = True
                     break
                 b.x, b.y, b.z = nx, ny, nz
