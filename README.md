@@ -28,7 +28,8 @@ the heading (map axes for an item).
 
 - a gun's **Bullets ahead / right / up** say where its bullets come from (and where its muzzle effect and flash start);
   rather than typing numbers, drag the orange disc (bullets) and the cyan diamond (muzzle effect) in the two views under
-  the gun preview (from above and from the side); the wheel scrolls the Guns section if it does not all fit;
+  the gun preview (a side view with the gun on the left facing right, and a view from behind with the gun at the
+  bottom facing up); the wheel scrolls the Guns section if it does not all fit;
 - a gun's **Muzzle effect** plays where it fires (the Guns section shows it live: tick *Fire continuously* to see the
   gun fire, reload, and play its effects and lights on repeat);
 - an ammo type's **Trail effect** follows its bullets through the air;
