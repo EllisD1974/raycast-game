@@ -112,7 +112,7 @@ def test_add_select_and_delete_guns(ed):
 def test_the_pane_lists_every_gun_setting_and_hides_the_magazine_for_single_shot(ed):
     add_gun(ed)
     assert keys(ed) == ["name", "tile", "size", "mode", "shot", "damage", "fire_rate", "mag_size", "start_ammo",
-                        "reload_time", "spread", "ammo", "muzzle", "flash"]
+                        "reload_time", "spread", "bullet_offset_x", "bullet_offset_y", "bullet_offset_z", "ammo", "muzzle", "flash"]
     choose(ed, "mode", "single")
     assert "mag_size" not in keys(ed) and ed.level.guns[0].mode == "single"
     choose(ed, "mode", "auto")

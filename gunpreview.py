@@ -12,7 +12,7 @@ simulation of its own.
 """
 import random
 from collections import deque
-from dataclasses import replace
+from dataclasses import fields, replace
 
 import hud
 from atlas import transparent_tiles
@@ -70,6 +70,16 @@ class GunPreview:
         self.gun_name = gun_name
         self.kick, self.tap, self.frame, self.clock, self.total_shots = 0.0, 0.0, 0, 0.0, 0
         self.shots.clear()
+
+    def sync_gun(self, gun):
+        """Copy the settings of the gun being edited onto the preview's own copy of it, so a change (dragging where
+        its bullets come from) shows at once without starting over."""
+        state = self.session.me.inventory.current() if self.session is not None else None
+        if state is None or state.gun.name != gun.name:
+            return
+        for f in fields(gun):
+            if f.name != "name":
+                setattr(state.gun, f.name, getattr(gun, f.name))
 
     def fire_once(self):
         """Pull the trigger once (held a moment, released)."""
