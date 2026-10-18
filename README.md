@@ -168,7 +168,7 @@ has three example guns and pickups.
 ## Layout
 
     main.py, map_editor.py, ...   game and editor source
-    assets/                       textures.png (the texture atlas)
+    assets/                       textures.png (the texture atlas), character.png (other players' pictures: make_character.py)
     maps/                         map.json (default map) and the demo maps (items.json has pickups,
                                   guns.json guns, an inventory item and prefabs)
     tests/

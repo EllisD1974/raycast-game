@@ -11,6 +11,7 @@ The host runs the real Game. Joiners send their steps and get back snapshots of 
 a joiner predicts its own movement and smooths everyone else's (see ClientSession).
 """
 import json
+import math
 import time
 from collections import deque
 
@@ -206,7 +207,7 @@ class ClientSession:
         self.me = PlayerState(Player(0.0, 0.0, 0.0))
         self.pending = []                       # (seq, Inputs, dt) sent and not yet carried out by the host
         self.seq = 0
-        self.history = {}                       # other player id -> [(game time, x, y, z)], oldest first
+        self.history = {}                       # other player id -> [(game time, x, y, z, angle)], oldest first
         self.game_time = None                   # our estimate of the host's game time
         self.bullets = []                       # as sent: [x, y, z, vx, vy, vz, size, tile, id, trail, light]
         self.lights = None                      # looks only, like the particles
@@ -299,7 +300,7 @@ class ClientSession:
         for pid, fields in players.items():
             if pid != self.id:
                 samples = self.history.setdefault(pid, [])
-                samples.append((now, fields[0], fields[1], fields[2]))
+                samples.append((now, fields[0], fields[1], fields[2], fields[3]))
                 del samples[:-MAX_SAMPLES]
         self.bullets, self.bullet_age = message["bullets"], 0.0
         for event in message.get("fx", [])[:MAX_FX]:
@@ -324,8 +325,9 @@ class ClientSession:
             sprites.append((x, y, z - bullet[6] / 2, bullet[6], bullet[7], 0.0, 1.0, 1.0 if bullet[10] else 0.0))
         if self.character_tile is not None and self.game_time is not None:
             for pid, samples in self.history.items():
-                x, y, z = interpolate(samples, self.game_time - INTERP_DELAY)
-                sprites.append((x, y, z, PLAYER_HEIGHT, character_tile_for(self.character_tile, pid)))
+                x, y, z, *angle = interpolate(samples, self.game_time - INTERP_DELAY)
+                tile = character_tile_for(self.character_tile, pid, self.me.body.angle, angle[0] if angle else None)
+                sprites.append((x, y, z, PLAYER_HEIGHT, tile))
         if self.particles is not None:
             sprites += self.particles.sprites()
         return sprites
@@ -345,13 +347,16 @@ class ClientSession:
 
 
 def interpolate(samples, t):
-    """(x, y, z) at game time t from [(time, x, y, z), ...] oldest first: on the line between the two
-    samples either side of t, and the nearest sample if t is outside them (no guessing ahead)."""
+    """(x, y, z[, angle]) at game time t from [(time, x, y, z[, angle]), ...] oldest first: on the line
+    between the two samples either side of t, and the nearest sample if t is outside them (no guessing
+    ahead). An angle takes the short way round."""
     if t <= samples[0][0]:
         return tuple(samples[0][1:])
     for (t0, *a), (t1, *b) in zip(samples, samples[1:]):
         if t0 <= t <= t1:
             f = (t - t0) / (t1 - t0) if t1 > t0 else 1.0
+            if len(a) > 3:
+                b[3] = a[3] + (b[3] - a[3] + math.pi) % math.tau - math.pi
             return tuple(p + (q - p) * f for p, q in zip(a, b))
     return tuple(samples[-1][1:])
 

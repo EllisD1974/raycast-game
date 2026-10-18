@@ -1,4 +1,5 @@
 """A host and joiners playing one game over real sockets on this machine, without a window."""
+import math
 import os
 import random
 import sys
@@ -13,7 +14,7 @@ import pytest
 import net
 import physics
 import session
-from character import SHIRTS, character_tiles
+from character import SHIRTS, VIEWS, character_tiles, character_view
 from game import Game, Inputs
 from mapfile import Entity, Gun, Level
 from session import ClientSession, HostSession, LocalSession
@@ -84,10 +85,10 @@ def test_the_joiners_keys_move_them_on_the_host(host_session):
 def test_each_sees_the_other_as_a_character(host_session):
     client = join(host_session)
     run([host_session, client], until=lambda: client.history)
-    assert [s[4] for s in client.sprites() if s[4] >= FIRST_CHARACTER] == [FIRST_CHARACTER]    # the host: id 0
+    assert [(s[4] - FIRST_CHARACTER) // VIEWS for s in client.sprites() if s[4] >= FIRST_CHARACTER] == [0]    # the host: id 0
     assert all(s[3] == pytest.approx(0.8) for s in client.sprites() if s[4] >= FIRST_CHARACTER)
     seen_by_host = [s for s in host_session.sprites() if s[4] >= FIRST_CHARACTER]
-    assert [s[4] for s in seen_by_host] == [FIRST_CHARACTER + 1]
+    assert [(s[4] - FIRST_CHARACTER) // VIEWS for s in seen_by_host] == [1]
     assert seen_by_host[0][:2] == (host_session.game.players[1].body.x, host_session.game.players[1].body.y)
 
 
@@ -198,7 +199,7 @@ def test_other_players_are_drawn_a_little_in_the_past(host_session):
     client = join(host_session)
     client.history = {5: [(1.0, 0.0, 2.0, 0.0), (2.0, 10.0, 2.0, 0.0)]}
     client.game_time = 1.5 + session.INTERP_DELAY
-    drawn = [s for s in client.sprites() if s[4] == FIRST_CHARACTER + 5]
+    drawn = [s for s in client.sprites() if (s[4] - FIRST_CHARACTER) // VIEWS == 5 and s[4] >= FIRST_CHARACTER]
     assert len(drawn) == 1 and drawn[0][:3] == pytest.approx((5.0, 2.0, 0.0))
 
 
@@ -264,9 +265,42 @@ def test_junk_from_a_joiner_does_not_hurt_the_host(host_session):
 
 def test_character_pictures_are_see_through_around_the_figure():
     tiles = character_tiles()
-    assert len(tiles) == len(SHIRTS)
+    assert len(tiles) == len(SHIRTS) * VIEWS
     for tile in tiles:
         assert tile.get_at((0, 0)).a == 0 and tile.get_at((16, 8)).a == 255      # corner empty, head solid
+
+
+def test_each_shirt_colour_replaces_the_sheets_marker():
+    tiles = character_tiles()
+    for shirt, first in zip(SHIRTS, range(0, len(tiles), VIEWS)):
+        pixels = {tuple(tiles[first].get_at((x, y)))[:3] for x in range(32) for y in range(32)}
+        assert shirt in pixels and (255, 0, 255) not in pixels
+
+
+def test_the_side_shown_follows_which_way_they_face():
+    assert character_view(0.0, math.pi) == 0                            # facing the viewer: the front
+    assert character_view(0.0, 0.0) == 4                                # facing away: the back
+    assert character_view(0.0, math.pi + math.pi / 2) == 2              # the two profiles are opposite
+    assert character_view(0.0, math.pi / 2) == 6
+    assert character_view(10.0, 10.0 + math.pi) == 0                    # only the difference matters
+    assert character_view(0.0, math.pi + 0.1) == 0                      # and nearby angles share a picture
+
+
+def test_the_picture_drawn_turns_with_the_other_player(host_session):
+    client = join(host_session)
+    client.history = {1: [(1.0, 0.0, 2.0, 0.0, 0.0), (2.0, 0.0, 2.0, 0.0, 0.0)]}
+    client.game_time = 1.5 + session.INTERP_DELAY
+    client.me.body.angle = 0.0
+    drawn = lambda: [s[4] for s in client.sprites() if s[4] >= FIRST_CHARACTER][0] - FIRST_CHARACTER - VIEWS
+    assert drawn() == 4                                                 # they face the way we look: their back
+    client.me.body.angle = math.pi
+    assert drawn() == 0
+
+
+def test_interpolated_angles_take_the_short_way_round():
+    samples = [(0.0, 0.0, 0.0, 0.0, math.tau - 0.1), (1.0, 0.0, 0.0, 0.0, 0.1)]
+    assert session.interpolate(samples, 0.5)[3] % math.tau == pytest.approx(0.0, abs=1e-9) or \
+        session.interpolate(samples, 0.5)[3] % math.tau == pytest.approx(math.tau, abs=1e-9)
 
 
 def test_a_local_session_is_just_the_game():

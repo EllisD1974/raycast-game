@@ -8,7 +8,7 @@ import math
 import random
 from dataclasses import dataclass, field
 
-from character import SHIRTS
+from character import SHIRTS, VIEWS, character_view
 from constants import PLAYER_HEIGHT
 from entities import Entities, PlayerStats
 from inventory import Inventory
@@ -72,14 +72,16 @@ def muzzle_event(effect, body, offset=None, shift=(0.0, 0.0, 0.0)):
     return event + tuple(offset) if offset is not None else event
 
 
-def character_tile_for(first_tile, player_id):
-    """The picture of a player seen by someone else: the shirt colour follows their id."""
-    return first_tile + player_id % len(SHIRTS)
+def character_tile_for(first_tile, player_id, viewer_angle=None, angle=None):
+    """The picture of a player seen by someone else: the shirt colour follows their id, the side shown
+    which way they face (`angle`) as seen looking along `viewer_angle` (the front if either is unknown)."""
+    view = 0 if viewer_angle is None or angle is None else character_view(viewer_angle, angle)
+    return first_tile + (player_id % len(SHIRTS)) * VIEWS + view
 
 
-def character_sprite(body, first_tile, player_id):
+def character_sprite(body, first_tile, player_id, viewer_angle=None):
     """(x, y, z, size, tile) of a player seen by someone else."""
-    return (body.x, body.y, body.z, PLAYER_HEIGHT, character_tile_for(first_tile, player_id))
+    return (body.x, body.y, body.z, PLAYER_HEIGHT, character_tile_for(first_tile, player_id, viewer_angle, body.angle))
 
 
 @dataclass
@@ -174,5 +176,6 @@ class Game:
     def player_sprites(self, viewer=None):
         if self.character_tile is None:
             return []
-        return [character_sprite(state.body, self.character_tile, pid)
+        looking = self.players[viewer].body.angle if viewer in self.players else None
+        return [character_sprite(state.body, self.character_tile, pid, looking)
                 for pid, state in self.players.items() if pid != viewer]
