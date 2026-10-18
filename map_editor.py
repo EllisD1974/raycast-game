@@ -83,13 +83,11 @@ multiplier, and guns of the same type share one pool of spare rounds. The pictur
 itself firing the selected gun down a corridor (fire rate, magazine, reload, recoil, muzzle effect and light, bullets
 with their trails and lights): tick "Fire continuously" to keep it shooting and reloading, press "Fire once" for a
 single pull, and tick "Dark room" to see flashes and bullet lights. It starts over whenever you change anything.
-Under the picture, two views let you place things with the mouse. In the side view the gun lies on the left facing right:
-moving a point right or left moves it ahead or back along the gun, and up or down moves it above or below the gun. In the
-view from behind the gun stands at the bottom middle facing up (as in the picture): left and right move it to either side
-of the gun and up and down above or below it. The orange disc is where the bullets come from and the cyan diamond is where
-the muzzle effect starts; the white ring and the highlighted
-button show which one you are moving. Drag a handle, or click in a view to put the picked one there; the effect's
-handle starts overriding the effect's own offset as soon as you move it. A gun's "Bullets ahead / right / up" say where
+On the picture itself, an orange disc is where the bullets come from and a cyan diamond is where the muzzle effect
+starts, drawn where they really are: drag one to move it sideways and up, or click the picture to put the picked one
+there, and use the Depth slider to move it in and out of the screen (further ahead of the gun, or back). The white ring
+and the highlighted button show which one you are moving. The effect's handle starts overriding the effect's own offset
+as soon as you move it. A gun's "Bullets ahead / right / up" say where
 its bullets come from (in cells from the usual muzzle point in front
 of the eye; a gun held low and to the right is about 0, 0.3, -0.25), and its muzzle effect and flash come from there
 too; the bullets still fly along the aim. A gun's Muzzle effect, an ammo type's Trail effect and an item's Emits each have a "Start offset" row: leave it on
@@ -142,7 +140,7 @@ import numpy as np
 import pygame
 
 from atlas import ATLAS_PATH, atlas_array, transparent_tiles, unpack_atlas
-from constants import HEIGHT, MOUSE_SENSITIVITY, PLAYER_HEIGHT, TILE, WIDTH
+from constants import FOV_DEG, HEIGHT, MOUSE_SENSITIVITY, PLAYER_HEIGHT, TILE, WIDTH
 from mapfile import (ANIMATION_KINDS, ANIMATION_LABELS, DEFAULTS, EDIT_LAYERS, EFFECT_LABELS, ENTITY_EFFECTS,
                      ENTITY_MODES, GUN_MODE_LABELS, GUN_MODES, MAP_PATH, MAX_NAME, MAX_NAME_LENGTH, MIN_WALL_GAP,
                      EFFECT_AIM_LABELS, EFFECT_AIMS, EFFECT_KIND_LABELS, EFFECT_KINDS, MIN_AMBIENT, MODE_LABELS, SHOT_LABELS, SHOT_TYPES, Animation, AmmoType, Effect,
@@ -221,9 +219,8 @@ FX_BASE = 0.35                                  # cells above the preview's floo
 FX_CAP = 400                                    # particles drawn in the preview at most
 LIGHT_CELL = 44                                 # pixels a cell is drawn at in a light's preview
 EYE_DROP = 0.03                                 # bullets start this far below the eye height (see projectiles.py)
-GIZMO_AHEAD = (-0.9, 1.6)                       # cells the side view shows, ahead of the gun's usual muzzle point (negative is back)
-GIZMO_RIGHT = (-0.9, 0.9)                       # cells the view from behind shows, to the right of the gun (negative is left)
-GIZMO_UP = (-0.45, 1.15)                        # cells both views show, above the gun (negative is below)
+GIZMO_DEPTH = (-0.15, 2.5)                        # cells ahead of the gun's usual muzzle point that the depth slider covers
+GIZMO_NEAR = 0.1                                # the nearest to the eye (cells) that a handle is drawn at
 GUN_CARD_WIDTH = 540                             # the widest the gun picture and its placement views are drawn
 GIZMO_HIT = 13                                  # how close (pixels) a click must be to grab a handle
 GIZMO_COLOURS = {"bullet": (255, 170, 60), "effect": (80, 220, 255)}
@@ -363,7 +360,7 @@ class Editor:
         self.gun_continuous = False             # the Guns preview keeps firing and reloading
         self.gun_dark = False                   # ... in a dark room, so flashes and bullet lights show
         self.gizmo_selected = "bullet"          # which handle the placement views move: "bullet" or "effect"
-        self.gizmo_drag = None                  # "top" or "side" while a handle is being dragged in that view
+        self.gizmo_drag = None                  # "picture" or "slider" while a handle is being dragged there
         self.guns_scroll = 0                    # how far the Guns section is scrolled up, in pixels (the wheel)
         self.hud_font = pygame.font.Font(None, 22)      # the game's own HUD font, for the text in the picture
         self.lights_mode = False                # the Lights section is showing instead of the map
@@ -2572,71 +2569,77 @@ class Editor:
         return points
 
     def gizmo_layout(self, card):
-        """Where the placement controls go under the gun picture: a button for each handle, the side view (gun on the
-        left facing right: ahead across, up and down) and the view from behind (gun at the bottom facing up: left and
-        right across, up and down), at one pixel scale, a line of numbers, and the y below it all."""
+        """Where the placement controls go under the gun picture: a button for each handle, the depth slider (its
+        track, and the strip of text before it), a line of numbers, and the y below it all. The handles themselves
+        are drawn on the picture."""
         _controls, below = self.gun_controls(card)
         y = below + 22
         half = (card.w - 8) // 2
         buttons = {"bullet": pygame.Rect(card.x, y, half, 26), "effect": pygame.Rect(card.x + half + 8, y, half, 26)}
-        across_side, across_back = GIZMO_AHEAD[1] - GIZMO_AHEAD[0], GIZMO_RIGHT[1] - GIZMO_RIGHT[0]
-        scale = (card.w - 8) / (across_side + across_back)
-        wide = round(across_side * scale)
-        top = y + 32
-        height = round((GIZMO_UP[1] - GIZMO_UP[0]) * scale)
-        views = {"side": pygame.Rect(card.x, top, wide, height),
-                 "back": pygame.Rect(card.x + wide + 8, top, card.w - 8 - wide, height)}
-        return {"buttons": buttons, "views": views, "scale": scale, "bottom": top + height + 62, "status": top + height + 6}
+        slider_y = y + 42
+        track = pygame.Rect(card.x + 178, slider_y, card.w - 178 - 84, 8)
+        return {"buttons": buttons, "track": track, "slider_row": pygame.Rect(card.x, slider_y - 11, card.w, 30),
+                "status": slider_y + 26, "bottom": slider_y + 26 + 17 + 34 + 8}
 
     @staticmethod
-    def gizmo_axes(view_name):
-        """(low end of the view's horizontal range, which of ahead / right / up it shows across): the side view shows
-        ahead across and the view from behind shows right across; both show up going up the picture."""
-        return (GIZMO_AHEAD[0], 0) if view_name == "side" else (GIZMO_RIGHT[0], 1)
+    def gizmo_eye(point):
+        """(ahead, right, up) of an offset point as seen from the player's eye (the muzzle is MUZZLE ahead of it and
+        EYE_DROP below it), with ahead kept in front of the eye."""
+        return (max(GIZMO_NEAR, MUZZLE + point[0]), point[1], point[2] - EYE_DROP)
 
-    def gizmo_xy(self, layout, view_name, across, up):
-        """The unclamped pixel in a view for an offset `across` (ahead in the side view, right from behind) and `up`."""
-        view, scale = layout["views"][view_name], layout["scale"]
-        low, _axis = self.gizmo_axes(view_name)
-        return (view.x + (across - low) * scale, view.y + (GIZMO_UP[1] - up) * scale)
+    @staticmethod
+    def gizmo_focal():
+        return (WIDTH / 2) / math.tan(math.radians(FOV_DEG) / 2)
 
-    def gizmo_pixel(self, layout, view_name, point):
-        """The pixel of a handle's (ahead, right, up) in a view, kept inside the view so a handle that is further out
-        than the view reaches sits on its edge, where it can still be grabbed."""
-        view = layout["views"][view_name]
-        x, y = self.gizmo_xy(layout, view_name, point[self.gizmo_axes(view_name)[1]], point[2])
-        return (round(min(max(x, view.left), view.right)), round(min(max(y, view.top), view.bottom)))
+    def gizmo_pixel(self, card, point):
+        """The pixel on the gun picture where an offset point appears, kept inside the picture (a point off the edge
+        sits on the edge, where it can still be grabbed)."""
+        ahead, right, up = self.gizmo_eye(point)
+        focal = self.gizmo_focal()
+        x = card.x + (WIDTH / 2 + right / ahead * focal) * card.w / WIDTH
+        y = card.y + (HEIGHT / 2 - up / ahead * focal) * card.h / HEIGHT
+        return (round(min(max(x, card.left), card.right - 1)), round(min(max(y, card.top), card.bottom - 1)))
 
-    def gizmo_from_pixels(self, layout, view_name, pos):
-        """(across, up) in cells for a pixel in a view, kept inside the view."""
-        view, scale = layout["views"][view_name], layout["scale"]
-        low, _axis = self.gizmo_axes(view_name)
-        x = min(max(pos[0], view.left), view.right)
-        y = min(max(pos[1], view.top), view.bottom)
-        return (round(low + (x - view.x) / scale, 2), round(GIZMO_UP[1] - (y - view.y) / scale, 2))
+    def gizmo_from_pixel(self, card, pos, ahead):
+        """(right, up) offsets, in cells, of the point at depth `ahead` (from the eye) that shows at pixel `pos`."""
+        focal = self.gizmo_focal()
+        x = (min(max(pos[0], card.left), card.right - 1) - card.x) * WIDTH / card.w - WIDTH / 2
+        y = (min(max(pos[1], card.top), card.bottom - 1) - card.y) * HEIGHT / card.h - HEIGHT / 2
+        return (round(x / focal * ahead, 3), round(-y / focal * ahead, 3))     # (fine enough to follow the mouse close to the eye)
 
-    def gizmo_hit(self, layout, gun, pos):
-        """(view name, handle) of the handle under `pos`, or None. Where two handles lie on top of each other the
-        selected one wins, so a click never switches handle by surprise (the buttons do that)."""
+    def gizmo_hit(self, card, gun, pos):
+        """The handle under `pos` on the picture, or None. Where two handles lie on top of each other the selected one
+        wins, so a click never switches handle by surprise (the buttons do that)."""
+        if not card.collidepoint(pos):
+            return None
         points = self.gizmo_points(gun)
-        order = [self.gizmo_selected] + [h for h in points if h != self.gizmo_selected]
-        for view_name in layout["views"]:
-            if not layout["views"][view_name].collidepoint(pos):
-                continue
-            for handle in order:
-                if handle in points:
-                    px, py = self.gizmo_pixel(layout, view_name, points[handle])
-                    if math.hypot(pos[0] - px, pos[1] - py) <= GIZMO_HIT:
-                        return view_name, handle
+        for handle in [self.gizmo_selected] + [h for h in points if h != self.gizmo_selected]:
+            if handle in points:
+                px, py = self.gizmo_pixel(card, points[handle])
+                if math.hypot(pos[0] - px, pos[1] - py) <= GIZMO_HIT:
+                    return handle
         return None
 
+    def gizmo_depth(self, gun):
+        """The picked handle's depth for the slider: cells ahead of the gun's usual muzzle point."""
+        points = self.gizmo_points(gun)
+        return points[self.gizmo_selected if self.gizmo_selected in points else "bullet"][0]
+
+    def gizmo_slider_value(self, layout, pos):
+        """The depth the slider shows at pixel `pos`, kept within the slider's range."""
+        track = layout["track"]
+        f = min(max((pos[0] - track.x) / track.w, 0.0), 1.0)
+        return round(GIZMO_DEPTH[0] + f * (GIZMO_DEPTH[1] - GIZMO_DEPTH[0]), 2)
+
     def gizmo_press(self, pos):
-        """A click in the placement controls: a handle button picks which handle moves; a click on a handle grabs it;
-        a click anywhere else in a view puts the picked handle there; either way dragging goes on moving it."""
+        """A click in the placement controls. A handle button picks which handle moves. On the picture a click on a
+        handle grabs it and a click anywhere else puts the picked handle there (at the depth it has), and dragging goes
+        on moving it. On the slider a click sets the picked handle's depth, and dragging goes on."""
         gun = self.selected_gun()
         if gun is None:
             return False
-        layout = self.gizmo_layout(self.guns_card_rect())
+        card = self.guns_card_rect()
+        layout = self.gizmo_layout(card)
         points = self.gizmo_points(gun)
         for handle, rect in layout["buttons"].items():
             if rect.collidepoint(pos):
@@ -2645,54 +2648,66 @@ class Editor:
                 else:
                     self.say("Choose a Muzzle effect for this gun first, then you can place where it starts")
                 return True
-        hit = self.gizmo_hit(layout, gun, pos)
-        for view_name, rect in layout["views"].items():
-            if rect.collidepoint(pos):
-                if hit is not None and hit[0] == view_name:
-                    self.gizmo_selected = hit[1]
-                elif self.gizmo_selected not in points:
-                    self.gizmo_selected = "bullet"
-                self.undo.append(self.level.copy())                # the whole drag is one undo step; the preview is left
-                del self.undo[:-MAX_UNDO]                          # running until the mouse is let go (see gizmo_release)
-                self.redo.clear()
-                self.dirty = True
-                self.gizmo_drag = view_name
-                self.gizmo_move(pos)
-                return True
-        return False
+        target = None
+        if layout["slider_row"].collidepoint(pos):
+            target = "slider"
+        elif card.collidepoint(pos):
+            hit = self.gizmo_hit(card, gun, pos)
+            if hit is not None:
+                self.gizmo_selected = hit
+            elif self.gizmo_selected not in points:
+                self.gizmo_selected = "bullet"
+            target = "picture"
+        if target is None:
+            return False
+        self.undo.append(self.level.copy())                        # the whole drag is one undo step; the preview is left
+        del self.undo[:-MAX_UNDO]                                  # running until the mouse is let go (see gizmo_release)
+        self.redo.clear()
+        self.dirty = True
+        self.gizmo_drag = target
+        self.gizmo_move(pos)
+        return True
 
     def gizmo_move(self, pos):
-        """Move the picked handle to where the mouse is, in the view being dragged."""
+        """Move the picked handle to where the mouse is: on the picture, sideways and up at the depth it has; on the
+        slider, in and out."""
         gun = self.selected_gun()
         if gun is None or self.gizmo_drag is None:
             return
-        layout = self.gizmo_layout(self.guns_card_rect())
-        across, up = self.gizmo_from_pixels(layout, self.gizmo_drag, pos)
-        self.gizmo_apply(gun, self.gizmo_selected, self.gizmo_drag, across, up)
+        card = self.guns_card_rect()
+        handle = self.gizmo_selected if self.gizmo_selected in self.gizmo_points(gun) else "bullet"
+        if self.gizmo_drag == "slider":
+            self.gizmo_set(gun, handle, ahead=self.gizmo_slider_value(self.gizmo_layout(card), pos))
+        else:
+            ahead = self.gizmo_eye(self.gizmo_points(gun)[handle])[0]
+            right, up = self.gizmo_from_pixel(card, pos, ahead)
+            self.gizmo_set(gun, handle, right=right, up=up + EYE_DROP)
 
-    def gizmo_apply(self, gun, handle, view_name, across, up):
-        """Put `handle` at `across` (ahead in the side view, right in the view from behind) and `up`, by setting the
-        gun's offsets: a drag changes two of the three numbers and leaves the third as it was."""
+    def gizmo_set(self, gun, handle, ahead=None, right=None, up=None):
+        """Put `handle` at the given offsets from the gun's usual muzzle point (any left out stay as they are), by
+        setting the gun's offsets: the bullets' directly, the effect's relative to the bullets'."""
         def keep(value):
-            return round(max(-5.0, min(5.0, value)), 2)
+            return round(max(-5.0, min(5.0, value)), 3)
         points = self.gizmo_points(gun)
         if handle == "bullet":
-            if view_name == "side":
-                gun.bullet_offset_x = keep(across)
-            else:
-                gun.bullet_offset_y = keep(across)
-            gun.bullet_offset_z = keep(up)
+            if ahead is not None:
+                gun.bullet_offset_x = keep(ahead)
+            if right is not None:
+                gun.bullet_offset_y = keep(right)
+            if up is not None:
+                gun.bullet_offset_z = keep(up)
         elif handle == "effect" and "effect" in points:
             if not gun.muzzle_override:                            # start overriding, from where it is now
                 effect = self.level.effect_named(gun.muzzle)
                 gun.muzzle_override = True
                 gun.muzzle_offset_x, gun.muzzle_offset_y, gun.muzzle_offset_z = effect.offset_x, effect.offset_y, effect.offset_z
             bullet = points["bullet"]
-            if view_name == "side":
-                gun.muzzle_offset_x = keep(across - bullet[0])
-            else:
-                gun.muzzle_offset_y = keep(across - bullet[1])
-            gun.muzzle_offset_z = keep(up - bullet[2])
+            if ahead is not None:
+                gun.muzzle_offset_x = keep(ahead - bullet[0])
+            if right is not None:
+                gun.muzzle_offset_y = keep(right - bullet[1])
+            if up is not None:
+                gun.muzzle_offset_z = keep(up - bullet[2])
         self.dirty = True
         if self.gun_preview is not None:
             self.gun_preview.sync_gun(gun)
@@ -2717,90 +2732,54 @@ class Editor:
         if selected:
             pygame.draw.circle(screen, (255, 255, 255), centre, r + 6, 2)
 
-    def draw_gizmo_gun(self, screen, layout, view_name):
-        """A plain gun drawn in a view, its muzzle on the point where offsets are 0: in the side view lying along the
-        left of the box facing right, in the view from behind standing at the bottom middle facing up."""
-        body, edge = (118, 124, 140), (60, 64, 76)
-
-        def box(a0, a1, u0, u1):
-            x0, y0 = self.gizmo_xy(layout, view_name, a0, u1)
-            x1, y1 = self.gizmo_xy(layout, view_name, a1, u0)
-            rect = pygame.Rect(round(x0), round(y0), max(2, round(x1 - x0)), max(2, round(y1 - y0)))
-            pygame.draw.rect(screen, body, rect, border_radius=2)
-            pygame.draw.rect(screen, edge, rect, 1, border_radius=2)
-        if view_name == "side":
-            box(-0.75, 0.0, -0.06, 0.06)                           # the barrel, ending at the muzzle
-            box(-0.62, -0.46, -0.40, -0.06)                        # the grip
-            label_at = self.gizmo_xy(layout, view_name, -0.85, -0.45)
-        else:
-            box(-0.06, 0.06, -0.38, 0.0)                           # the barrel, standing up to the muzzle
-            box(-0.17, 0.17, -0.45, -0.30)                         # the hand end
-            label_at = self.gizmo_xy(layout, view_name, 0.2, -0.43)
-        screen.blit(self.small.render("gun", True, (150, 156, 170)), (round(label_at[0]), round(label_at[1]) - 14))
-
     def draw_gizmo(self, screen, card, gun):
-        """The placement controls: which handle is picked, and two views to place the bullets' starting point and the
-        muzzle effect's in (the side view and the view from behind), with the numbers they come to."""
+        """The placement controls: the handles on the gun picture (where the bullets and the muzzle effect start, drawn
+        where they really are), which handle is picked, the depth slider that moves it in and out of the screen, and
+        the numbers it comes to."""
         layout = self.gizmo_layout(card)
         points = self.gizmo_points(gun)
-        scale = layout["scale"]
+        picked = self.gizmo_selected if self.gizmo_selected in points else "bullet"
         for handle, rect in layout["buttons"].items():
             enabled = handle in points
-            picked = handle == self.gizmo_selected and enabled
-            pygame.draw.rect(screen, BUTTON_ON if picked else (BUTTON_HOT if rect.collidepoint(self.mouse) and enabled else BUTTON),
-                             rect, border_radius=4)
+            pygame.draw.rect(screen, BUTTON_ON if handle == picked and enabled else
+                             (BUTTON_HOT if rect.collidepoint(self.mouse) and enabled else BUTTON), rect, border_radius=4)
             if enabled:
                 self.draw_gizmo_handle(screen, handle, (rect.x + 16, rect.centery), False, False)
             label = {"bullet": "Bullets come from", "effect": "Effect starts at"}[handle] if enabled else "Effect (pick a muzzle effect)"
             screen.blit(self.small.render(label, True, TEXT if enabled else DIM), (rect.x + 34, rect.y + 6))
-        captions = {"side": ("Side view", "left / right = ahead, up / down = height"),
-                    "back": ("From behind", "left / right, up / down")}
-        for view_name, view in layout["views"].items():
-            pygame.draw.rect(screen, (24, 26, 34), view)
-            low, _axis = self.gizmo_axes(view_name)
-            high = GIZMO_AHEAD[1] if view_name == "side" else GIZMO_RIGHT[1]
-            for i in range(round(low * 2) - 1, round(high * 2) + 2):               # a grid every half cell
-                if low <= i / 2 <= high:
-                    x = round(self.gizmo_xy(layout, view_name, i / 2, 0)[0])
-                    pygame.draw.line(screen, (56, 60, 72) if i % 2 == 0 else (36, 38, 48), (x, view.y), (x, view.bottom))
-            for i in range(round(GIZMO_UP[0] * 2) - 1, round(GIZMO_UP[1] * 2) + 2):
-                if GIZMO_UP[0] <= i / 2 <= GIZMO_UP[1]:
-                    y = round(self.gizmo_xy(layout, view_name, 0, i / 2)[1])
-                    pygame.draw.line(screen, (56, 60, 72) if i % 2 == 0 else (36, 38, 48), (view.x, y), (view.right, y))
-            ox, oy = (round(v) for v in self.gizmo_xy(layout, view_name, 0, 0))
-            if view_name == "side":                                                # the line the bullets fly along
-                pygame.draw.line(screen, (96, 104, 122), (ox, oy), (view.right, oy), 1)
-            self.draw_gizmo_gun(screen, layout, view_name)
-            pygame.draw.line(screen, (190, 196, 210), (ox - 5, oy), (ox + 5, oy))     # the muzzle: where every offset is 0
-            pygame.draw.line(screen, (190, 196, 210), (ox, oy - 5), (ox, oy + 5))
-            title, hint = captions[view_name]
-            screen.set_clip(view)
-            screen.blit(self.small.render(title, True, TEXT), (view.x + 6, view.y + 4))
-            screen.blit(self.small.render(hint, True, DIM), (view.x + 6, view.y + 19))
-            screen.set_clip(None)
-            pygame.draw.rect(screen, ACCENT if self.gizmo_drag == view_name else GRID, view, 1)
-        hover = self.gizmo_hit(layout, gun, self.mouse) if not self.gizmo_drag else None
+        hover = self.gizmo_hit(card, gun, self.mouse) if not self.gizmo_drag else None
+        screen.set_clip(card)
         if "effect" in points:                                     # a dashed line from the bullets' point to the effect's
-            for view_name in layout["views"]:
-                a, b = (self.gizmo_pixel(layout, view_name, points[h]) for h in ("bullet", "effect"))
-                if math.hypot(a[0] - b[0], a[1] - b[1]) > 14:
-                    steps = max(2, round(math.hypot(a[0] - b[0], a[1] - b[1]) / 6))
-                    for i in range(0, steps, 2):
-                        p1 = (a[0] + (b[0] - a[0]) * i / steps, a[1] + (b[1] - a[1]) * i / steps)
-                        p2 = (a[0] + (b[0] - a[0]) * (i + 1) / steps, a[1] + (b[1] - a[1]) * (i + 1) / steps)
-                        pygame.draw.line(screen, (170, 176, 190), p1, p2)
-        for view_name in layout["views"]:
-            for handle in ("effect", "bullet"):                    # the picked handle is drawn last, on top
-                if handle in points and handle != self.gizmo_selected:
-                    centre = self.gizmo_pixel(layout, view_name, points[handle])
-                    self.draw_gizmo_handle(screen, handle, centre, False, hover == (view_name, handle))
-            if self.gizmo_selected in points:
-                centre = self.gizmo_pixel(layout, view_name, points[self.gizmo_selected])
-                self.draw_gizmo_handle(screen, self.gizmo_selected, centre, True, hover == (view_name, self.gizmo_selected))
-                tag = self.small.render(GIZMO_NAMES[self.gizmo_selected], True, GIZMO_COLOURS[self.gizmo_selected])
-                view = layout["views"][view_name]
-                screen.blit(tag, (min(centre[0] + 14, view.right - tag.get_width() - 4), max(view.y + 18, centre[1] - 22)))
-        picked = self.gizmo_selected if self.gizmo_selected in points else "bullet"
+            a, b = (self.gizmo_pixel(card, points[h]) for h in ("bullet", "effect"))
+            length = math.hypot(a[0] - b[0], a[1] - b[1])
+            if length > 14:
+                steps = max(2, round(length / 6))
+                for i in range(0, steps, 2):
+                    p1 = (a[0] + (b[0] - a[0]) * i / steps, a[1] + (b[1] - a[1]) * i / steps)
+                    p2 = (a[0] + (b[0] - a[0]) * (i + 1) / steps, a[1] + (b[1] - a[1]) * (i + 1) / steps)
+                    pygame.draw.line(screen, (230, 234, 245), p1, p2)
+        for handle in [h for h in ("effect", "bullet") if h in points and h != picked] + [picked]:   # the picked one on top
+            centre = self.gizmo_pixel(card, points[handle])
+            self.draw_gizmo_handle(screen, handle, centre, handle == picked, hover == handle)
+            if handle == picked:
+                tag = self.small.render(GIZMO_NAMES[handle], True, GIZMO_COLOURS[handle])
+                back = pygame.Rect(0, 0, tag.get_width() + 6, tag.get_height() + 2)
+                back.midleft = (min(centre[0] + 16, card.right - back.w - 2), max(card.y + 10, centre[1] - 20))
+                pygame.draw.rect(screen, (16, 17, 22), back, border_radius=3)
+                screen.blit(tag, (back.x + 3, back.y + 1))
+        screen.set_clip(None)
+        track = layout["track"]                                    # the depth slider
+        colour = GIZMO_COLOURS[picked]
+        screen.blit(self.small.render("Depth (in / out)", True, TEXT), (card.x, track.centery - 8))
+        pygame.draw.rect(screen, (40, 43, 54), track, border_radius=4)
+        zero = track.x + round((0 - GIZMO_DEPTH[0]) / (GIZMO_DEPTH[1] - GIZMO_DEPTH[0]) * track.w)
+        pygame.draw.line(screen, (150, 156, 170), (zero, track.y - 5), (zero, track.bottom + 5))     # the usual muzzle point
+        screen.blit(self.small.render("muzzle", True, DIM), (zero - 18, track.bottom + 6))
+        depth = self.gizmo_depth(gun)
+        knob = track.x + round(min(max((depth - GIZMO_DEPTH[0]) / (GIZMO_DEPTH[1] - GIZMO_DEPTH[0]), 0.0), 1.0) * track.w)
+        pygame.draw.rect(screen, colour, (track.x, track.y, max(0, knob - track.x), track.h), border_radius=4)
+        self.draw_gizmo_handle(screen, picked, (knob, track.centery), self.gizmo_drag == "slider", False)
+        screen.blit(self.small.render(f"{depth:+.2f}", True, colour), (track.right + 22, track.centery - 8))
         if picked == "bullet":                                     # the numbers of the pane's rows
             a, r, u = gun.bullet_offset_x, gun.bullet_offset_y, gun.bullet_offset_z
             where = "from the gun's usual muzzle point"
@@ -2808,22 +2787,11 @@ class Editor:
             a, r, u = (points["effect"][i] - points["bullet"][i] for i in range(3))
             where = "from where the bullets start"
         screen.blit(self.small.render(f"Moving: {GIZMO_NAMES[picked]}   ahead {a:+.2f}  right {r:+.2f}  up {u:+.2f}",
-                                      True, GIZMO_COLOURS[picked]), (card.x, layout["status"]))
-        self._draw_wrapped(screen, (f"Offsets {where}. Drag a handle, or click in a view to put the moving one there; "
-                                    "the buttons switch handle.",), card.x, layout["status"] + 17, card.w)
+                                      True, colour), (card.x, layout["status"]))
+        self._draw_wrapped(screen, (f"Offsets {where}. Drag a handle on the picture (sideways and up), or click to put it "
+                                    "there; the slider moves it in and out of the screen; the buttons switch handle.",),
+                           card.x, layout["status"] + 17, card.w)
         return layout
-
-    def draw_gizmo_markers(self, screen, card, gun):
-        """Small rings on the gun picture where the handles are, when they are in front of the eye and on screen."""
-        for handle, (x_off, y_off, z_off) in self.gizmo_points(gun).items():
-            ahead, right, up = MUZZLE + x_off, y_off, -EYE_DROP + z_off            # from the eye
-            if ahead < 0.08:
-                continue
-            x = 320 + right / ahead * 493
-            y = 180 - up / ahead * 493
-            if 0 <= x < 640 and 0 <= y < 360:
-                centre = (round(card.x + x * card.w / 640), round(card.y + y * card.h / 360))
-                pygame.draw.circle(screen, GIZMO_COLOURS[handle], centre, 5, 2)
 
     def step_gun_preview(self, dt):
         """Keep the live gun in the Guns section running: built again whenever the level, the gun or the dark
@@ -3004,7 +2972,6 @@ class Editor:
             count = live.shots_last_second()
             screen.blit(self.small.render(f"{count} shot{'s' if count != 1 else ''} in the last second "
                                           f"(set to {gun.fire_rate:g} a second)", True, DIM), (card.x, below - 4))
-        self.draw_gizmo_markers(screen, card, gun)
         below = self.draw_gizmo(screen, card, gun)["bottom"]
         box = pygame.Rect(card.x, below + 8, 56, 56)
         self._draw_bullet(screen, box, ammo)
