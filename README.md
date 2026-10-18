@@ -43,7 +43,7 @@ transparent edges works best).
 
 ## Lighting
 
-Design lights in the editor's Lights section (L): a colour, brightness, reach, flicker and flash length, with a
+Design lights in the editor's Lights section (L): a color, brightness, reach, flicker and flash length, with a
 preview from above. The first row, **Map ambient light**, sets how bright the map is without lights (1 is
 fully lit, as maps always were; lower makes it dark so lights show). Lights are saved in the map and used by
 name:

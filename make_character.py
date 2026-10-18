@@ -6,7 +6,7 @@ Run once:  python make_character.py            (refuses to overwrite an existing
 The sheet is one row of 5 tiles of 32x32 pixels, the character seen from the front, turned a bit,
 in profile, turned away and from the back (the other three views are these mirrored). Edit it in any
 image editor, keeping a transparent background. Paint the shirt (and anything else that should take
-the player's colour) in pure magenta (255, 0, 255): character.py swaps that for each player's shirt.
+the player's color) in pure magenta (255, 0, 255): character.py swaps that for each player's shirt.
 """
 import os
 import sys
@@ -15,7 +15,7 @@ import pygame
 
 TILE = 32
 VIEWS = 5
-SHIRT = (255, 0, 255)                               # the colour character.py replaces with a player's own
+SHIRT = (255, 0, 255)                               # the color character.py replaces with a player's own
 SKIN = (235, 190, 150)
 HAIR = (90, 60, 40)
 TROUSERS = (50, 55, 90)
@@ -27,9 +27,9 @@ def draw_view(view):
     """One picture: view 0 the front, 1 turned a bit to the viewer's left, 2 in profile, 3 turned away, 4 the back."""
     tile = pygame.Surface((TILE, TILE), pygame.SRCALPHA)
 
-    def block(x, y, w, h, colour):
+    def block(x, y, w, h, color):
         pygame.draw.rect(tile, OUTLINE, (x - 1, y - 1, w + 2, h + 2))
-        pygame.draw.rect(tile, colour, (x, y, w, h))
+        pygame.draw.rect(tile, color, (x, y, w, h))
 
     # body x and width, arm x positions, head x and width, eye x positions, hair height (0 for none)
     body_x, body_w, arms, head_x, head_w, eyes, hair = {

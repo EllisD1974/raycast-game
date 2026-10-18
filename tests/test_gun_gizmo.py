@@ -347,7 +347,7 @@ def test_a_click_on_a_handle_picks_it_but_where_they_overlap_the_picked_one_keep
     assert ed.gizmo_hit(c, gun, spot) == "bullet"
 
 
-def test_the_picture_shows_both_handles_in_their_own_colours(ed):
+def test_the_picture_shows_both_handles_in_their_own_colors(ed):
     gun = gun_with_effect(ed)
     gun.bullet_offset_x, gun.muzzle_override, gun.muzzle_offset_y = 1.0, True, 0.5
     ed.draw(pygame.display.get_surface())

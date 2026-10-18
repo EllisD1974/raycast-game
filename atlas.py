@@ -40,7 +40,7 @@ def atlas_array(tiles):
 
 
 def ensure_rgba(textures):
-    """The same textures with an alpha channel (opaque) if they only had colour."""
+    """The same textures with an alpha channel (opaque) if they only had color."""
     if textures.shape[-1] == 4:
         return textures
     opaque = np.full(textures.shape[:-1] + (1,), 255, np.uint8)

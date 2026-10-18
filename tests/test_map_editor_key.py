@@ -236,7 +236,7 @@ def pixels(surface, box):
     return {tuple(surface.get_at((x, y)))[:3] for x in range(box.left, box.right) for y in range(box.top, box.bottom)}
 
 
-def test_each_icon_in_the_key_is_drawn_with_the_same_colours_as_on_the_map(ed):
+def test_each_icon_in_the_key_is_drawn_with_the_same_colors_as_on_the_map(ed):
     ed.do("floor:1")
     ed.do("layer:ramp")
     ed.level.start_span = 0

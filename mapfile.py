@@ -35,7 +35,7 @@ Tile ids are 1-based atlas positions, read row by row (id 1 is the top-left tile
 Ramps: a run of ramp cells in a row slopes smoothly from the floor height of the cell just
 before the run to the floor height of the cell just after it, whatever its length. A ramp that
 climbs to a higher floor ends in a cell whose *lower* floor is raised to that height; that cell
-touches a neighbouring cell's room on the higher floor, which is how you step across.
+touches a neighboring cell's room on the higher floor, which is how you step across.
 """
 import json
 import os
@@ -72,11 +72,12 @@ SHOT_TYPES = ("single", "multi", "projectile")
 SHOT_LABELS = {"single": "Single bullet", "multi": "Multi bullet", "projectile": "Projectile"}
 MIN_AMBIENT = 0.02                              # the darkest a map can be made
 EFFECT_KINDS = ("burst", "stream")
-EFFECT_COLOURS = ("original", "hue", "rgb")
-EFFECT_COLOUR_LABELS = {"original": "Original", "hue": "Hue shift", "rgb": "RGB tint"}
+EFFECT_COLORS = ("original", "hue", "rgb")
+EFFECT_COLOR_LABELS = {"original": "Original", "hue": "Hue shift", "rgb": "RGB tint"}
 EFFECT_AIMS = ("auto", "custom")
 EFFECT_AIM_LABELS = {"auto": "Automatic", "custom": "Custom"}
 EFFECT_KIND_LABELS = {"burst": "Burst", "stream": "Stream"}
+MAX_HIT_NAMES = 8                               # effects (and lights) an ammo type plays for one kind of hit
 MAX_NAME = 24                                   # longest name of an item, gun or particle effect
 ANIMATION_KINDS = ("float", "rotate")
 ANIMATION_LABELS = {"float": "Float", "rotate": "Rotate"}
@@ -90,7 +91,7 @@ class Light:
     are worked out on each player's own machine.
 
     name           what it is called (also how things refer to it)
-    r, g, b        its colour, 0 to 255 each
+    r, g, b        its color, 0 to 255 each
     intensity      how bright it is (1 lights a surface next to it as much as it was; more overexposes it)
     radius         how far it reaches, in cells; the light fades smoothly to nothing at that distance
     flicker        0 steady, up to 1 for a light that wobbles all the way down to nothing
@@ -153,12 +154,12 @@ class Effect:
     drag         how fast they slow down, per second (0 none, 1 loses most speed in a second)
     size_start, size_end    size in cells at birth and at death (they change smoothly)
     alpha_start, alpha_end  how solid they are at birth and at death (1 opaque, 0 invisible)
-    colour       original: the particle picture as drawn; hue: its colours turned round the colour wheel by `hue`;
-                 rgb: its colours multiplied by the tint (tint_r, tint_g, tint_b)
-    hue          degrees (-180 to 180) for colour "hue": 0 leaves the colours, a red flame at 120 is green
+    color       original: the particle picture as drawn; hue: its colors turned round the color wheel by `hue`;
+                 rgb: its colors multiplied by the tint (tint_r, tint_g, tint_b)
+    hue          degrees (-180 to 180) for color "hue": 0 leaves the colors, a red flame at 120 is green
     tint_r, tint_g, tint_b
-                 colour (0 to 255 each) for colour "rgb": 255 each leaves the picture as drawn, a lower channel
-                 takes that colour out of it, all of them lower darkens it
+                 color (0 to 255 each) for color "rgb": 255 each leaves the picture as drawn, a lower channel
+                 takes that color out of it, all of them lower darkens it
     collide      particles end when they hit a wall, floor or ceiling
     light        name of the Light every particle carries ("" for none); it fades with the particle, and the
                  particles are drawn at full brightness so they glow in a dark map
@@ -190,7 +191,7 @@ class Effect:
     size_end: float = 0.0
     alpha_start: float = 1.0
     alpha_end: float = 0.0
-    colour: str = "original"
+    color: str = "original"
     hue: float = 0.0
     tint_r: int = 255
     tint_g: int = 255
@@ -226,7 +227,7 @@ class Effect:
                    gravity=number("gravity", -50.0, 50.0), drag=number("drag", 0.0, 20.0),
                    size_start=number("size_start", 0.0, 3.0), size_end=number("size_end", 0.0, 3.0),
                    alpha_start=number("alpha_start", 0.0, 1.0), alpha_end=number("alpha_end", 0.0, 1.0),
-                   colour=data.get("colour") if data.get("colour") in EFFECT_COLOURS else base.colour,
+                   color=data.get("color") if data.get("color") in EFFECT_COLORS else base.color,
                    hue=number("hue", -180.0, 180.0), tint_r=number("tint_r", 0, 255, int),
                    tint_g=number("tint_g", 0, 255, int), tint_b=number("tint_b", 0, 255, int),
                    collide=bool(data.get("collide", base.collide)), light=str(data.get("light", ""))[:MAX_NAME],
@@ -250,8 +251,11 @@ class AmmoType:
     damage_mult  multiplies the damage of the gun that fires it (1.0 leaves it as it is)
     trail        name of the Effect that follows the bullet through the air ("" for none)
     light        name of the Light the bullet carries as it flies ("" for none)
-    hit_effect   name of the Effect played where the bullet strikes a wall or a player ("" for none)
-    hit_light    name of the Light that flashes there ("" for none)
+    player_hit_effects, player_hit_lights
+                 names of the Effects played and Lights flashed where the bullet strikes a player (any number,
+                 all at once)
+    world_hit_effects, world_hit_lights
+                 the same where it strikes anything else: a wall, floor, ceiling or glass
     trail_override, trail_offset_x, trail_offset_y, trail_offset_z
                  true: the trail starts at this offset (x along the bullet's heading, y to its right, z up, in
                  cells) instead of the effect's own start offset"""
@@ -267,8 +271,10 @@ class AmmoType:
     trail_offset_x: float = 0.0
     trail_offset_y: float = 0.0
     trail_offset_z: float = 0.0
-    hit_effect: str = ""
-    hit_light: str = ""
+    player_hit_effects: tuple = ()
+    player_hit_lights: tuple = ()
+    world_hit_effects: tuple = ()
+    world_hit_lights: tuple = ()
 
     @classmethod
     def from_dict(cls, data):
@@ -279,6 +285,15 @@ class AmmoType:
                 return cast(max(low, min(high, float(data.get(key, getattr(base, key))))))
             except (TypeError, ValueError):
                 return getattr(base, key)
+
+        def names(key, old_key):
+            """A list of effect or light names. A map from when there was just one `hit_effect` / `hit_light`
+            (for any hit) gives that one to both kinds of hit."""
+            value = data.get(key)
+            if isinstance(value, (list, tuple)):
+                return tuple(n[:MAX_NAME] for n in value if isinstance(n, str) and n)[:MAX_HIT_NAMES]
+            old = data.get(old_key)
+            return (old[:MAX_NAME],) if key not in data and isinstance(old, str) and old else ()
         name = str(data.get("name", base.name)).strip()[:MAX_NAME] or base.name
         return cls(name=name, tile=number("tile", 0, 255, int), size=number("size", 0.01, 2.0),
                    speed=number("speed", 0.5, 200.0), range=number("range", 0.5, 200.0),
@@ -286,7 +301,10 @@ class AmmoType:
                    light=str(data.get("light", ""))[:MAX_NAME], trail_override=bool(data.get("trail_override", False)),
                    trail_offset_x=number("trail_offset_x", -10.0, 10.0), trail_offset_y=number("trail_offset_y", -10.0, 10.0),
                    trail_offset_z=number("trail_offset_z", -10.0, 10.0),
-                   hit_effect=str(data.get("hit_effect", ""))[:MAX_NAME], hit_light=str(data.get("hit_light", ""))[:MAX_NAME])
+                   player_hit_effects=names("player_hit_effects", "hit_effect"),
+                   player_hit_lights=names("player_hit_lights", "hit_light"),
+                   world_hit_effects=names("world_hit_effects", "hit_effect"),
+                   world_hit_lights=names("world_hit_lights", "hit_light"))
 
 
 @dataclass
@@ -398,7 +416,7 @@ class Animation:
 class Entity:
     """An item standing in the world as a sprite that always faces the player.
 
-    x, y     position on the map, in cells (cell centre = .5)
+    x, y     position on the map, in cells (cell center = .5)
     span     the floor it stands on
     tile     0-based atlas tile drawn as its sprite (tiles with transparent pixels work best)
     mode     what touching it does to the item itself:
@@ -695,7 +713,7 @@ class Level:
         return self.get("wall_floor", x, y)
 
     def wall_region(self, x, y):
-        """The connected group (4-neighbour) of wall cells that (x, y) belongs to, whatever their
+        """The connected group (4-neighbor) of wall cells that (x, y) belongs to, whatever their
         textures; empty if (x, y) is not a wall."""
         if not self.in_bounds(x, y) or not self.walls[y][x]:
             return []
@@ -724,7 +742,7 @@ class Level:
         """The ceiling above a wall cell, for a wall that stops short of it. It is the value set in
         wall_ceil if there is one; otherwise (automatic) the highest ceiling of the open cells beside
         it, so a short wall in a tall hall has the hall's ceiling over it. A wall with no open
-        neighbour falls back to its own ceil_h. The ceil_h stored under a wall is otherwise never
+        neighbor falls back to its own ceil_h. The ceil_h stored under a wall is otherwise never
         used: like the floor under a wall, you cannot see it, so it must not decide anything."""
         explicit = self.grids["wall_ceil"][y][x]
         if explicit > 0:
@@ -872,7 +890,7 @@ class Level:
             grid[y][0] = grid[y][-1] = value
 
     def region(self, layer, x, y):
-        """The connected region (4-neighbour) of cells equal to (x, y) in a grid, unchanged."""
+        """The connected region (4-neighbor) of cells equal to (x, y) in a grid, unchanged."""
         grid = self.grids[layer]
         if not self.in_bounds(x, y):
             return []

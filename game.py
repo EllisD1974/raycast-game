@@ -73,7 +73,7 @@ def muzzle_event(effect, body, offset=None, shift=(0.0, 0.0, 0.0)):
 
 
 def character_tile_for(first_tile, player_id, viewer_angle=None, angle=None):
-    """The picture of a player seen by someone else: the shirt colour follows their id, the side shown
+    """The picture of a player seen by someone else: the shirt color follows their id, the side shown
     which way they face (`angle`) as seen looking along `viewer_angle` (the front if either is unknown)."""
     view = 0 if viewer_angle is None or angle is None else character_view(viewer_angle, angle)
     return first_tile + (player_id % len(SHIRTS)) * VIEWS + view
@@ -167,10 +167,10 @@ class Game:
         players pick up what they touch. Returns {player id: pickup messages}."""
         targets = [(pid, state.body.x, state.body.y, state.body.z) for pid, state in self.players.items()]
         for hit in self.projectiles.update(self.world, dt, targets):
-            if hit.effect:                              # sprays back the way the bullet came
-                self.fx.append((hit.effect, hit.x, hit.y, hit.z, -hit.dx, -hit.dy, -hit.dz))
-            if hit.light:
-                self.flashes.append((hit.light, hit.x, hit.y, hit.z))
+            for effect in hit.effects:                  # sprays back the way the bullet came
+                self.fx.append((effect, hit.x, hit.y, hit.z, -hit.dx, -hit.dy, -hit.dz))
+            for light in hit.lights:
+                self.flashes.append((light, hit.x, hit.y, hit.z))
             if hit.target in self.players:
                 self.hurt(hit.target, hit.damage)
         self.items.advance(dt)

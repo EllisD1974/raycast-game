@@ -12,9 +12,9 @@ machine, and only the picture depends on them. A ParticleSystem is fed three kin
     keep(keys)                        after a frame's attach calls: forget attached emitters not in `keys`
 
 then update(dt) moves everything on and sprites() gives what the renderer draws, as
-(x, y, z, size, tile, spin, alpha, glow[, colour]) with z the bottom of the sprite (glow is 1 for particles that
-carry a light: they are drawn at full brightness). `colour` is only there for an effect with a hue or tint: the 9
-numbers of a 3 x 3 matrix (rows of red, green, blue) its picture's colours are put through.
+(x, y, z, size, tile, spin, alpha, glow[, color]) with z the bottom of the sprite (glow is 1 for particles that
+carry a light: they are drawn at full brightness). `color` is only there for an effect with a hue or tint: the 9
+numbers of a 3 x 3 matrix (rows of red, green, blue) its picture's colors are put through.
 """
 import math
 import random
@@ -27,17 +27,17 @@ UP = (0.0, 0.0, 1.0)
 IDENTITY = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
 
 
-def effect_colour(effect):
-    """The colour matrix an effect's particles are drawn through (IDENTITY for the original colours)."""
-    if effect.colour == "hue":
-        return colour_matrix(effect.hue)
-    if effect.colour == "rgb":
-        return colour_matrix(0.0, effect.tint_r, effect.tint_g, effect.tint_b)
+def effect_color(effect):
+    """The color matrix an effect's particles are drawn through (IDENTITY for the original colors)."""
+    if effect.color == "hue":
+        return color_matrix(effect.hue)
+    if effect.color == "rgb":
+        return color_matrix(0.0, effect.tint_r, effect.tint_g, effect.tint_b)
     return IDENTITY
 
 
-def colour_matrix(hue, r=255, g=255, b=255):
-    """The 3 x 3 matrix (9 numbers, row by row) that turns a colour's hue by `hue` degrees (keeping how bright it
+def color_matrix(hue, r=255, g=255, b=255):
+    """The 3 x 3 matrix (9 numbers, row by row) that turns a color's hue by `hue` degrees (keeping how bright it
     looks) and then multiplies it by the tint (r, g, b out of 255)."""
     c, s = math.cos(math.radians(hue)), math.sin(math.radians(hue))
     turn = ((0.213 + c * 0.787 - s * 0.213, 0.715 - c * 0.715 - s * 0.715, 0.072 - c * 0.072 + s * 0.928),
@@ -87,7 +87,7 @@ class ParticleSystem:
 
     def attach(self, key, name, x, y, z, direction=UP, dt=0.0, offset=None):
         """An emitter that follows a point, called every frame while it exists. A stream sends out its rate
-        a second along the path the point travelled since the last call; a burst plays when first attached
+        a second along the path the point traveled since the last call; a burst plays when first attached
         and again every `interval` seconds (never again if that is 0)."""
         effect = self.effects.get(name)
         if effect is None:
@@ -172,7 +172,7 @@ class ParticleSystem:
     # ------------------------------------------------------------------ drawing
 
     def sprites(self):
-        """(x, y, z, size, tile, spin, alpha, glow[, colour]) of every particle, for the renderer."""
+        """(x, y, z, size, tile, spin, alpha, glow[, color]) of every particle, for the renderer."""
         out = []
         for p in self.particles:
             e = p.effect
@@ -184,8 +184,8 @@ class ParticleSystem:
             if alpha <= 0.0:
                 continue
             sprite = (p.x, p.y, p.z - size / 2, size, e.tile, 0.0, alpha, 1.0 if e.light else 0.0)
-            colour = effect_colour(e)
-            out.append(sprite + (colour,) if colour != IDENTITY else sprite)
+            color = effect_color(e)
+            out.append(sprite + (color,) if color != IDENTITY else sprite)
         return out
 
     def light_sources(self):

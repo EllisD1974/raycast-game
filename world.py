@@ -154,7 +154,7 @@ class World:
         that has another floor's room overhead, and step off a ledge onto the floor below.
         While airborne (grounded False) a point belongs to the floor whose room contains the
         player's feet, preferring `current` if it does. Sticking to the floor under the player's
-        centre would be wrong over a hole in one floor: the far side of the hole would then be
+        center would be wrong over a hole in one floor: the far side of the hole would then be
         judged against the floor below, whose ceiling there is inside the slab the player is
         jumping onto, and the jump would be stopped dead."""
         cx, cy = math.floor(x), math.floor(y)

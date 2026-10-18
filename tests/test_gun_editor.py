@@ -10,7 +10,7 @@ import pytest
 
 import details
 import map_editor
-from mapfile import AmmoType, Entity, Gun, Level
+from mapfile import AmmoType, Effect, Entity, Gun, Level, Light
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -300,7 +300,8 @@ def test_ammo_types_are_added_selected_and_deleted_in_the_guns_section(ed):
     rows, _add = ed.ammo_rows()
     click(ed, rows[0][0].center)
     assert ed.selected_ammo() is first
-    assert keys(ed) == ["name", "tile", "size", "speed", "range", "damage_mult", "trail", "light", "hit_effect", "hit_light"]
+    assert keys(ed) == ["name", "tile", "size", "speed", "range", "damage_mult", "trail", "light", "player_hit_effects.0", "player_hit_lights.0",
+                      "world_hit_effects.0", "world_hit_lights.0"]
     click(ed, details.button_rect(ed.details_rect(), ed.details_rows()).center)
     assert ed.level.ammo_types == [second] and ed.details_rect() is None
     ed.do("undo")
@@ -360,3 +361,26 @@ def test_renaming_an_ammo_type_keeps_guns_and_pickups_pointing_at_it_and_deletin
     click(ed, details.button_rect(ed.details_rect(), ed.details_rows()).center)
     assert ed.level.ammo_types == []
     assert [g.ammo for g in ed.level.guns] == ["", "", ""] and ed.level.entities[0].ammo == ""
+
+
+def test_an_ammo_type_can_play_any_number_of_hit_effects_for_each_kind_of_hit(ed):
+    ed.level.effects = [Effect("Spark"), Effect("Dust")]
+    ed.level.lights = [Light("Pop")]
+    ammo = add_ammo(ed)
+    choose(ed, "player_hit_effects.0", "Spark")
+    assert ammo.player_hit_effects == ("Spark",) and "player_hit_effects.1" in keys(ed)       # a row to add the next
+    choose(ed, "player_hit_effects.1", "Dust")
+    choose(ed, "world_hit_effects.0", "Dust")
+    choose(ed, "world_hit_lights.0", "Pop")
+    assert ammo.player_hit_effects == ("Spark", "Dust") and ammo.world_hit_effects == ("Dust",)
+    assert ammo.world_hit_lights == ("Pop",) and ammo.player_hit_lights == ()
+    choose(ed, "player_hit_effects.0", "")                                  # (none) takes it out of the list
+    assert ammo.player_hit_effects == ("Dust",) and "player_hit_effects.1" in keys(ed) and "player_hit_effects.2" not in keys(ed)
+    ed.do("effects")                                                         # renaming an effect follows it
+    click(ed, ed.effect_rows()[0][1][0].center)
+    ed.set_effect("name", "Dirt")
+    assert ammo.player_hit_effects == ("Dirt",) and ammo.world_hit_effects == ("Dirt",)
+    ed.delete_effect()
+    assert ammo.player_hit_effects == () and ammo.world_hit_effects == ()
+    ed.do("undo")                                                            # undo brings the name back (on a copy)
+    assert ed.level.ammo_types[0].player_hit_effects == ("Dirt",)

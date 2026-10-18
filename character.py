@@ -2,7 +2,7 @@
 
 Sprites are tiles in the texture array, so these are made here and appended after the atlas's own
 tiles (see main.py). The pictures are drawn in assets/character.png (see make_character.py); each
-shirt colour (so players can be told apart) gets its own copy with the shirt recoloured, VIEWS
+shirt color (so players can be told apart) gets its own copy with the shirt recolored, VIEWS
 pictures per shirt from the front round to the back, and the one drawn follows which way the player
 faces relative to the viewer.
 """
@@ -19,11 +19,11 @@ VIEWS = 8                                           # pictures per shirt: 45 deg
 SHEET_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "character.png")
 SHEET_TILE = 32                                     # the sheet's tiles; scaled to TILE when that differs
 SHEET_VIEWS = VIEWS // 2 + 1                        # front, turned, profile, turned away, back
-SHIRT_MARK = (255, 0, 255)                          # the sheet's pixels of this colour are the player's shirt
+SHIRT_MARK = (255, 0, 255)                          # the sheet's pixels of this color are the player's shirt
 
 
 def character_tiles(path=SHEET_PATH):
-    """VIEWS pictures per shirt colour (shirt by shirt, see character_view), transparent around the figure."""
+    """VIEWS pictures per shirt color (shirt by shirt, see character_view), transparent around the figure."""
     sheet = pygame.image.load(path)
     if sheet.get_width() != SHEET_TILE * SHEET_VIEWS or sheet.get_height() != SHEET_TILE:
         raise ValueError(f"{path} should be {SHEET_VIEWS} tiles of {SHEET_TILE}x{SHEET_TILE} in one row")
@@ -49,7 +49,7 @@ def draw_views(turned, shirt):
 
 
 def tint(picture, shirt):
-    """A copy of `picture` with its shirt-coloured pixels (SHIRT_MARK) in `shirt`."""
+    """A copy of `picture` with its shirt-colored pixels (SHIRT_MARK) in `shirt`."""
     picture = picture.copy()
     rgb = pygame.surfarray.pixels3d(picture)
     rgb[(rgb == SHIRT_MARK).all(axis=2)] = shirt

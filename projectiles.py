@@ -29,7 +29,7 @@ def muzzle_shift(gun, angle):
 class Projectile:
     x: float
     y: float
-    z: float                    # height of the centre of the bullet
+    z: float                    # height of the center of the bullet
     vx: float
     vy: float
     vz: float
@@ -42,8 +42,10 @@ class Projectile:
     light: str = ""             # name of the Light it carries
     trail_offset: tuple = None  # where its trail starts if the ammo type overrides the effect's offset, else None
     owner: int = None           # id of the player who fired it (it passes through them), None if nobody
-    hit_effect: str = ""        # name of the particle Effect played where it strikes
-    hit_light: str = ""         # name of the Light flashed there
+    player_effects: tuple = ()  # names of the Effects played and Lights flashed where it strikes a player ...
+    player_lights: tuple = ()
+    world_effects: tuple = ()   # ... and where it strikes anything else
+    world_lights: tuple = ()
 
 
 def struck_player(targets, owner, x, y, z):
@@ -63,8 +65,8 @@ class Hit:
     damage: float
     owner: int = None           # who fired the bullet
     target: int = None          # the player it struck, None if it hit a wall, floor or ceiling
-    effect: str = ""            # the bullet's hit effect and light to play at the hit (names, "" for none)
-    light: str = ""
+    effects: tuple = ()         # the names of the Effects and Lights to play at the hit
+    lights: tuple = ()
     dx: float = 0.0             # the way the bullet was heading (a unit vector)
     dy: float = 0.0
     dz: float = 0.0
@@ -99,7 +101,7 @@ class Projectiles:
             dx * ammo.speed, dy * ammo.speed, dz * ammo.speed,
             ammo.tile, ammo.size, gun.damage * ammo.damage_mult, ammo.range, self.next_ident, ammo.trail, ammo.light,
             (ammo.trail_offset_x, ammo.trail_offset_y, ammo.trail_offset_z) if ammo.trail_override else None, owner,
-            ammo.hit_effect, ammo.hit_light))
+            ammo.player_hit_effects, ammo.player_hit_lights, ammo.world_hit_effects, ammo.world_hit_lights))
         self.next_ident += 1
 
     def update(self, world, dt, targets=()):
@@ -116,12 +118,12 @@ class Projectiles:
                 move = distance / steps
                 nx, ny, nz = (b.x + b.vx / speed * move, b.y + b.vy / speed * move, b.z + b.vz / speed * move)
                 if not world.point_open(nx, ny, nz):
-                    hits.append(Hit(b.x, b.y, b.z, b.damage, b.owner, None, b.hit_effect, b.hit_light, *heading))
+                    hits.append(Hit(b.x, b.y, b.z, b.damage, b.owner, None, b.world_effects, b.world_lights, *heading))
                     struck = True
                     break
                 target = struck_player(targets, b.owner, nx, ny, nz)
                 if target is not None:
-                    hits.append(Hit(nx, ny, nz, b.damage, b.owner, target, b.hit_effect, b.hit_light, *heading))
+                    hits.append(Hit(nx, ny, nz, b.damage, b.owner, target, b.player_effects, b.player_lights, *heading))
                     struck = True
                     break
                 b.x, b.y, b.z = nx, ny, nz

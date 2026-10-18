@@ -270,7 +270,7 @@ def test_character_pictures_are_see_through_around_the_figure():
         assert tile.get_at((0, 0)).a == 0 and tile.get_at((16, 8)).a == 255      # corner empty, head solid
 
 
-def test_each_shirt_colour_replaces_the_sheets_marker():
+def test_each_shirt_color_replaces_the_sheets_marker():
     tiles = character_tiles()
     for shirt, first in zip(SHIRTS, range(0, len(tiles), VIEWS)):
         pixels = {tuple(tiles[first].get_at((x, y)))[:3] for x in range(32) for y in range(32)}

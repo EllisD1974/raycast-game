@@ -138,7 +138,7 @@ def test_a_wall_with_no_open_cell_beside_it_uses_the_diagonals_and_then_its_own_
             level.set("walls", x, y, 1)                             # a 3x3 block of wall
     level.set("wall_h", 5, 4, 0.5)
     level.set("floor_h", 3, 3, 0.75)                                # the only open cells around the block...
-    assert level.wall_base(5, 4) == 0.0                             # (the middle has no open neighbour at all
+    assert level.wall_base(5, 4) == 0.0                             # (the middle has no open neighbor at all
     level.set("floor_h", 5, 4, 0.4)                                 # so it falls back to its own floor value)
     assert level.wall_base(5, 4) == pytest.approx(0.4)
     assert level.wall_base(4, 4) == 0.0                             # an edge wall looks at the open cell beside it
@@ -310,17 +310,17 @@ def view(renderer, world, x, y, angle, z=0.0):
     return np.array(renderer.framebuffer)
 
 
-def centre_pixel(frame):
+def center_pixel(frame):
     return tuple(int(v) for v in frame[WIDTH // 2, HEIGHT // 2])
 
 
 def is_reddish(rgb):
-    return rgb[0] > rgb[1] + 35 and rgb[0] > rgb[2] + 35           # the brick wall is red; stone is grey-green
+    return rgb[0] > rgb[1] + 35 and rgb[0] > rgb[2] + 35           # the brick wall is red; stone is gray-green
 
 
-def reddish_near_centre(frame, half=14):
+def reddish_near_center(frame, half=14):
     """Fraction of reddish pixels in a block around the middle of the view (mortar lines between
-    the bricks are grey, so one pixel would not tell)."""
+    the bricks are gray, so one pixel would not tell)."""
     cx, cy = WIDTH // 2, HEIGHT // 2
     block = [tuple(int(v) for v in frame[x, y])
              for x in range(cx - half, cx + half) for y in range(cy - half, cy + half)]
@@ -339,8 +339,8 @@ def test_you_can_see_over_a_short_wall_but_not_over_a_full_one(renderer):
 
     full = view(renderer, scene(0.0), 3.0, 3.5, 0.0)
     short = view(renderer, scene(0.2), 3.0, 3.5, 0.0)
-    assert reddish_near_centre(full) > 0.5, "a full-height wall hides what is behind it"
-    assert reddish_near_centre(short) < 0.1, "over a short wall the far wall shows"
+    assert reddish_near_center(full) > 0.5, "a full-height wall hides what is behind it"
+    assert reddish_near_center(short) < 0.1, "over a short wall the far wall shows"
     assert not np.array_equal(full, short)
 
 
@@ -538,7 +538,7 @@ def test_the_wall_height_layer_and_short_wall_marks_draw(ed):
     assert surface.get_at((open_cell.centerx, open_cell.centery))[:3] == map_editor.EMPTY_CELL
 
 
-def test_the_key_explains_the_short_wall_bar_and_the_wall_height_colours(ed):
+def test_the_key_explains_the_short_wall_bar_and_the_wall_height_colors(ed):
     kinds = lambda: [k for k, _t in ed.legend_entries()]
     assert "short_wall" not in kinds()                              # no short walls yet
     with_wall(ed.level, 5, 4, height=0.5)
@@ -561,8 +561,8 @@ def test_the_key_explains_the_short_wall_bar_and_the_wall_height_colours(ed):
                       rect.y + map_editor.LEGEND_TITLE + row * map_editor.LEGEND_ROW
                       + (map_editor.LEGEND_ROW - map_editor.LEGEND_ICON) // 2,
                       map_editor.LEGEND_ICON, map_editor.LEGEND_ICON)
-    colours = {tuple(surface.get_at((x, y)))[:3] for x in range(box.left, box.right) for y in range(box.top, box.bottom)}
-    assert map_editor.SHORT_WALL in colours                         # the same bar as on the map
+    colors = {tuple(surface.get_at((x, y)))[:3] for x in range(box.left, box.right) for y in range(box.top, box.bottom)}
+    assert map_editor.SHORT_WALL in colors                         # the same bar as on the map
 
 
 def test_every_layer_draws_with_short_walls_on_every_floor(tmp_path):
@@ -607,7 +607,7 @@ def test_painting_a_height_on_one_left_border_wall_changes_only_that_wall(tmp_pa
     assert heights[(0, 4)] == 0.5
     assert all(v == 0.0 for cell, v in heights.items() if cell != (0, 4))
     assert editor.level.short_wall_top(0, 4) == pytest.approx(0.5)
-    assert editor.level.short_wall_top(0, 3) is None                  # its neighbours stay full height
+    assert editor.level.short_wall_top(0, 3) is None                  # its neighbors stay full height
     editor.draw(pygame.display.get_surface())
     rect = editor.cell_rect(0, 4)
     assert pygame.display.get_surface().get_at((rect.left + 3, rect.top + 3))[:3] != map_editor.WALL_FULL

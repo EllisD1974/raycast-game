@@ -44,8 +44,8 @@ CROSSHAIR_OUTLINE = (0, 0, 0)
 # ------------------------------------------------------------------ putting the picture on the window
 
 def draw_crosshair(surface, center, arm, thickness):
-    """A thin + centred on `center`: white with a one pixel dark outline so it shows on any
-    background. `arm` is how far each bar reaches from the centre, in pixels."""
+    """A thin + centerd on `center`: white with a one pixel dark outline so it shows on any
+    background. `arm` is how far each bar reaches from the center, in pixels."""
     cx, cy = center
     half = thickness // 2
     bars = (pygame.Rect(cx - arm, cy - half, 2 * arm + 1, thickness),       # horizontal

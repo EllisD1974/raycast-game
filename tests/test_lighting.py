@@ -52,7 +52,7 @@ def system(level):
 
 
 def view(level, lighting_for=None, sprites=(), at=(2.5, 5.5), angle=0.0, particles=None):
-    """The picture of a flat room from `at`, looking along `angle`, and the colour of its middle pixel."""
+    """The picture of a flat room from `at`, looking along `angle`, and the color of its middle pixel."""
     world = World(level, 16)
     player = spawn(level, world)
     player.x, player.y, player.angle = at[0], at[1], angle
@@ -68,8 +68,8 @@ def lit(system_factory):
     return prepare
 
 
-def brightness(colour):
-    return sum(colour)
+def brightness(color):
+    return sum(color)
 
 
 # ------------------------------------------------------------------ the map data
@@ -264,9 +264,9 @@ def test_a_light_in_a_doorway_sees_through_the_gap():
 
 def test_a_map_with_no_lighting_is_drawn_as_before():
     level = room()
-    plain, colour = view(level)
+    plain, color = view(level)
     again, same = view(level, lit(lambda world: LightSystem(level, world)))
-    assert again.get_at((50, 50)) == plain.get_at((50, 50)) and colour == same
+    assert again.get_at((50, 50)) == plain.get_at((50, 50)) and color == same
     assert pygame.image.tobytes(plain, "RGB") == pygame.image.tobytes(again, "RGB")
 
 
@@ -285,15 +285,15 @@ def test_a_light_brightens_the_wall_it_shines_on_and_a_dark_map_is_darker():
     assert brightness(near) > brightness(base) * 1.5                                # the wall next to the torch is lit
 
 
-def test_light_has_a_colour():
+def test_light_has_a_color():
     level = room(lights=[Light("Red", r=255, g=0, b=0, intensity=3.0, radius=6.0)], ambient=0.3)
 
     def red(world):
         s = LightSystem(level, world)
         s.attach("t", "Red", 8.5, 5.5, 0.5)
         return s
-    _p, colour = view(level, lit(red))
-    assert colour[0] > colour[1] * 2 and colour[0] > colour[2] * 2
+    _p, color = view(level, lit(red))
+    assert color[0] > color[1] * 2 and color[0] > color[2] * 2
 
 
 def test_light_does_not_come_through_a_wall():
@@ -325,7 +325,7 @@ def test_a_light_reaches_only_so_far():
     assert far == none
 
 
-def sprite_colour(level, glow, with_light):
+def sprite_color(level, glow, with_light):
     world = World(level, 16)
     player = spawn(level, world)
     player.x, player.y, player.angle = 2.5, 5.5, 0.0
@@ -342,9 +342,9 @@ def sprite_colour(level, glow, with_light):
 
 def test_sprites_are_lit_too_and_glowing_ones_stay_bright_in_the_dark():
     level = room(lights=[Light("Torch", intensity=3.0, radius=5.0)], ambient=0.2)
-    dim = sprite_colour(level, 0.0, False)
-    lit_up = sprite_colour(level, 0.0, True)
-    glowing = sprite_colour(level, 1.0, False)
+    dim = sprite_color(level, 0.0, False)
+    lit_up = sprite_color(level, 0.0, True)
+    glowing = sprite_color(level, 1.0, False)
     assert brightness(lit_up) > brightness(dim) * 2
     assert brightness(glowing) > brightness(dim) * 3
     assert max(glowing) >= 150                                                      # as bright as its own picture
