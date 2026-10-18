@@ -39,7 +39,7 @@ def _wall_ty(z, tsize):
     return int(math.floor(-z * tsize)) & (tsize - 1)
 
 
-@njit(cache=True)
+@njit(cache=True, inline="always")
 def _trace_pixel(fb, zb, x, y, px, py, eye_z, eye_span, dx, dy, dz,
                  floor_plane, ceil_plane, span_on, solid_from, pane_tex, pane_top, wall_tex, floor_tex, ceil_tex,
                  textures, max_dist, fog_dist, bg, pane_t, pane_tx, pane_ty, pane_id, pane_shade):

@@ -72,7 +72,7 @@ def build_visibility(lights, occluder, vis):
                     vis[i, cy, cx] = 1.0
 
 
-@njit(cache=True)
+@njit(cache=True, inline="always")
 def _sample_visibility(vis, occluder, i, x, y):
     """How much of the map around (x, y) light i can see: the four nearest open cells' centres, blended."""
     h, w = occluder.shape
@@ -101,7 +101,7 @@ def _soft(v):
     return KNEE + HEADROOM * (1.0 - math.exp(-(v - KNEE) / HEADROOM))
 
 
-@njit(cache=True)
+@njit(cache=True, inline="always")
 def _light_at(lights, vis, occluder, x, y, z, qx, qy):
     """(red, green, blue) light arriving at the world point (x, y, z), reading visibility at (qx, qy)."""
     r = g = b = 0.0
