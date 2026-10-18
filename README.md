@@ -19,6 +19,11 @@ Design effects in the editor's Effects section (X): pick a particle picture from
 or a stream, and shape how many, how long they live, speed, spread, gravity, drag, size and fade while a
 live side view plays them. Effects are saved in the map and used by name:
 
+An effect can start its particles away from the point it is played at (**Start offset X / Y** and **Start height**)
+and send them in a fixed **Direction** instead of the automatic one (up from an item, along the aim from a gun,
+back along the path from a bullet). Offsets and a custom direction are along the map's axes (x east, y south,
+z up), or with **Heading** axes, x ahead and y to the right of the automatic direction.
+
 - a gun's **Muzzle effect** plays where it fires;
 - an ammo type's **Trail effect** follows its bullets through the air;
 - an item's **Emits** sends the effect up from the item. Set its Mode to *Scenery* (it cannot be picked
