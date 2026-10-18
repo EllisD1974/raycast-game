@@ -376,3 +376,82 @@ def test_sprite_alpha_blends_a_particle_into_the_picture():
         seen[alpha] = picture.get_at((w // 2, h // 2))[:3]
     assert seen[0.0][0] < seen[0.5][0] < seen[1.0][0]
     assert renderer.draw(world, player, [(4.0, 4.0, 0.2, 0.6, 1)]).get_at((w // 2, h // 2))[:3] == seen[1.0]
+
+
+# ------------------------------------------------------------------ where they start and which way they go
+
+def still(**settings):
+    """A one particle effect that does not move, so where it appears is where it was started."""
+    return Effect("E", count=1, spread=0.0, speed=0.0, life=5.0, collide=False, **settings)
+
+
+def test_an_effect_with_no_offset_or_direction_does_what_it_always_did():
+    base = Effect("E", count=3, spread=0.0, speed=2.0, speed_var=0.0, life=5.0)
+    assert (base.offset_x, base.offset_y, base.offset_z, base.aim, base.relative) == (0, 0, 0, "auto", False)
+    ps = system(base)
+    ps.play("E", 2.0, 3.0, 1.0, (0.0, 1.0, 0.0))
+    assert all((p.x, p.y, p.z) == (2.0, 3.0, 1.0) and (p.vx, p.vy, p.vz) == pytest.approx((0, 2.0, 0)) for p in ps.particles)
+
+
+def test_the_offset_moves_where_the_particles_start_along_the_maps_axes():
+    ps = system(still(offset_x=0.5, offset_y=-0.25, offset_z=0.3))
+    ps.play("E", 2.0, 2.0, 1.0)
+    p, = ps.particles
+    assert (p.x, p.y, p.z) == pytest.approx((2.5, 1.75, 1.3))
+
+
+def test_a_relative_offset_follows_the_heading_and_an_item_has_none():
+    ps = system(still(offset_x=1.0, offset_y=0.5, relative=True))
+    ps.play("E", 5.0, 5.0, 1.0, (0.0, 1.0, 0.0))                     # heading along +y (south on the map)
+    p, = ps.particles
+    assert (p.x, p.y) == pytest.approx((5.0 - 0.5, 5.0 + 1.0))       # ahead is +y, to the right of that is -x
+    ps = system(still(offset_x=1.0, offset_y=0.5, relative=True))
+    ps.play("E", 5.0, 5.0, 1.0)                                      # up: no heading, so the map's axes
+    p, = ps.particles
+    assert (p.x, p.y) == pytest.approx((6.0, 5.5))
+    ps = system(still(offset_x=1.0, relative=True))
+    ps.play("E", 5.0, 5.0, 1.0, (1.0, 0.0, 0.0))                     # heading east: ahead is +x
+    assert (ps.particles[0].x, ps.particles[0].y) == pytest.approx((6.0, 5.0))
+
+
+def test_a_custom_direction_replaces_the_automatic_one():
+    ps = system(Effect("E", count=5, spread=0.0, speed=4.0, speed_var=0.0, life=5.0, aim="custom", dir_x=3.0, dir_y=0.0, dir_z=0.0))
+    ps.play("E", 0, 0, 0, (0.0, 1.0, 0.0))                           # the gun is aimed along +y but the effect says east
+    assert all((p.vx, p.vy, p.vz) == pytest.approx((4.0, 0.0, 0.0)) for p in ps.particles)
+
+
+def test_a_custom_direction_can_be_relative_to_the_heading():
+    ps = system(Effect("E", count=3, spread=0.0, speed=4.0, speed_var=0.0, life=5.0, aim="custom", dir_x=1.0, dir_y=0.0,
+                       dir_z=0.5, relative=True))
+    ps.play("E", 0, 0, 0, (0.0, 1.0, 0.0))                           # heading +y: "forward" is +y
+    v = ps.particles[0]
+    length = math.sqrt(1.25)
+    assert (v.vx, v.vy, v.vz) == pytest.approx((0.0, 4.0 / length, 2.0 / length))
+
+
+def test_a_custom_direction_of_nothing_falls_back_to_automatic():
+    ps = system(Effect("E", count=2, spread=0.0, speed=2.0, speed_var=0.0, life=5.0, aim="custom", dir_x=0.0, dir_y=0.0, dir_z=0.0))
+    ps.play("E", 0, 0, 0, (0.0, 0.0, 1.0))
+    assert all((p.vx, p.vy, p.vz) == pytest.approx((0, 0, 2.0)) for p in ps.particles)
+
+
+def test_the_offset_applies_to_streams_and_trails_too():
+    ps = system(Effect("T", kind="stream", rate=60.0, speed=0.0, life=5.0, offset_z=0.4, collide=False))
+    ps.attach("b", "T", 0.0, 0.0, 1.0, dt=DT)
+    for i in range(1, 11):
+        ps.attach("b", "T", 0.3 * i, 0.0, 1.0, dt=DT)
+    assert ps.particles and all(p.z == pytest.approx(1.4) for p in ps.particles)
+    one_shot = system(Effect("S", kind="stream", rate=100.0, duration=0.2, speed=0.0, life=5.0, offset_x=2.0, collide=False))
+    one_shot.play("S", 1.0, 1.0, 1.0)
+    one_shot.update(0.1)
+    assert one_shot.particles and all(p.x == pytest.approx(3.0) for p in one_shot.particles)
+
+
+def test_offsets_and_directions_survive_saving_and_bad_values_are_fixed():
+    level = Level.blank(6, 6)
+    level.effects = [Effect("E", offset_x=0.5, offset_y=-1.0, offset_z=0.25, aim="custom", dir_x=1.0, dir_y=-2.0,
+                            dir_z=0.0, relative=True)]
+    again = parse_level(json.loads(level_text(level)))
+    assert again.effects == level.effects
+    bad = Effect.from_dict({"offset_x": 999, "aim": "sideways", "dir_z": "up", "relative": 1})
+    assert bad.offset_x == 10.0 and bad.aim == "auto" and bad.dir_z == 1.0 and bad.relative is True

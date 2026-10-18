@@ -259,3 +259,48 @@ def test_effects_are_saved_with_the_map_and_loaded_again(ed, tmp_path):
     assert [(f.name, f.gravity) for f in again.effects] == [("Sparks", 4.5)]
     assert again.guns[0].muzzle == "Sparks"
     assert effect.name == "Sparks"
+
+
+# ------------------------------------------------------------------ the start offset and the direction
+
+def test_the_pane_has_the_offset_rows_and_the_direction_rows_only_for_a_custom_direction(ed):
+    effect = add_effect(ed)
+    plain = keys(ed)
+    for name in ("offset_x", "offset_y", "offset_z", "aim", "relative"):
+        assert name in plain
+    assert not any(name in plain for name in ("dir_x", "dir_y", "dir_z"))
+    assert plain.index("aim") < plain.index("relative")
+    choose(ed, "aim", "custom")
+    custom = keys(ed)
+    assert effect.aim == "custom"
+    assert custom[custom.index("aim") + 1:custom.index("aim") + 4] == ["dir_x", "dir_y", "dir_z"]
+    choose(ed, "aim", "auto")
+    assert "dir_x" not in keys(ed)
+
+
+def test_offsets_and_a_custom_direction_can_be_set_and_undone(ed):
+    effect = add_effect(ed)
+    click(ed, row(ed, "offset_x").plus.center)
+    click(ed, row(ed, "offset_z").plus.center)
+    assert (effect.offset_x, effect.offset_z) == (0.05, 0.05)
+    choose(ed, "aim", "custom")
+    click(ed, row(ed, "dir_x").plus.center)
+    assert ed.level.effects[0].dir_x == 0.25
+    choose(ed, "relative", True)
+    assert ed.level.effects[0].relative is True
+    ed.do("undo")
+    ed.do("undo")
+    ed.do("undo")
+    assert ed.level.effects[0].aim == "auto" and ed.level.effects[0].dir_x == 0.0
+
+
+def test_the_preview_starts_particles_at_the_offset_and_draws_without_trouble(ed):
+    effect = add_effect(ed)
+    effect.count, effect.spread, effect.speed, effect.life = 5, 0.0, 0.0, 5.0
+    ed.set_effect("offset_x", 1.5)
+    ed.set_effect("aim", "custom")
+    for _ in range(3):
+        ed.update(1 / 60, pygame.key.get_pressed())
+    sim = ed.fx_sim[0]
+    assert sim.count() == 5 and all(abs(p.x - 1.5) < 1e-6 for p in sim.particles)
+    ed.draw(pygame.display.get_surface())

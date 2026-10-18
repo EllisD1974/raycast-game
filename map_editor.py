@@ -86,7 +86,9 @@ named thing in the player's inventory instead. Choosing a map tool goes back to 
 The Effects section (X or the Effects button) is where you design particle effects: "+ Add effect", then
 shape it in the Details pane (the particle picture from the atlas, a burst or a stream, how many, how long
 they live, speed, spread, gravity, drag, size and fade) while a live side view plays it. Effects are
-saved in the map and reused by name: a gun's "Muzzle effect" plays where it fires, an ammo type's "Trail
+saved in the map and reused by name (Start offset X / Y / height move where the particles start, and Direction
+"Custom" sends them in a direction of your own instead of the automatic one; Offset / dir. axes chooses map
+axes or the heading's): a gun's "Muzzle effect" plays where it fires, an ammo type's "Trail
 effect" follows its bullets, and an item's "Emits" sends the effect up from the item (set its Mode to
 Scenery so it cannot be picked up, and Sprite to Hidden to see only the particles). They are only for looks
 and are worked out on each player's own machine.
@@ -128,7 +130,7 @@ from atlas import ATLAS_PATH, atlas_array, transparent_tiles, unpack_atlas
 from constants import HEIGHT, MOUSE_SENSITIVITY, PLAYER_HEIGHT, TILE, WIDTH
 from mapfile import (ANIMATION_KINDS, ANIMATION_LABELS, DEFAULTS, EDIT_LAYERS, EFFECT_LABELS, ENTITY_EFFECTS,
                      ENTITY_MODES, GUN_MODE_LABELS, GUN_MODES, MAP_PATH, MAX_NAME, MAX_NAME_LENGTH, MIN_WALL_GAP,
-                     EFFECT_KIND_LABELS, EFFECT_KINDS, MIN_AMBIENT, MODE_LABELS, SHOT_LABELS, SHOT_TYPES, Animation, AmmoType, Effect,
+                     EFFECT_AIM_LABELS, EFFECT_AIMS, EFFECT_KIND_LABELS, EFFECT_KINDS, MIN_AMBIENT, MODE_LABELS, SHOT_LABELS, SHOT_TYPES, Animation, AmmoType, Effect,
                      Entity, Gun, Level, Light, default_level,
                      grid_name, load_level, save_level, split_grid_name)
 import details
@@ -136,7 +138,7 @@ import hud
 from entities import describe
 from details import PANE_WIDTH, Field
 from inventory import GunState
-from particles import UP, ParticleSystem
+from particles import UP, ParticleSystem, placement
 from preview import Preview
 from window import maximize
 
@@ -878,6 +880,12 @@ class Editor:
                    field("speed_var", "Speed varies", "num", step=0.1, low=0.0, high=1.0),
                    field("spread", "Spread", "num", step=5.0, low=0.0, high=180.0, unit=" deg"),
                    field("radius", "Start radius", "num", step=0.05, low=0.0, high=5.0),
+                   field("offset_x", "Start offset X", "num", step=0.05, low=-10.0, high=10.0),
+                   field("offset_y", "Start offset Y", "num", step=0.05, low=-10.0, high=10.0),
+                   field("offset_z", "Start height +", "num", step=0.05, low=-10.0, high=10.0),
+                   field("aim", "Direction", "enum", choices=EFFECT_AIMS, labels=EFFECT_AIM_LABELS),
+                   field("relative", "Offset / dir. axes", "enum", choices=(False, True),
+                         labels={False: "Map (x east, y south)", True: "Heading (x ahead, y right)"}),
                    field("gravity", "Gravity", "num", step=0.5, low=-50.0, high=50.0),
                    field("drag", "Drag", "num", step=0.25, low=0.0, high=20.0),
                    field("size_start", "Size at start", "num", step=0.02, low=0.0, high=3.0),
@@ -886,6 +894,11 @@ class Editor:
                    field("alpha_end", "Solid at end", "num", step=0.1, low=0.0, high=1.0),
                    field("collide", "Hits walls", "enum", choices=(True, False), labels={True: "Stops", False: "Passes through"}),
                    field("light", "Particle light", "enum", choices=self.light_choices(), labels=self.light_labels())]
+        if f.aim == "custom":                               # the direction to send them in, right below the Direction row
+            at = next(i for i, x in enumerate(fields) if x.key == "aim") + 1
+            fields[at:at] = [field("dir_x", "Direction X", "num", step=0.25, low=-100.0, high=100.0),
+                             field("dir_y", "Direction Y", "num", step=0.25, low=-100.0, high=100.0),
+                             field("dir_z", "Direction Z (up)", "num", step=0.25, low=-100.0, high=100.0)]
         return fields
 
     def new_effect_name(self, base="Effect", skip=None):
@@ -2651,6 +2664,13 @@ class Editor:
         centre = card.centerx
         start_y = floor_y - FX_BASE * FX_CELL
         pygame.draw.circle(screen, ACCENT, (centre, round(start_y)), 3)
+        if self.fx_sim is not None:                                 # where the particles really start, and which way they head
+            (ox, _oy, oz), (dx, dy, dz) = placement(self.fx_sim[0].effects[self.selected_effect().name], UP)
+            origin = (round(centre + ox * FX_CELL), round(start_y - oz * FX_CELL))
+            norm = math.sqrt(dx * dx + dy * dy + dz * dz) or 1.0
+            tip = (origin[0] + round(dx / norm * FX_CELL * 0.7), origin[1] - round(dz / norm * FX_CELL * 0.7))
+            pygame.draw.line(screen, ACCENT, origin, tip, 2)
+            pygame.draw.circle(screen, (255, 255, 255), origin, 4, 1)
         for x in range(centre % FX_CELL, card.w, FX_CELL):          # a one cell grid so sizes can be judged
             pygame.draw.line(screen, (44, 48, 60), (card.x + x, card.y), (card.x + x, floor_y))
         if self.fx_sim is not None:
@@ -2668,7 +2688,8 @@ class Editor:
                                                               round(floor_y - (z + size / 2) * FX_CELL))))
             screen.set_clip(None)
         pygame.draw.rect(screen, GRID, card.inflate(2, 2), 1)
-        screen.blit(self.small.render("side view, one grid square = 1 cell", True, DIM), (card.x + 8, card.bottom - 20))
+        screen.blit(self.small.render("side view (x across, up is up), one square = 1 cell; the line shows the direction",
+                                      True, DIM), (card.x + 8, card.bottom - 20))
 
     def draw_effects(self, screen):
         """The Effects section: the map's particle effects as a list, and a live preview of the selected one."""

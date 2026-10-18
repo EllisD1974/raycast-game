@@ -72,6 +72,8 @@ SHOT_TYPES = ("single", "multi", "projectile")
 SHOT_LABELS = {"single": "Single bullet", "multi": "Multi bullet", "projectile": "Projectile"}
 MIN_AMBIENT = 0.02                              # the darkest a map can be made
 EFFECT_KINDS = ("burst", "stream")
+EFFECT_AIMS = ("auto", "custom")
+EFFECT_AIM_LABELS = {"auto": "Automatic", "custom": "Custom"}
 EFFECT_KIND_LABELS = {"burst": "Burst", "stream": "Stream"}
 MAX_NAME = 24                                   # longest name of an item, gun or particle effect
 ANIMATION_KINDS = ("float", "rotate")
@@ -151,7 +153,16 @@ class Effect:
     alpha_start, alpha_end  how solid they are at birth and at death (1 opaque, 0 invisible)
     collide      particles end when they hit a wall, floor or ceiling
     light        name of the Light every particle carries ("" for none); it fades with the particle, and the
-                 particles are drawn at full brightness so they glow in a dark map"""
+                 particles are drawn at full brightness so they glow in a dark map
+    offset_x, offset_y, offset_z
+                 where the particles start, in cells, from the point the effect is played at (the muzzle, the
+                 bullet, the item); offset_z is height
+    aim          auto: leave in the direction the effect is played in (up from an item, along the aim from a
+                 gun, back along the path from a bullet); custom: leave in the direction dir_x, dir_y, dir_z
+                 (only which way it points matters, not how long it is; all zero means automatic)
+    relative     false: the offset and custom direction are along the map's axes (x east, y south, z up);
+                 true: x is along the automatic direction's heading and y to the right of it (an item has no
+                 heading, so there they are still the map's axes)"""
     name: str = "Effect"
     tile: int = 14
     kind: str = "burst"
@@ -173,6 +184,14 @@ class Effect:
     alpha_end: float = 0.0
     collide: bool = True
     light: str = ""
+    offset_x: float = 0.0
+    offset_y: float = 0.0
+    offset_z: float = 0.0
+    aim: str = "auto"
+    dir_x: float = 0.0
+    dir_y: float = 0.0
+    dir_z: float = 1.0
+    relative: bool = False
 
     @classmethod
     def from_dict(cls, data):
@@ -194,7 +213,12 @@ class Effect:
                    gravity=number("gravity", -50.0, 50.0), drag=number("drag", 0.0, 20.0),
                    size_start=number("size_start", 0.0, 3.0), size_end=number("size_end", 0.0, 3.0),
                    alpha_start=number("alpha_start", 0.0, 1.0), alpha_end=number("alpha_end", 0.0, 1.0),
-                   collide=bool(data.get("collide", base.collide)), light=str(data.get("light", ""))[:MAX_NAME])
+                   collide=bool(data.get("collide", base.collide)), light=str(data.get("light", ""))[:MAX_NAME],
+                   offset_x=number("offset_x", -10.0, 10.0), offset_y=number("offset_y", -10.0, 10.0),
+                   offset_z=number("offset_z", -10.0, 10.0),
+                   aim=data.get("aim") if data.get("aim") in EFFECT_AIMS else base.aim,
+                   dir_x=number("dir_x", -100.0, 100.0), dir_y=number("dir_y", -100.0, 100.0),
+                   dir_z=number("dir_z", -100.0, 100.0), relative=bool(data.get("relative", base.relative)))
 
 
 @dataclass
