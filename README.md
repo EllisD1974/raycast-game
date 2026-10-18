@@ -27,9 +27,9 @@ item that uses an effect can also **override** the start offset for itself (its 
 the heading (map axes for an item).
 
 - a gun's **Bullets ahead / right / up** say where its bullets come from (and where its muzzle effect and flash start);
-  rather than typing numbers, drag the orange disc (bullets) and the cyan diamond (muzzle effect) in the two views under
-  the gun preview (a side view with the gun on the left facing right, and a view from behind with the gun at the
-  bottom facing up); the wheel scrolls the Guns section if it does not all fit;
+  rather than typing numbers, drag the orange disc (bullets) and the cyan diamond (muzzle effect) on the gun
+  preview picture itself (sideways and up), and use the Depth slider to move the picked one in and out of the screen;
+  the wheel scrolls the Guns section if it does not all fit;
 - a gun's **Muzzle effect** plays where it fires (the Guns section shows it live: tick *Fire continuously* to see the
   gun fire, reload, and play its effects and lights on repeat);
 - an ammo type's **Trail effect** follows its bullets through the air;

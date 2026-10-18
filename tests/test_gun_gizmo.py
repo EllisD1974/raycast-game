@@ -1,7 +1,8 @@
-"""Placing where a gun's bullets and muzzle effect come from by dragging in the Guns section, and scrolling that section.
+"""Placing where a gun's bullets and muzzle effect come from by dragging on the gun picture, with a depth slider, and
+scrolling the Guns section.
 
-Two views share the work: the side view has the gun on the left facing right (across is ahead of the gun, up is up)
-and the view from behind has the gun at the bottom middle facing up (across is right of the gun, up is up).
+The handles are drawn on the picture of the live preview, where the bullets and the effect really start: dragging one moves it
+sideways and up at the depth it has, and the slider moves it in and out of the screen (further ahead of the gun, or back).
 """
 import os
 import sys
@@ -16,6 +17,7 @@ import map_editor
 from mapfile import Effect, Level
 
 DT = 1 / 60
+ORANGE, CYAN = (255, 170, 60), (80, 220, 255)
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -83,13 +85,17 @@ def gun_with_effect(ed, **effect):
     return ed.level.guns[0]
 
 
-def gizmo(ed):
-    return ed.gizmo_layout(ed.guns_card_rect())
+def card(ed):
+    return ed.guns_card_rect()
 
 
-def pixel(ed, view, point):
-    """The pixel in a view of a point given as (ahead, right, up) offsets from the gun's usual muzzle point."""
-    return ed.gizmo_pixel(gizmo(ed), view, point)
+def layout(ed):
+    return ed.gizmo_layout(card(ed))
+
+
+def pixel(ed, point):
+    """Where an (ahead, right, up) offset point from the usual muzzle point shows on the picture."""
+    return ed.gizmo_pixel(card(ed), point)
 
 
 def step(ed, seconds):
@@ -97,119 +103,181 @@ def step(ed, seconds):
         ed.update(DT, pygame.key.get_pressed())
 
 
-def drag(ed, view, start, end):
-    press(ed, pixel(ed, view, start))
-    target = pixel(ed, view, end)
-    drag_to(ed, target)
-    release(ed, target)
+def drag_picture(ed, start, end):
+    press(ed, pixel(ed, start))
+    drag_to(ed, end)
+    release(ed, end)
+
+
+def slider_at(ed, fraction):
+    track = layout(ed)["track"]
+    return (track.x + round(fraction * track.w), track.centery)
+
+
+def depth_of(ed):
+    return ed.gizmo_depth(ed.level.guns[0])
 
 
 # ------------------------------------------------------------------ the layout
 
-def test_the_two_views_sit_under_the_picture_at_one_scale(ed):
+def test_the_buttons_and_the_depth_slider_sit_under_the_gun_picture(ed):
     add_gun(ed)
-    layout = gizmo(ed)
-    assert set(layout["views"]) == {"side", "back"} and set(layout["buttons"]) == {"bullet", "effect"}
-    side, back = layout["views"]["side"], layout["views"]["back"]
-    card = ed.guns_card_rect()
-    assert side.top > card.bottom and side.height == back.height and back.left > side.right
-    assert side.left == card.left and back.right <= card.right
-    assert side.width / (map_editor.GIZMO_AHEAD[1] - map_editor.GIZMO_AHEAD[0]) == pytest.approx(layout["scale"], abs=1)
-    assert back.width / (map_editor.GIZMO_RIGHT[1] - map_editor.GIZMO_RIGHT[0]) == pytest.approx(layout["scale"], abs=1)
-    assert layout["bottom"] > side.bottom
+    controls_bottom = ed.gun_controls(card(ed))[1]
+    lay = layout(ed)
+    assert set(lay["buttons"]) == {"bullet", "effect"}
+    assert lay["buttons"]["bullet"].top > controls_bottom - 10
+    assert lay["track"].top > lay["buttons"]["bullet"].bottom and lay["track"].width > 100
+    assert lay["status"] > lay["track"].bottom and lay["bottom"] > lay["status"]
+    assert "views" not in lay                                                          # no separate views any more
     ed.draw(pygame.display.get_surface())
 
 
-def test_the_gun_is_on_the_left_in_the_side_view_and_at_the_bottom_middle_from_behind(ed):
-    add_gun(ed)
-    layout = gizmo(ed)
-    side, back = layout["views"]["side"], layout["views"]["back"]
-    sx, sy = pixel(ed, "side", (0.0, 0.0, 0.0))                       # the gun's muzzle in each view
-    bx, by = pixel(ed, "back", (0.0, 0.0, 0.0))
-    assert side.left + side.width * 0.2 < sx < side.left + side.width * 0.5          # near the left, with room for the gun
-    assert abs(bx - back.centerx) <= 1                                               # in the middle across
-    assert by > back.top + back.height * 0.6                                         # low down: the gun stands at the bottom
-
-
-def test_across_and_up_go_the_way_they_look(ed):
-    add_gun(ed)
-    x0, y0 = pixel(ed, "side", (0.0, 0.0, 0.0))
-    ahead_x, _ = pixel(ed, "side", (0.5, 0.0, 0.0))
-    _, up_y = pixel(ed, "side", (0.0, 0.0, 0.5))
-    assert ahead_x > x0 and up_y < y0                                                # more ahead is right, up is up the screen
-    bx0, by0 = pixel(ed, "back", (0.0, 0.0, 0.0))
-    right_x, _ = pixel(ed, "back", (0.0, 0.5, 0.0))
-    left_x, _ = pixel(ed, "back", (0.0, -0.5, 0.0))
-    _, up_by = pixel(ed, "back", (0.0, 0.0, 0.5))
-    assert right_x > bx0 > left_x and up_by < by0
-
-
-def test_the_points_are_offsets_from_the_usual_muzzle_point(ed):
+def test_the_handle_is_drawn_on_the_picture_where_the_bullets_start(ed):
     gun = add_gun(ed)
-    assert ed.gizmo_points(gun) == {"bullet": (0.0, 0.0, 0.0)}                       # no effect, so no effect handle
-    gun.bullet_offset_x, gun.bullet_offset_y, gun.bullet_offset_z = 0.5, 0.3, -0.25
-    assert ed.gizmo_points(gun)["bullet"] == pytest.approx((0.5, 0.3, -0.25))        # exactly the pane's rows
+    ed.draw(pygame.display.get_surface())
+    c = card(ed)
+    x, y = pixel(ed, ed.gizmo_points(gun)["bullet"])
+    assert c.collidepoint(x, y) and abs(x - c.centerx) <= 1
+    assert y > c.centery                                                               # the muzzle is a little below the eye
+    assert tuple(pygame.display.get_surface().get_at((x, y))[:3]) == ORANGE            # the orange disc
 
 
-def test_a_handle_further_out_than_the_view_reaches_sits_on_its_edge(ed):
+def test_offsets_show_on_the_picture_the_way_they_look(ed):
     add_gun(ed)
-    layout = gizmo(ed)
-    x, y = pixel(ed, "side", (4.0, 0.0, 4.0))
-    view = layout["views"]["side"]
-    assert (x, y) == (view.right, view.top)
+    x0, y0 = pixel(ed, (1.0, 0.0, 0.0))
+    right_x, _ = pixel(ed, (1.0, 0.3, 0.0))
+    left_x, _ = pixel(ed, (1.0, -0.3, 0.0))
+    _, up_y = pixel(ed, (1.0, 0.0, 0.3))
+    _, down_y = pixel(ed, (1.0, 0.0, -0.3))
+    assert right_x > x0 > left_x and up_y < y0 < down_y
 
 
-# ------------------------------------------------------------------ dragging the bullets' handle
+def test_further_ahead_the_same_offset_moves_toward_the_middle_of_the_picture(ed):
+    add_gun(ed)
+    c = card(ed)
+    near_x, near_y = pixel(ed, (0.5, 0.3, 0.2))
+    far_x, far_y = pixel(ed, (2.0, 0.3, 0.2))
+    assert abs(far_x - c.centerx) < abs(near_x - c.centerx) and abs(far_y - c.centery) < abs(near_y - c.centery)
 
-def test_dragging_in_the_side_view_sets_ahead_and_up_and_leaves_right_alone(ed):
+
+def test_a_handle_further_out_than_the_picture_sits_on_its_edge_and_can_still_be_grabbed(ed):
     gun = add_gun(ed)
-    gun.bullet_offset_y = 0.4
-    drag(ed, "side", (0.0, 0.4, 0.0), (0.6, 0.4, -0.3))
+    gun.bullet_offset_y, gun.bullet_offset_z = 3.0, 3.0
+    c = card(ed)
+    x, y = pixel(ed, ed.gizmo_points(gun)["bullet"])
+    assert (x, y) == (c.right - 1, c.top)
+    press(ed, (x, y))
+    assert ed.gizmo_drag == "picture" and ed.gizmo_selected == "bullet"
+    release(ed, (x, y))
+
+
+# ------------------------------------------------------------------ dragging on the picture
+
+def test_dragging_a_handle_on_the_picture_sets_right_and_up_and_keeps_its_depth(ed):
+    gun = add_gun(ed)
+    gun.bullet_offset_x = 0.9
+    c = card(ed)
+    target = (c.centerx + 70, c.centery - 40)
+    drag_picture(ed, (0.9, 0.0, 0.0), target)
     shown = ed.level.guns[0]
-    assert (shown.bullet_offset_x, shown.bullet_offset_z) == pytest.approx((0.6, -0.3), abs=0.02)
-    assert shown.bullet_offset_y == 0.4
+    assert shown.bullet_offset_x == 0.9                                                # depth untouched
+    assert shown.bullet_offset_y > 0.1 and shown.bullet_offset_z > 0.0                 # right of the middle, above it
+    x, y = pixel(ed, ed.gizmo_points(shown)["bullet"])
+    assert (x, y) == pytest.approx(target, abs=2)                                      # and it is now under the mouse
 
 
-def test_dragging_from_behind_sets_right_and_up_and_leaves_ahead_alone(ed):
-    gun = add_gun(ed)
-    gun.bullet_offset_x = 0.7
-    drag(ed, "back", (0.7, 0.0, 0.0), (0.7, -0.4, 0.5))
+def test_dragging_to_the_left_and_down_goes_the_other_way(ed):
+    add_gun(ed)
+    c = card(ed)
+    drag_picture(ed, (0.25, 0.0, 0.0), (c.centerx - 50, c.bottom - 20))
     shown = ed.level.guns[0]
-    assert (shown.bullet_offset_y, shown.bullet_offset_z) == pytest.approx((-0.4, 0.5), abs=0.02)
-    assert shown.bullet_offset_x == 0.7
+    assert shown.bullet_offset_y < 0 and shown.bullet_offset_z < 0
 
 
 def test_a_whole_drag_is_one_undo_step_and_marks_the_map_changed(ed):
     gun = add_gun(ed)
     ed.dirty = False
-    start = pixel(ed, "side", ed.gizmo_points(gun)["bullet"])
+    start = pixel(ed, ed.gizmo_points(gun)["bullet"])
     press(ed, start)
     for i in range(1, 6):
-        drag_to(ed, (start[0] + i * 6, start[1] + i * 4))
-    release(ed, (start[0] + 30, start[1] + 20))
-    assert ed.dirty and ed.level.guns[0].bullet_offset_x != 0.0
+        drag_to(ed, (start[0] + i * 6, start[1] - i * 4))
+    release(ed, (start[0] + 30, start[1] - 20))
+    assert ed.dirty and ed.level.guns[0].bullet_offset_y != 0.0
     ed.do("undo")
-    assert ed.level.guns[0].bullet_offset_x == 0.0 and ed.level.guns[0].bullet_offset_z == 0.0
+    assert ed.level.guns[0].bullet_offset_y == 0.0 and ed.level.guns[0].bullet_offset_z == 0.0
 
 
 def test_a_click_on_empty_space_puts_the_picked_handle_there_and_dragging_goes_on(ed):
     add_gun(ed)
-    press(ed, pixel(ed, "back", (0.0, 0.6, 0.7)))
-    assert (ed.level.guns[0].bullet_offset_y, ed.level.guns[0].bullet_offset_z) == pytest.approx((0.6, 0.7), abs=0.02)
-    target = pixel(ed, "back", (0.0, -0.2, 0.1))
+    c = card(ed)
+    spot = (c.centerx + 90, c.centery - 60)
+    press(ed, spot)
+    first = (ed.level.guns[0].bullet_offset_y, ed.level.guns[0].bullet_offset_z)
+    assert first[0] > 0 and first[1] > 0
+    target = (c.centerx - 30, c.centery + 20)
     drag_to(ed, target)
     release(ed, target)
-    assert (ed.level.guns[0].bullet_offset_y, ed.level.guns[0].bullet_offset_z) == pytest.approx((-0.2, 0.1), abs=0.02)
+    assert ed.level.guns[0].bullet_offset_y < 0 < first[0]
+    assert pixel(ed, ed.gizmo_points(ed.level.guns[0])["bullet"]) == pytest.approx(target, abs=2)
 
 
-def test_dragging_outside_a_view_keeps_the_handle_inside_it(ed):
+def test_dragging_outside_the_picture_keeps_the_handle_inside_it(ed):
     add_gun(ed)
-    press(ed, pixel(ed, "side", (0.0, 0.0, 0.0)))
+    press(ed, pixel(ed, (0.0, 0.0, 0.0)))
     drag_to(ed, (5000, 5000))
     release(ed, (5000, 5000))
-    gun = ed.level.guns[0]
-    assert map_editor.GIZMO_AHEAD[0] <= gun.bullet_offset_x <= map_editor.GIZMO_AHEAD[1]
-    assert map_editor.GIZMO_UP[0] <= gun.bullet_offset_z <= map_editor.GIZMO_UP[1]
+    c = card(ed)
+    x, y = pixel(ed, ed.gizmo_points(ed.level.guns[0])["bullet"])
+    assert c.collidepoint(x, y) and (x, y) == pytest.approx((c.right - 1, c.bottom - 1), abs=2)
+
+
+# ------------------------------------------------------------------ the depth slider
+
+def test_the_slider_ends_are_the_depth_range_and_a_click_sets_the_depth(ed):
+    add_gun(ed)
+    lo, hi = map_editor.GIZMO_DEPTH
+    click(ed, slider_at(ed, 0.0))
+    assert depth_of(ed) == pytest.approx(lo, abs=0.02)
+    click(ed, slider_at(ed, 1.0))
+    assert depth_of(ed) == pytest.approx(hi, abs=0.02)
+    click(ed, slider_at(ed, 0.5))
+    assert depth_of(ed) == pytest.approx((lo + hi) / 2, abs=0.03)
+    assert ed.level.guns[0].bullet_offset_x == pytest.approx((lo + hi) / 2, abs=0.03)
+
+
+def test_the_slider_moves_the_handle_in_and_out_and_leaves_right_and_up_alone(ed):
+    gun = add_gun(ed)
+    gun.bullet_offset_y, gun.bullet_offset_z = 0.3, -0.25
+    c = card(ed)
+    before = pixel(ed, ed.gizmo_points(gun)["bullet"])
+    press(ed, slider_at(ed, 0.2))
+    for i in range(1, 8):
+        drag_to(ed, slider_at(ed, 0.2 + i * 0.1))
+    release(ed, slider_at(ed, 0.9))
+    shown = ed.level.guns[0]
+    assert (shown.bullet_offset_y, shown.bullet_offset_z) == (0.3, -0.25)
+    assert shown.bullet_offset_x > 1.5
+    after = pixel(ed, ed.gizmo_points(shown)["bullet"])
+    assert abs(after[0] - c.centerx) < abs(before[0] - c.centerx) or before[0] == c.right - 1   # further out: nearer the middle
+
+
+def test_a_slider_drag_is_one_undo_step(ed):
+    add_gun(ed)
+    press(ed, slider_at(ed, 0.3))
+    drag_to(ed, slider_at(ed, 0.6))
+    release(ed, slider_at(ed, 0.9))
+    assert ed.level.guns[0].bullet_offset_x > 1.0
+    ed.do("undo")
+    assert ed.level.guns[0].bullet_offset_x == 0.0
+
+
+def test_the_slider_follows_the_picked_handle(ed):
+    gun = gun_with_effect(ed)
+    gun.bullet_offset_x, gun.muzzle_override, gun.muzzle_offset_x = 0.5, True, 0.4
+    assert depth_of(ed) == pytest.approx(0.5)                                          # the bullets' depth
+    click(ed, layout(ed)["buttons"]["effect"].center)
+    assert depth_of(ed) == pytest.approx(0.9)                                          # the effect's, from the usual muzzle point
+    ed.draw(pygame.display.get_surface())
 
 
 # ------------------------------------------------------------------ the effect's handle
@@ -218,114 +286,129 @@ def test_the_effect_handle_starts_overriding_the_effects_own_offset_as_soon_as_i
     gun = gun_with_effect(ed, offset_x=0.4, offset_y=0.1, offset_z=0.2)
     assert gun.muzzle_override is False
     points = ed.gizmo_points(gun)
-    assert points["effect"] == pytest.approx((0.4, 0.1, 0.2))                        # the effect's own offset, from the bullets
-    click(ed, gizmo(ed)["buttons"]["effect"].center)
+    assert points["effect"] == pytest.approx((0.4, 0.1, 0.2))                          # the effect's own offset, from the bullets
+    click(ed, layout(ed)["buttons"]["effect"].center)
     assert ed.gizmo_selected == "effect"
-    drag(ed, "side", points["effect"], (0.9, 0.1, -0.1))
+    c = card(ed)
+    drag_picture(ed, points["effect"], (c.centerx - 60, c.centery + 10))
     shown = ed.level.guns[0]
     assert shown.muzzle_override is True
-    assert (shown.muzzle_offset_x, shown.muzzle_offset_z) == pytest.approx((0.9, -0.1), abs=0.02)
-    assert shown.muzzle_offset_y == pytest.approx(0.1)                               # the side view leaves right as it was
+    assert shown.muzzle_offset_y < 0 and shown.muzzle_offset_x == pytest.approx(0.4)   # moved sideways; the depth was kept
+    assert (shown.bullet_offset_x, shown.bullet_offset_y, shown.bullet_offset_z) == (0.0, 0.0, 0.0)
 
 
-def test_the_effect_handle_from_behind_sets_right_and_up(ed):
-    gun_with_effect(ed)
-    click(ed, gizmo(ed)["buttons"]["effect"].center)
-    drag(ed, "back", (0.0, 0.0, 0.0), (0.0, -0.5, 0.6))
+def test_the_slider_moves_the_effect_in_and_out_relative_to_the_bullets(ed):
+    gun = gun_with_effect(ed)
+    gun.bullet_offset_x, gun.bullet_offset_y = 0.2, 0.1
+    click(ed, layout(ed)["buttons"]["effect"].center)
+    click(ed, slider_at(ed, 1.0))
     shown = ed.level.guns[0]
+    hi = map_editor.GIZMO_DEPTH[1]
     assert shown.muzzle_override is True
-    assert (shown.muzzle_offset_y, shown.muzzle_offset_z) == pytest.approx((-0.5, 0.6), abs=0.02)
-    assert shown.muzzle_offset_x == 0.0
+    assert shown.muzzle_offset_x == pytest.approx(hi - 0.2, abs=0.03)                  # the effect's own depth is the slider's
+    assert shown.bullet_offset_x == 0.2 and shown.bullet_offset_y == 0.1               # the bullets stayed
 
 
 def test_moving_the_bullets_handle_carries_the_effects_handle_with_it(ed):
     gun = gun_with_effect(ed)
     gun.muzzle_override, gun.muzzle_offset_x = True, 0.3
-    drag(ed, "side", ed.gizmo_points(gun)["bullet"], (0.5, 0.0, 0.2))
-    after = ed.gizmo_points(ed.level.guns[0])
-    assert after["effect"][0] - after["bullet"][0] == pytest.approx(0.3)             # the same offset from the bullets
-    assert after["bullet"][0] == pytest.approx(0.5, abs=0.02)
+    c = card(ed)
+    drag_picture(ed, ed.gizmo_points(gun)["bullet"], (c.centerx + 40, c.centery))
+    shown = ed.level.guns[0]
+    after = ed.gizmo_points(shown)
+    assert after["effect"][0] - after["bullet"][0] == pytest.approx(0.3)               # the same offset from the bullets
+    assert shown.bullet_offset_y > 0 and shown.muzzle_offset_x == 0.3
 
 
 def test_the_buttons_pick_which_handle_moves_and_an_effect_needs_a_muzzle_effect(ed):
     add_gun(ed)
-    click(ed, gizmo(ed)["buttons"]["effect"].center)
-    assert ed.gizmo_selected == "bullet"                                             # nothing to move: stays on the bullets
+    click(ed, layout(ed)["buttons"]["effect"].center)
+    assert ed.gizmo_selected == "bullet"                                               # nothing to move: stays on the bullets
     ed.level.effects = [Effect("Puff")]
     ed.set_gun("muzzle", "Puff")
-    click(ed, gizmo(ed)["buttons"]["effect"].center)
+    click(ed, layout(ed)["buttons"]["effect"].center)
     assert ed.gizmo_selected == "effect"
-    click(ed, gizmo(ed)["buttons"]["bullet"].center)
+    click(ed, layout(ed)["buttons"]["bullet"].center)
     assert ed.gizmo_selected == "bullet"
     ed.draw(pygame.display.get_surface())
 
 
 def test_a_click_on_a_handle_picks_it_but_where_they_overlap_the_picked_one_keeps_the_click(ed):
     gun = gun_with_effect(ed)
-    gun.muzzle_override, gun.muzzle_offset_x = True, 0.5
-    points = ed.gizmo_points(gun)
-    press(ed, pixel(ed, "side", points["effect"]))                                   # on the effect handle, apart from the bullets
-    release(ed, pixel(ed, "side", points["effect"]))
+    gun.bullet_offset_x, gun.muzzle_override, gun.muzzle_offset_y = 1.0, True, 0.4
+    c = card(ed)
+    press(ed, pixel(ed, ed.gizmo_points(gun)["effect"]))                               # on the effect, apart from the bullets
+    release(ed, pixel(ed, ed.gizmo_points(gun)["effect"]))
     assert ed.gizmo_selected == "effect"
-    gun.muzzle_offset_x = 0.0                                                        # now they lie on top of each other
-    spot = pixel(ed, "side", ed.gizmo_points(gun)["bullet"])
-    assert ed.gizmo_hit(gizmo(ed), gun, spot) == ("side", "effect")                  # the picked one wins
-    click(ed, gizmo(ed)["buttons"]["bullet"].center)
-    assert ed.gizmo_hit(gizmo(ed), gun, spot) == ("side", "bullet")
+    gun.muzzle_offset_y = 0.0                                                          # now they lie on top of each other
+    spot = pixel(ed, ed.gizmo_points(gun)["bullet"])
+    assert ed.gizmo_hit(c, gun, spot) == "effect"                                      # the picked one wins
+    click(ed, layout(ed)["buttons"]["bullet"].center)
+    assert ed.gizmo_hit(c, gun, spot) == "bullet"
 
 
-def test_the_views_draw_with_both_handles_and_while_dragging(ed):
+def test_the_picture_shows_both_handles_in_their_own_colours(ed):
     gun = gun_with_effect(ed)
-    gun.muzzle_override, gun.muzzle_offset_x, gun.muzzle_offset_z = True, 0.4, 0.3
+    gun.bullet_offset_x, gun.muzzle_override, gun.muzzle_offset_y = 1.0, True, 0.5
     ed.draw(pygame.display.get_surface())
-    press(ed, pixel(ed, "back", ed.gizmo_points(gun)["bullet"]))
-    ed.draw(pygame.display.get_surface())
-    release(ed, pixel(ed, "back", ed.gizmo_points(gun)["bullet"]))
+    screen = pygame.display.get_surface()
+    bullet, effect = (pixel(ed, p) for p in (ed.gizmo_points(gun)["bullet"], ed.gizmo_points(gun)["effect"]))
+    assert tuple(screen.get_at(bullet)[:3]) == ORANGE and tuple(screen.get_at(effect)[:3]) == CYAN
 
 
 # ------------------------------------------------------------------ with the live preview
 
 def test_dragging_moves_the_running_preview_and_it_starts_over_when_the_mouse_is_let_go(ed):
     gun = add_gun(ed)
-    controls = ed.gun_controls(ed.guns_card_rect())[0]
+    controls = ed.gun_controls(card(ed))[0]
     click(ed, controls["continuous"][0].center)
     step(ed, 0.6)
     shots = ed.gun_preview.total_shots
     assert shots > 0
-    press(ed, pixel(ed, "back", ed.gizmo_points(gun)["bullet"]))
-    target = pixel(ed, "back", (0.0, 0.45, 0.0))
+    c = card(ed)
+    press(ed, pixel(ed, ed.gizmo_points(gun)["bullet"]))
+    target = (c.centerx + 80, c.centery)
     drag_to(ed, target)
     live = ed.gun_preview.session.me.inventory.current().gun
-    assert live.bullet_offset_y == pytest.approx(0.45, abs=0.02)                     # the running gun already uses it
+    assert live.bullet_offset_y > 0.02                                                 # the running gun already uses it
     step(ed, 0.2)
-    assert ed.gun_preview.total_shots >= shots                                       # (not restarted mid-drag)
+    assert ed.gun_preview.total_shots >= shots                                         # (not restarted mid-drag)
     release(ed, target)
     step(ed, 0.1)
-    assert ed.gun_preview.total_shots < shots + 5                                    # restarted when let go
+    assert ed.gun_preview.total_shots < shots + 5                                      # restarted when let go
 
 
-def test_the_gun_picture_marks_a_handle_that_is_in_front_of_the_eye(ed):
+def test_the_slider_also_moves_the_running_preview(ed):
     add_gun(ed)
-    ed.set_gun("bullet_offset_x", 2.0)
-    ed.set_gun("bullet_offset_y", 0.3)
-    step(ed, 0.1)
-    ed.draw(pygame.display.get_surface())                                            # draws the markers without trouble
+    click(ed, ed.gun_controls(card(ed))[0]["continuous"][0].center)
+    step(ed, 0.3)
+    press(ed, slider_at(ed, 0.2))
+    drag_to(ed, slider_at(ed, 0.8))
+    live = ed.gun_preview.session.me.inventory.current().gun
+    assert live.bullet_offset_x > 1.2
+    release(ed, slider_at(ed, 0.8))
 
 
 # ------------------------------------------------------------------ scrolling the Guns section
+
+def scroll_to_end(ed):
+    ed.mouse = ed.map_area().center
+    for _ in range(40):
+        wheel(ed, -5)
+
 
 def test_the_wheel_scrolls_the_guns_section_and_everything_in_it_moves_together(small_ed):
     add_gun(small_ed)
     small_ed.draw(pygame.display.get_surface())
     row_before = small_ed.gun_rows()[0][0][0].y
-    card_before = small_ed.guns_card_rect().y
-    views_before = gizmo(small_ed)["views"]["side"].y
+    card_before = card(small_ed).y
+    track_before = layout(small_ed)["track"].y
     small_ed.mouse = small_ed.map_area().center
     wheel(small_ed, -2)
     assert small_ed.guns_scroll > 0
     assert row_before - small_ed.gun_rows()[0][0][0].y == small_ed.guns_scroll
-    assert card_before - small_ed.guns_card_rect().y == small_ed.guns_scroll
-    assert views_before - gizmo(small_ed)["views"]["side"].y == small_ed.guns_scroll
+    assert card_before - card(small_ed).y == small_ed.guns_scroll
+    assert track_before - layout(small_ed)["track"].y == small_ed.guns_scroll
     small_ed.draw(pygame.display.get_surface())
 
 
@@ -334,8 +417,7 @@ def test_the_scroll_stays_between_the_top_and_the_end_of_the_content(small_ed):
     small_ed.mouse = small_ed.map_area().center
     wheel(small_ed, 5)
     assert small_ed.guns_scroll == 0
-    for _ in range(40):
-        wheel(small_ed, -5)
+    scroll_to_end(small_ed)
     furthest = small_ed.guns_scroll
     assert furthest == small_ed.guns_content_bottom() - small_ed.map_area().bottom
     wheel(small_ed, -5)
@@ -344,12 +426,14 @@ def test_the_scroll_stays_between_the_top_and_the_end_of_the_content(small_ed):
     assert small_ed.guns_scroll < furthest
 
 
-def test_the_handles_can_still_be_grabbed_after_scrolling(small_ed):
+def test_the_handle_and_the_slider_still_work_after_scrolling(small_ed):
     gun = add_gun(small_ed)
-    small_ed.mouse = small_ed.map_area().center
-    for _ in range(40):
-        wheel(small_ed, -5)
+    scroll_to_end(small_ed)
     assert small_ed.guns_scroll > 0
-    drag(small_ed, "back", small_ed.gizmo_points(gun)["bullet"], (0.0, -0.4, 0.3))
-    assert small_ed.level.guns[0].bullet_offset_y == pytest.approx(-0.4, abs=0.02)
+    area = small_ed.map_area()
+    track = layout(small_ed)["track"]
+    assert area.top <= track.y <= area.bottom                                          # the slider has scrolled into view
+    click(small_ed, slider_at(small_ed, 0.9))
+    assert small_ed.level.guns[0].bullet_offset_x > 1.8
     small_ed.draw(pygame.display.get_surface())
+    assert gun.name == small_ed.level.guns[0].name
