@@ -72,6 +72,8 @@ SHOT_TYPES = ("single", "multi", "projectile")
 SHOT_LABELS = {"single": "Single bullet", "multi": "Multi bullet", "projectile": "Projectile"}
 MIN_AMBIENT = 0.02                              # the darkest a map can be made
 EFFECT_KINDS = ("burst", "stream")
+EFFECT_COLOURS = ("original", "hue", "rgb")
+EFFECT_COLOUR_LABELS = {"original": "Original", "hue": "Hue shift", "rgb": "RGB tint"}
 EFFECT_AIMS = ("auto", "custom")
 EFFECT_AIM_LABELS = {"auto": "Automatic", "custom": "Custom"}
 EFFECT_KIND_LABELS = {"burst": "Burst", "stream": "Stream"}
@@ -151,6 +153,12 @@ class Effect:
     drag         how fast they slow down, per second (0 none, 1 loses most speed in a second)
     size_start, size_end    size in cells at birth and at death (they change smoothly)
     alpha_start, alpha_end  how solid they are at birth and at death (1 opaque, 0 invisible)
+    colour       original: the particle picture as drawn; hue: its colours turned round the colour wheel by `hue`;
+                 rgb: its colours multiplied by the tint (tint_r, tint_g, tint_b)
+    hue          degrees (-180 to 180) for colour "hue": 0 leaves the colours, a red flame at 120 is green
+    tint_r, tint_g, tint_b
+                 colour (0 to 255 each) for colour "rgb": 255 each leaves the picture as drawn, a lower channel
+                 takes that colour out of it, all of them lower darkens it
     collide      particles end when they hit a wall, floor or ceiling
     light        name of the Light every particle carries ("" for none); it fades with the particle, and the
                  particles are drawn at full brightness so they glow in a dark map
@@ -182,6 +190,11 @@ class Effect:
     size_end: float = 0.0
     alpha_start: float = 1.0
     alpha_end: float = 0.0
+    colour: str = "original"
+    hue: float = 0.0
+    tint_r: int = 255
+    tint_g: int = 255
+    tint_b: int = 255
     collide: bool = True
     light: str = ""
     offset_x: float = 0.0
@@ -213,6 +226,9 @@ class Effect:
                    gravity=number("gravity", -50.0, 50.0), drag=number("drag", 0.0, 20.0),
                    size_start=number("size_start", 0.0, 3.0), size_end=number("size_end", 0.0, 3.0),
                    alpha_start=number("alpha_start", 0.0, 1.0), alpha_end=number("alpha_end", 0.0, 1.0),
+                   colour=data.get("colour") if data.get("colour") in EFFECT_COLOURS else base.colour,
+                   hue=number("hue", -180.0, 180.0), tint_r=number("tint_r", 0, 255, int),
+                   tint_g=number("tint_g", 0, 255, int), tint_b=number("tint_b", 0, 255, int),
                    collide=bool(data.get("collide", base.collide)), light=str(data.get("light", ""))[:MAX_NAME],
                    offset_x=number("offset_x", -10.0, 10.0), offset_y=number("offset_y", -10.0, 10.0),
                    offset_z=number("offset_z", -10.0, 10.0),

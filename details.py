@@ -27,7 +27,7 @@ import pygame
 
 PANE_WIDTH = 340
 ROW_H = 34
-MIN_ROW_H = 26                                  # rows shrink to this when a pane has too many for the window
+MIN_ROW_H = 22                                  # rows shrink to this when a pane has too many for the window
 TITLE_H = 34
 BUTTON_W = 28
 MENU_ITEM_H = 28

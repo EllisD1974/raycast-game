@@ -98,7 +98,8 @@ named thing in the player's inventory instead. Choosing a map tool goes back to 
 
 The Effects section (X or the Effects button) is where you design particle effects: "+ Add effect", then
 shape it in the Details pane (the particle picture from the atlas, a burst or a stream, how many, how long
-they live, speed, spread, gravity, drag, size and fade) while a live side view plays it. Effects are
+they live, speed, spread, gravity, drag, size and fade, and Colour: a hue shift or an RGB tint of the particle
+picture) while a live side view plays it. Effects are
 saved in the map and reused by name (Start offset X / Y / height move where the particles start, and Direction
 "Custom" sends them in a direction of your own instead of the automatic one; Offset / dir. axes chooses map
 axes or the heading's): a gun's "Muzzle effect" plays where it fires, an ammo type's "Trail
@@ -143,7 +144,7 @@ from atlas import ATLAS_PATH, atlas_array, transparent_tiles, unpack_atlas
 from constants import FOV_DEG, HEIGHT, MOUSE_SENSITIVITY, PLAYER_HEIGHT, TILE, WIDTH
 from mapfile import (ANIMATION_KINDS, ANIMATION_LABELS, DEFAULTS, EDIT_LAYERS, EFFECT_LABELS, ENTITY_EFFECTS,
                      ENTITY_MODES, GUN_MODE_LABELS, GUN_MODES, MAP_PATH, MAX_NAME, MAX_NAME_LENGTH, MIN_WALL_GAP,
-                     EFFECT_AIM_LABELS, EFFECT_AIMS, EFFECT_KIND_LABELS, EFFECT_KINDS, MIN_AMBIENT, MODE_LABELS, SHOT_LABELS, SHOT_TYPES, Animation, AmmoType, Effect,
+                     EFFECT_AIM_LABELS, EFFECT_AIMS, EFFECT_COLOUR_LABELS, EFFECT_COLOURS, EFFECT_KIND_LABELS, EFFECT_KINDS, MIN_AMBIENT, MODE_LABELS, SHOT_LABELS, SHOT_TYPES, Animation, AmmoType, Effect,
                      Entity, Gun, Level, Light, default_level,
                      grid_name, load_level, save_level, split_grid_name)
 import details
@@ -226,6 +227,17 @@ GIZMO_HIT = 13                                  # how close (pixels) a click mus
 GIZMO_COLOURS = {"bullet": (255, 170, 60), "effect": (80, 220, 255)}
 GIZMO_NAMES = {"bullet": "Bullets", "effect": "Effect"}
 AMBIENT_ROW = -1                                # light_selected value for the map's ambient light, listed first
+
+
+def recoloured(picture, matrix):
+    """A copy of a picture with its colours put through a particle's 3 x 3 colour matrix (9 numbers, see
+    particles.colour_matrix), as the game draws a hue shifted or tinted particle."""
+    picture = picture.copy()
+    rgb = pygame.surfarray.pixels3d(picture)
+    out = np.clip(rgb.astype(np.float64) @ np.array(matrix, np.float64).reshape(3, 3).T, 0, 255)
+    rgb[...] = out.astype(np.uint8)
+    del rgb
+    return picture
 
 
 class PreviewFloor:
@@ -984,8 +996,16 @@ class Editor:
                    field("size_end", "Size at end", "num", step=0.02, low=0.0, high=3.0),
                    field("alpha_start", "Solid at start", "num", step=0.1, low=0.0, high=1.0),
                    field("alpha_end", "Solid at end", "num", step=0.1, low=0.0, high=1.0),
+                   field("colour", "Colour", "enum", choices=EFFECT_COLOURS, labels=EFFECT_COLOUR_LABELS),
                    field("collide", "Hits walls", "enum", choices=(True, False), labels={True: "Stops", False: "Passes through"}),
                    field("light", "Particle light", "enum", choices=self.light_choices(), labels=self.light_labels())]
+        at = next(i for i, x in enumerate(fields) if x.key == "colour") + 1
+        if f.colour == "hue":                               # what the colour choice needs, right below it
+            fields.insert(at, field("hue", "Hue shift", "num", step=15.0, low=-180.0, high=180.0, unit=" deg"))
+        elif f.colour == "rgb":
+            fields[at:at] = [field("tint_r", "Tint red", "num", int, step=15.0, low=0, high=255),
+                             field("tint_g", "Tint green", "num", int, step=15.0, low=0, high=255),
+                             field("tint_b", "Tint blue", "num", int, step=15.0, low=0, high=255)]
         if f.aim == "custom":                               # the direction to send them in, right below the Direction row
             at = next(i for i, x in enumerate(fields) if x.key == "aim") + 1
             fields[at:at] = [field("dir_x", "Direction X", "num", step=0.25, low=-100.0, high=100.0),
@@ -3161,14 +3181,16 @@ class Editor:
             pygame.draw.line(screen, (44, 48, 60), (card.x + x, card.y), (card.x + x, floor_y))
         if self.fx_sim is not None:
             screen.set_clip(card)
-            for (x, y, z, size, tile, _spin, alpha, _glow) in self.fx_sim[0].sprites()[:FX_CAP]:
+            for (x, y, z, size, tile, _spin, alpha, _glow, *colour) in self.fx_sim[0].sprites()[:FX_CAP]:
                 pixels = max(2, round(size * FX_CELL))
-                picture = self.fx_scaled.get((tile, pixels))
+                picture = self.fx_scaled.get((tile, pixels, *colour))
                 if picture is None:
                     picture = pygame.transform.scale(self.tiles[max(0, min(tile, len(self.tiles) - 1))], (pixels, pixels))
+                    if colour:
+                        picture = recoloured(picture, colour[0])
                     if len(self.fx_scaled) > 600:
                         self.fx_scaled.clear()
-                    self.fx_scaled[(tile, pixels)] = picture
+                    self.fx_scaled[(tile, pixels, *colour)] = picture
                 picture.set_alpha(round(255 * alpha))
                 screen.blit(picture, picture.get_rect(center=(round(centre + x * FX_CELL),
                                                               round(floor_y - (z + size / 2) * FX_CELL))))

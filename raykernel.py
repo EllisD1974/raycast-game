@@ -344,7 +344,7 @@ def render_scene(fb, px, py, eye_z, eye_span, dir_x, dir_y, plane_x, plane_y, ho
 
 @njit(cache=True, parallel=True)
 def draw_sprites(fb, zb, px, py, eye_z, dir_x, dir_y, pitch, focal,
-                 sp_x, sp_y, sp_z, sp_size, sp_tex, sp_spin, sp_alpha, sp_lit, sp_glow, ambient, textures, max_dist,
+                 sp_x, sp_y, sp_z, sp_size, sp_tex, sp_spin, sp_alpha, sp_lit, sp_glow, sp_colour, ambient, textures, max_dist,
                  fog_dist):
     """Draw flat sprites that always face the camera, over a picture already drawn by
     render_scene_depth (or raypitch.render_scene_pitch). The camera looks along (dir_x, dir_y),
@@ -354,7 +354,8 @@ def draw_sprites(fb, zb, px, py, eye_z, dir_x, dir_y, pitch, focal,
     blends it (0 is see-through, 255 opaque). sp_spin is an angle in radians: the sprite turns around
     its vertical axis, so it narrows to a sliver edge-on and shows mirrored once it has turned its back.
     sp_alpha (0..1) makes the whole sprite that solid, on top of the texture's own alpha (particles fade).
-    Lighting (see raylight.py): sp_lit[i] is the light (r, g, b) falling on sprite i and `ambient` how bright
+    sp_colour[i] is a 3 x 3 matrix the picture's (r, g, b) is put through before lighting (the identity leaves it;
+    particles use it for hue and tint). Lighting (see raylight.py): sp_lit[i] is the light (r, g, b) falling on sprite i and `ambient` how bright
     the map is without lights, so a sprite is its picture * (fog shade * ambient + light); sp_glow[i] (0..1) is
     how much it lights itself: a glowing sprite is never darker than that fraction of its own colours."""
     width, height = fb.shape[0], fb.shape[1]
@@ -397,6 +398,11 @@ def draw_sprites(fb, zb, px, py, eye_z, dir_x, dir_y, pitch, focal,
                 if alpha == 0:
                     continue
                 a = alpha / 255.0 * sp_alpha[i]
-                fb[x, r, 0] = np.uint8(min(255.0, textures[sp_tex[i], ty, tx, 0] * lit_r) * a + fb[x, r, 0] * (1.0 - a))
-                fb[x, r, 1] = np.uint8(min(255.0, textures[sp_tex[i], ty, tx, 1] * lit_g) * a + fb[x, r, 1] * (1.0 - a))
-                fb[x, r, 2] = np.uint8(min(255.0, textures[sp_tex[i], ty, tx, 2] * lit_b) * a + fb[x, r, 2] * (1.0 - a))
+                tr, tg, tb = (np.float64(textures[sp_tex[i], ty, tx, 0]), np.float64(textures[sp_tex[i], ty, tx, 1]),
+                              np.float64(textures[sp_tex[i], ty, tx, 2]))
+                cr = min(255.0, max(0.0, sp_colour[i, 0, 0] * tr + sp_colour[i, 0, 1] * tg + sp_colour[i, 0, 2] * tb))
+                cg = min(255.0, max(0.0, sp_colour[i, 1, 0] * tr + sp_colour[i, 1, 1] * tg + sp_colour[i, 1, 2] * tb))
+                cb = min(255.0, max(0.0, sp_colour[i, 2, 0] * tr + sp_colour[i, 2, 1] * tg + sp_colour[i, 2, 2] * tb))
+                fb[x, r, 0] = np.uint8(min(255.0, cr * lit_r) * a + fb[x, r, 0] * (1.0 - a))
+                fb[x, r, 1] = np.uint8(min(255.0, cg * lit_g) * a + fb[x, r, 1] * (1.0 - a))
+                fb[x, r, 2] = np.uint8(min(255.0, cb * lit_b) * a + fb[x, r, 2] * (1.0 - a))
