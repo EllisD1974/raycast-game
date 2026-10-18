@@ -61,11 +61,13 @@ def move_body(world, body, wish, dt):
     look(body, wish.tilt)
 
 
-def muzzle_event(effect, body):
-    """(effect, x, y, z, dx, dy, dz): `effect` played at the muzzle of a gun fired by `body`, along its aim."""
+def muzzle_event(effect, body, offset=None):
+    """(effect, x, y, z, dx, dy, dz[, ox, oy, oz]): `effect` played at the muzzle of a gun fired by `body`, along
+    its aim, starting at `offset` from the muzzle if the gun overrides the effect's own."""
     cp = math.cos(body.pitch)
     dx, dy, dz = math.cos(body.angle) * cp, math.sin(body.angle) * cp, math.sin(body.pitch)
-    return (effect, body.x + dx * MUZZLE, body.y + dy * MUZZLE, body.eye_z - 0.03 + dz * MUZZLE, dx, dy, dz)
+    event = (effect, body.x + dx * MUZZLE, body.y + dy * MUZZLE, body.eye_z - 0.03 + dz * MUZZLE, dx, dy, dz)
+    return event + tuple(offset) if offset is not None else event
 
 
 def character_tile_for(first_tile, player_id):
@@ -103,7 +105,7 @@ class Game:
         self.items = Entities(level, world)
         self.projectiles = Projectiles(rng or random.Random())
         self.players = {}           # player id -> PlayerState
-        self.fx = []                # particle effects to play, (name, x, y, z, dx, dy, dz), until take_fx()
+        self.fx = []                # particle effects to play, (name, x, y, z, dx, dy, dz[, ox, oy, oz]), until take_fx()
         self.flashes = []           # lights to flash, (name, x, y, z), until take_flashes()
 
     def add_player(self, player_id):
@@ -129,7 +131,8 @@ class Game:
         for gun in fired:
             self.projectiles.fire(body, gun, self.level.ammo_for(gun))
             if gun.muzzle:
-                self.fx.append(muzzle_event(gun.muzzle, body))
+                self.fx.append(muzzle_event(gun.muzzle, body, (gun.muzzle_offset_x, gun.muzzle_offset_y, gun.muzzle_offset_z)
+                                            if gun.muzzle_override else None))
             if gun.flash:
                 self.flashes.append(muzzle_event(gun.flash, body)[:4])
         return len(fired)

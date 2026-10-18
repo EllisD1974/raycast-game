@@ -56,15 +56,16 @@ class LocalSession:
     def animate(self, dt, effects, flashes=()):
         """Move the particles and lights on: play the effects and flashes just fired, attach trails and lights
         to the bullets and emitters and lights to the items that have them, and age everything."""
-        for name, x, y, z, dx, dy, dz in effects:
-            self.particles.play(name, x, y, z, (dx, dy, dz))
+        for name, x, y, z, dx, dy, dz, *offset in effects:
+            self.particles.play(name, x, y, z, (dx, dy, dz), tuple(offset) if offset else None)
         for name, x, y, z in flashes:
             self.lights.flash(name, x, y, z)
         viewer = (self.me.body.x, self.me.body.y)
         keys = follow_lights(self.lights, [(b.ident, b.light, b.x, b.y, b.z) for b in self.game.projectiles.bullets])
         self.lights.keep(keys + item_lights(self.lights, self.game.items, viewer))
         self.lights.update(dt)
-        bullets = [(b.ident, b.trail, b.x, b.y, b.z, b.vx, b.vy, b.vz) for b in self.game.projectiles.bullets]
+        bullets = [(b.ident, b.trail, b.x, b.y, b.z, b.vx, b.vy, b.vz, b.trail_offset)
+                   for b in self.game.projectiles.bullets]
         keys = follow(self.particles, bullets, dt=dt)
         keys += emitters_in_view(self.particles, self.game.items, (self.me.body.x, self.me.body.y), dt)
         self.particles.keep(keys)
@@ -162,7 +163,8 @@ class HostSession(LocalSession):
         common = {
             "type": "state", "time": self.time,
             "players": {str(pid): body_fields(state.body) for pid, state in self.game.players.items()},
-            "bullets": [[b.x, b.y, b.z, b.vx, b.vy, b.vz, b.size, b.tile, b.ident, b.trail, b.light]
+            "bullets": [[b.x, b.y, b.z, b.vx, b.vy, b.vz, b.size, b.tile, b.ident, b.trail, b.light,
+                         list(b.trail_offset) if b.trail_offset else None]
                         for b in self.game.projectiles.bullets],
             "fx": [list(e) for e in self.fx_out[-MAX_FX:]],
             "flashes": [list(f) for f in self.flashes_out[-MAX_FX:]],
@@ -237,7 +239,7 @@ class ClientSession:
             self.game_time += elapsed
         self.bullet_age = min(self.bullet_age + elapsed, MAX_EXTRAPOLATION)
         if self.particles is not None:
-            bullets = [(b[8], b[9], *position, b[3], b[4], b[5]) for b, position in self.bullets_now()]
+            bullets = [(b[8], b[9], *position, b[3], b[4], b[5], self.bullet_offset(b)) for b, position in self.bullets_now()]
             viewer = (self.me.body.x, self.me.body.y)
             keys = follow(self.particles, bullets, dt=dt)
             keys += emitters_in_view(self.particles, self.items, viewer, dt)
@@ -248,6 +250,14 @@ class ClientSession:
             self.lights.update(dt)
         events, self.owed = self.owed, Events()
         return events
+
+    @staticmethod
+    def bullet_offset(bullet):
+        """The trail offset a bullet came with (three numbers), or None for the effect's own."""
+        offset = bullet[11] if len(bullet) > 11 else None
+        if isinstance(offset, list) and len(offset) == 3 and all(isinstance(v, (int, float)) for v in offset):
+            return tuple(offset)
+        return None
 
     def bullets_now(self):
         """[(bullet, (x, y, z))]: each bullet carried on from the last snapshot by the time since."""
@@ -293,9 +303,9 @@ class ClientSession:
                 del samples[:-MAX_SAMPLES]
         self.bullets, self.bullet_age = message["bullets"], 0.0
         for event in message.get("fx", [])[:MAX_FX]:
-            if (isinstance(event, list) and len(event) == 7 and isinstance(event[0], str)
+            if (isinstance(event, list) and len(event) in (7, 10) and isinstance(event[0], str)
                     and all(isinstance(v, (int, float)) for v in event[1:])):
-                self.particles.play(event[0], *event[1:4], tuple(event[4:7]))
+                self.particles.play(event[0], *event[1:4], tuple(event[4:7]), tuple(event[7:10]) if len(event) == 10 else None)
         for flash in message.get("flashes", [])[:MAX_FX]:
             if (isinstance(flash, list) and len(flash) == 4 and isinstance(flash[0], str)
                     and all(isinstance(v, (int, float)) for v in flash[1:])):

@@ -22,9 +22,12 @@ live side view plays them. Effects are saved in the map and used by name:
 An effect can start its particles away from the point it is played at (**Start offset X / Y** and **Start height**)
 and send them in a fixed **Direction** instead of the automatic one (up from an item, along the aim from a gun,
 back along the path from a bullet). Offsets and a custom direction are along the map's axes (x east, y south,
-z up), or with **Heading** axes, x ahead and y to the right of the automatic direction.
+z up), or with **Heading** axes, x ahead and y to the right of the automatic direction. A gun, an ammo type or an
+item that uses an effect can also **override** the start offset for itself (its *Start offset* row), always along
+the heading (map axes for an item).
 
-- a gun's **Muzzle effect** plays where it fires;
+- a gun's **Muzzle effect** plays where it fires (the Guns section shows it live: tick *Fire continuously* to see the
+  gun fire, reload, and play its effects and lights on repeat);
 - an ammo type's **Trail effect** follows its bullets through the air;
 - an item's **Emits** sends the effect up from the item. Set its Mode to *Scenery* (it cannot be picked
   up) and Sprite to *Hidden* to see only the particles.
