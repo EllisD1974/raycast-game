@@ -576,10 +576,52 @@ class Editor:
         return fields
 
     def linked_fields(self, e):
-        """An item placed from a prefab: pick which prefab (or none, to detach it); its settings come from it."""
+        """An item placed from a prefab: which prefab it is (change it, or choose none to detach it), buttons to edit
+        that prefab or detach this item, and the item's settings, read-only because they come from the prefab."""
         names = ("",) + tuple(p.name for p in self.level.prefabs)
-        return [Field("prefab", "Prefab", "enum", (lambda: e.prefab), self.set_instance_prefab, choices=names,
-                      labels={"": "(none: detach)", **{n: n for n in names}})]
+
+        def info(key, label, text):
+            return Field(key, label, "info", (lambda t=text: t), None)
+
+        fields = [Field("prefab", "Prefab", "enum", (lambda: e.prefab), self.set_instance_prefab, choices=names,
+                        labels={"": "(none: detach)", **{n: n for n in names}}, wheel=False),
+                  Field("edit_prefab", "Edit prefab", "button", None, None, action=lambda: self.edit_prefab(e.prefab),
+                        text_override=f"Edit {e.prefab} in the Prefabs section"),
+                  Field("detach", "Detach", "button", None, None, action=lambda: self.set_instance_prefab(""),
+                        text_override="Detach: edit this item on its own"),
+                  Field("from_prefab", "This item (set by its prefab)", "header", None, None),
+                  info("where", "Where", f"cell {math.floor(e.x)}, {math.floor(e.y)} on {self.level.names[e.span]}"),
+                  info("sprite", "Sprite", f"#{e.tile + 1}" + ("" if e.shown else "  (hidden)")),
+                  info("mode", "Mode", MODE_LABELS[e.mode]),
+                  info("effect", "Effect", self.effect_text(e))]
+        if e.mode == "respawn":
+            fields.append(info("respawn", "Respawns after", f"{e.respawn:g} s"))
+        fields += [info("size", "Size", f"{e.size:g}"), info("lift", "Lift", f"{e.lift:g}"),
+                   info("emits", "Emits", (e.emits or "none") + (f"  from {e.emits_offset_x:g}, {e.emits_offset_y:g}, "
+                                                                  f"{e.emits_offset_z:g}" if e.emits and e.emits_override else "")),
+                   info("light", "Light", e.light or "none"),
+                   info("animations", "Animations", ", ".join(ANIMATION_LABELS[a.kind] for a in e.animations) or "none")]
+        return fields
+
+    @staticmethod
+    def effect_text(e):
+        """What an item gives, in words: 'Give a gun: Shotgun', 'Health: +25', 'Give ammo: 24 9mm rounds'..."""
+        label = EFFECT_LABELS[e.effect]
+        detail = {"score": f"+{e.amount:g}", "health": f"+{e.amount:g}", "item": f"{e.amount:g} x {e.item or 'Item'}",
+                  "gun": e.gun or "(no gun)", "ammo": f"{e.amount:g} {e.ammo or 'default'} rounds"}.get(e.effect)
+        return f"{label}: {detail}" if detail else label
+
+    def edit_prefab(self, name):
+        """Open the Prefabs section with the named prefab selected, to change what every copy of it looks like."""
+        for i, prefab in enumerate(self.level.prefabs):
+            if prefab.name == name:
+                self.guns_mode = self.effects_mode = self.lights_mode = False
+                self.prefabs_mode = True
+                self.deselect()
+                self.prefab_selected = i
+                self.tile_target = "tile"
+                self.say(f"Editing {name}: every item placed from it follows")
+                return
 
     def entity_fields(self, e, is_prefab=False):
         """The settings of an item, or of a prefab (which also has a name and calls its picture an icon)."""
@@ -1146,9 +1188,12 @@ class Editor:
             return
         for row in rows:
             f = row.field
+            if f.kind == "info":
+                continue
             if f.kind == "button":
                 if details.button_box(row).collidepoint(pos) and f.action is not None:
                     f.action()
+                    return                                          # (an action may change the rows under the mouse)
             elif f.kind == "header":
                 if f.action is not None and row.plus.collidepoint(pos):
                     f.action()
@@ -1195,7 +1240,7 @@ class Editor:
 
     def details_wheel(self, pos, notches):
         for row in self.details_rows():
-            if row.rect.collidepoint(pos) and row.field.kind in ("num", "enum", "tile"):
+            if row.rect.collidepoint(pos) and row.field.kind in ("num", "enum", "tile") and row.field.wheel:
                 row.field.set(row.field.stepped(1 if notches > 0 else -1, abs(notches)))
                 return
 
@@ -1727,7 +1772,11 @@ class Editor:
                 self.say("Select a gun or an ammo type first (or add one), then click a tile")
             return
         if self.tool == "entity":                       # the tile chosen here is the item's sprite
-            if self.selected_entity() is not None:
+            chosen = self.selected_entity()
+            if chosen is not None and chosen.prefab:
+                self.say(f"This item follows {chosen.prefab}: change its icon in the Prefabs section")
+                return
+            if chosen is not None:
                 self.set_entity("tile", min(picked))
             else:
                 self.entity_brush.tile = min(picked)
@@ -3289,8 +3338,8 @@ class Editor:
             notes = ("Click a cell to place the chosen one.", "Click a placed item to edit it.",
                      "Make prefabs in the Prefabs section (P),", "or save an item as one from its pane.")
         elif e is not None and e.prefab:
-            notes = (f"A {e.prefab}.", "Its settings come from the prefab:", "edit them in the Prefabs section (P).",
-                     "Choose (none) above to detach it.")
+            notes = (f"A {e.prefab}: its settings come from", "the prefab, so they are shown, not editable.",
+                     "Edit the prefab to change every copy,", "or detach this one to change only it.")
         elif gun is not None:
             how = {"single": "one round, reloads after every shot", "semi": "one round per trigger pull",
                    "auto": "keeps firing while the trigger is held"}[gun.mode]
