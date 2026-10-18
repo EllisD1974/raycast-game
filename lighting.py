@@ -23,6 +23,7 @@ from raylight import build_visibility
 MAX_LIGHTS = 12                 # lights used for one picture: the strongest near the viewer
 REACH = 24.0                    # lights whose reach is further than this from the viewer are left out
 FLASH_DURATION = 0.12
+CLUSTER = 0.75                  # particle lights closer than about this (in cells) are merged into one
 
 
 @dataclass
@@ -118,11 +119,28 @@ class LightSystem:
             light = self.defs[name]
             out.append((x, y, z, light, (1.0 - age / light.duration) * self.flicker(light, x, y)))
         if particles is not None:
-            for x, y, z, name, strength in particles.light_sources():
-                light = self.defs.get(name)
-                if light is not None:
-                    out.append((x, y, z, light, strength))
+            out += self.particle_lights(particles)
         return out
+
+    def particle_lights(self, particles):
+        """The lights of the particles, with those close together merged into one: a fire of thirty glowing
+        embers is one fire-sized light, not thirty stacked on top of each other. A merged light is as strong as
+        its brightest particle and gets stronger towards 1 as more join it (the particles' strengths are
+        chances of being lit, combined as 1 - (1 - a)(1 - b)...)."""
+        clusters = {}
+        for x, y, z, name, strength in particles.light_sources():
+            if name not in self.defs:
+                continue
+            key = (name, int(x // CLUSTER), int(y // CLUSTER), int(z // CLUSTER))
+            weight = min(1.0, strength)
+            c = clusters.setdefault(key, [0.0, 0.0, 0.0, 0.0, 1.0])       # x, y, z (weighted), total weight, 1 - strength
+            c[0] += x * weight
+            c[1] += y * weight
+            c[2] += z * weight
+            c[3] += weight
+            c[4] *= 1.0 - weight
+        return [(c[0] / c[3], c[1] / c[3], c[2] / c[3], self.defs[key[0]], 1.0 - c[4])
+                for key, c in clusters.items() if c[3] > 0.0]
 
     def prepare(self, viewer, particles=None):
         """The Lighting for a picture seen from `viewer` (x, y, z): the strongest lights in reach of it, with what

@@ -8,8 +8,9 @@ light near enough adds to it:
 
 `ambient` is how bright the map is without lights (1 leaves a map exactly as it was before lights existed;
 less is dark) and `light` is the sum over lights of colour * intensity * (1 - (distance / radius)^2)^2 for the
-lights that can see the spot. Dividing by the fog shade lets a light shine through the distance fog, so a lit
-patch far away is not dimmed by being far from the camera.
+lights that can see the spot (eased off above 1 so overlapping lights do not burn out to white). Dividing by the
+fog shade lets a light shine through the distance fog, so a lit patch far away is not dimmed by being far
+from the camera.
 
 Walls stop light. For each light, `build_visibility` marks which map cells it can see (a line of sight over the
 grid of wall cells), and a pixel reads that grid around the spot just in front of the surface it shows,
@@ -27,6 +28,8 @@ from numba import njit, prange
 
 from raykernel import _shade
 
+KNEE = 1.0               # light adds up linearly to this much, then eases off so stacked lights do not blow out
+HEADROOM = 1.5           # and at most this much more is added beyond the knee, however many lights overlap
 BACK_OFF = 0.04          # how far in front of a surface the spot that is looked up in the visibility map is
 SIGHT_STEP = 0.2         # cells between the points checked along a line of sight
 
@@ -90,6 +93,15 @@ def _sample_visibility(vis, occluder, i, x, y):
 
 
 @njit(cache=True)
+def _soft(v):
+    """Light that adds up without limit, eased off above KNEE: v up to KNEE is unchanged, above it the rest
+    approaches HEADROOM, so many overlapping lights brighten a surface but do not burn it out to white."""
+    if v <= KNEE:
+        return v
+    return KNEE + HEADROOM * (1.0 - math.exp(-(v - KNEE) / HEADROOM))
+
+
+@njit(cache=True)
 def _light_at(lights, vis, occluder, x, y, z, qx, qy):
     """(red, green, blue) light arriving at the world point (x, y, z), reading visibility at (qx, qy)."""
     r = g = b = 0.0
@@ -107,7 +119,7 @@ def _light_at(lights, vis, occluder, x, y, z, qx, qy):
         r += lights[i, 3] * k
         g += lights[i, 4] * k
         b += lights[i, 5] * k
-    return r, g, b
+    return _soft(r), _soft(g), _soft(b)
 
 
 @njit(cache=True, parallel=True)

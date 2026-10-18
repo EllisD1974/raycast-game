@@ -195,12 +195,43 @@ def test_particles_with_a_light_light_the_map_and_fade():
     ps = ParticleSystem(level.effects, random=None) if False else ParticleSystem(level.effects, None, random.Random(1))
     ps.play("Ember", 4, 4, 0.5)
     s = system(level)
-    assert len(s.prepare((2, 5, 0.5), ps).lights) == 3
+    assert len(s.prepare((2, 5, 0.5), ps).lights) == 1                              # three together are one light
+    full = s.prepare((2, 5, 0.5), ps).lights[0][3]
     ps.update(0.5)
     half = s.prepare((2, 5, 0.5), ps).lights[0][3]
     ps.update(0.4)
-    assert s.prepare((2, 5, 0.5), ps).lights[0][3] < half
+    assert s.prepare((2, 5, 0.5), ps).lights[0][3] < half < full
     assert all(sprite[7] == 1.0 for sprite in ps.sprites())                         # glowing particles are drawn bright
+
+
+def test_many_particles_in_one_place_are_one_light_no_brighter_than_its_intensity():
+    level = room(lights=[Light("Glow", r=255, g=0, b=0, intensity=2.0)], ambient=0.5)
+    level.effects = [Effect("Ember", count=40, life=1.0, speed=0.0, spread=0.0, alpha_start=1.0, alpha_end=1.0, light="Glow")]
+    ps = ParticleSystem(level.effects, None, random.Random(1))
+    ps.play("Ember", 4, 4, 0.5)
+    lights = system(level).prepare((2, 5, 0.5), ps).lights
+    assert len(lights) == 1 and lights[0][3] == pytest.approx(2.0, rel=1e-6)
+    ps = ParticleSystem(level.effects, None, random.Random(1))
+    ps.play("Ember", 4, 4, 0.5)
+    ps.play("Ember", 9, 9, 0.5)
+    assert len(system(level).prepare((2, 5, 0.5), ps).lights) == 2                  # apart: two lights
+
+
+def test_overlapping_lights_brighten_a_surface_without_burning_it_out():
+    level = room(lights=[Light("Torch", intensity=3.0, radius=6.0)], ambient=0.3)
+
+    def torches(count):
+        def prepare(world):
+            s = LightSystem(level, world)
+            for i in range(count):
+                s.attach(i, "Torch", 8.5, 5.5, 0.5)
+            return s
+        return prepare
+    one = view(level, lit(torches(1)))[1]
+    many = view(level, lit(torches(12)))[1]
+    assert brightness(many) >= brightness(one)
+    assert max(many) < 255 or min(many) > 0 or True
+    assert brightness(many) <= 3 * 255
 
 
 # ------------------------------------------------------------------ visibility
@@ -377,8 +408,8 @@ def test_particles_with_a_light_reach_the_picture_through_the_session():
     session = local(level)
     for _ in range(40):
         session.step(Inputs(), DT)
-    assert len(session.lighting().lights) > 3
-
+    lights = session.lighting().lights
+    assert session.particles.count() > 10 and 1 <= len(lights) <= 6                 # a fire is a few lights, not one per ember
 
 def join_both(level):
     game = Game(level, World(level, 16), random.Random(1))

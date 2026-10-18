@@ -29,6 +29,24 @@ joiners are only told "play this effect here" (for shots), and bullet trails and
 from what they already see. Particles need small pictures in `assets/textures.png` (a soft dot with
 transparent edges works best).
 
+## Lighting
+
+Design lights in the editor's Lights section (L): a colour, brightness, reach, flicker and flash length, with a
+preview from above. The first row, **Map ambient light**, sets how bright the map is without lights (1 is
+fully lit, as maps always were; lower makes it dark so lights show). Lights are saved in the map and used by
+name:
+
+- a gun's **Muzzle light** flashes where it fires, and an ammo type's **Bullet light** travels with its bullets;
+- an effect's **Particle light** makes every particle glow (nearby ones merge into one light, and the particles
+  are drawn at full brightness);
+- an item's **Light** lights up around it; with Mode *Scenery* and Sprite *Hidden* an item is just a light placed
+  in the map;
+- **Glowing wall tile** (on a light) makes every wall made from that atlas tile light the open cells beside it.
+
+Walls stop light (a lit room does not light the room behind its wall), but lights do not tell floors above and
+below apart. Only the 12 strongest lights near the camera are used for a picture, and lighting adds a few
+milliseconds to a frame. Like particles, lights are only for looks and are worked out on each player's machine.
+
 ## Multiplayer
 
 One player hosts with a password and the others join with it. The host runs the game and sends the map

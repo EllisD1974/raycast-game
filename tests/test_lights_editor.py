@@ -149,8 +149,8 @@ def test_the_light_names_are_unique_and_renaming_keeps_what_carries_the_light(ed
     other = add_light(ed)
     ed.set_light("name", "Torchlight")
     assert other.name != "Torchlight"
-    ed.do("undo")
-    ed.do("undo")
+    for _ in range(3):                                              # the second rename, the second light, the first rename
+        ed.do("undo")
     assert ed.level.guns[0].flash == "Light"
 
 
@@ -271,7 +271,7 @@ def test_the_3d_view_in_the_editor_is_lit_by_the_maps_lights(ed):
             preview.update(1 / 60)
         picture = preview.render()
         w, h = picture.get_size()
-        return np.array(pygame.image.tobytes(picture, "RGB"), np.uint8).reshape(h, w, 3)
+        return np.frombuffer(pygame.image.tobytes(picture, "RGB"), np.uint8).reshape(h, w, 3)
 
     lit = middle(Preview(textures))
     level.ambient = 0.2
