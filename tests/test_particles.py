@@ -14,6 +14,7 @@ import pytest
 
 import net
 import particles
+import physics
 from game import Game, Inputs
 from mapfile import AmmoType, Effect, Entity, Gun, Level, level_text, parse_level
 from particles import MAX_PARTICLES, ParticleSystem, cone
@@ -455,3 +456,121 @@ def test_offsets_and_directions_survive_saving_and_bad_values_are_fixed():
     assert again.effects == level.effects
     bad = Effect.from_dict({"offset_x": 999, "aim": "sideways", "dir_z": "up", "relative": 1})
     assert bad.offset_x == 10.0 and bad.aim == "auto" and bad.dir_z == 1.0 and bad.relative is True
+
+
+# ------------------------------------------------------------------ an offset from whatever uses the effect
+
+def test_an_offset_from_the_user_replaces_the_effects_own_and_follows_the_heading():
+    ps = system(still(offset_x=9.0, offset_y=9.0, offset_z=9.0))                  # the effect's own offset is ignored
+    ps.play("E", 5.0, 5.0, 1.0, (0.0, 1.0, 0.0), offset=(1.0, 0.5, 0.25))          # heading +y: ahead is +y, right is -x
+    p, = ps.particles
+    assert (p.x, p.y, p.z) == pytest.approx((4.5, 6.0, 1.25))
+
+
+def test_an_offset_from_an_item_uses_the_maps_axes():
+    ps = system(still())
+    ps.play("E", 5.0, 5.0, 1.0, offset=(1.0, 0.5, 0.25))                           # up: no heading
+    assert (ps.particles[0].x, ps.particles[0].y, ps.particles[0].z) == pytest.approx((6.0, 5.5, 1.25))
+
+
+def test_no_override_leaves_the_effects_own_offset_and_a_zero_override_cancels_it():
+    ps = system(still(offset_x=2.0))
+    ps.play("E", 0.0, 0.0, 0.0)
+    ps.play("E", 0.0, 0.0, 0.0, offset=(0.0, 0.0, 0.0))
+    own, cancelled = ps.particles
+    assert own.x == pytest.approx(2.0) and cancelled.x == 0.0
+
+
+def test_a_trail_and_an_item_can_override_the_offset():
+    ps = system(Effect("T", kind="stream", rate=60.0, speed=0.0, life=5.0, offset_z=5.0, collide=False))
+    ps.attach("b", "T", 0.0, 0.0, 1.0, (-1.0, 0.0, 0.0), DT, offset=(0.0, 0.0, 0.5))
+    for i in range(1, 6):
+        ps.attach("b", "T", 0.3 * i, 0.0, 1.0, (-1.0, 0.0, 0.0), DT, offset=(0.0, 0.0, 0.5))
+    assert ps.particles and all(p.z == pytest.approx(1.5) for p in ps.particles)
+    via_follow = system(Effect("T", kind="stream", rate=60.0, speed=0.0, life=5.0, collide=False))
+    for i in range(6):
+        particles.follow(via_follow, [(1, "T", 0.3 * i, 0.0, 1.0, 1.0, 0.0, 0.0, (0.0, 0.0, 0.5))], dt=DT)
+    assert via_follow.particles and all(p.z == pytest.approx(1.5) for p in via_follow.particles)
+
+
+def test_an_item_that_overrides_the_offset_starts_its_particles_there():
+    from entities import Entities
+    level = Level.blank(10, 10)
+    level.effects = [Effect("E", count=1, spread=0.0, speed=0.0, life=5.0, offset_x=9.0, collide=False)]
+    level.entities = [Entity(4.5, 4.5, mode="scenery", emits="E", emits_override=True, emits_offset_x=1.0, emits_offset_z=0.5)]
+    items = Entities(level, World(level, 16))
+    ps = ParticleSystem(level.effects, None, random.Random(1))
+    particles.emitters_in_view(ps, items, (4.5, 4.5), DT)
+    p, = ps.particles
+    item = items.items[0]
+    assert (p.x, p.y) == pytest.approx((5.5, 4.5)) and p.z == pytest.approx(item.z + item.entity.size / 2 + 0.5)
+
+
+def test_override_fields_survive_saving_and_prefabs_pass_them_on():
+    level = Level.blank(6, 6)
+    level.guns = [Gun("G", muzzle="E", muzzle_override=True, muzzle_offset_x=0.4, muzzle_offset_y=-0.2, muzzle_offset_z=-0.1)]
+    level.ammo_types = [AmmoType("A", trail="E", trail_override=True, trail_offset_z=0.3)]
+    level.prefabs = [Entity(0, 0, name="Torch", emits="E", emits_override=True, emits_offset_x=1.0)]
+    level.entities = [Entity(2.5, 2.5, prefab="Torch")]
+    level.apply_prefabs()
+    again = parse_level(json.loads(level_text(level)))
+    assert again.guns == level.guns and again.ammo_types == level.ammo_types
+    assert (again.entities[0].emits_override, again.entities[0].emits_offset_x) == (True, 1.0)
+    bad = Gun.from_dict({"muzzle_offset_x": 999, "muzzle_override": 1})
+    assert bad.muzzle_offset_x == 10.0 and bad.muzzle_override is True
+
+
+def test_a_gun_with_an_override_plays_its_muzzle_effect_at_that_offset():
+    level = effect_level(guns=[Gun("Pistol", muzzle="Flash", mode="auto", muzzle_override=True, muzzle_offset_x=1.0,
+                                   muzzle_offset_y=0.5, muzzle_offset_z=-0.2)],
+                         effects=[Effect("Flash", count=1, spread=0.0, speed=0.0, life=2.0, offset_x=9.0, collide=False)])
+    session = local(level)
+    session.me.inventory.give_gun(level.guns[0])
+    session.me.body.angle = 0.0                                                    # facing +x: ahead is +x, right is +y
+    session.step(Inputs(fire=True), DT)
+    p, = session.particles.particles
+    body = session.me.body
+    assert p.x == pytest.approx(body.x + 0.25 + 1.0, abs=0.01) and p.y == pytest.approx(body.y + 0.5, abs=0.01)
+    assert p.z == pytest.approx(body.eye_z - 0.03 - 0.2, abs=0.01)
+
+
+def test_a_muzzle_event_is_longer_only_when_the_gun_overrides_the_offset():
+    from game import muzzle_event
+    body = physics.spawn(effect_level(), World(effect_level(), 16))
+    assert len(muzzle_event("Flash", body)) == 7
+    assert muzzle_event("Flash", body, (0.5, 0.0, 0.1))[7:] == (0.5, 0.0, 0.1)
+
+
+def test_a_bullets_trail_offset_comes_from_its_ammo_and_reaches_a_joiner():
+    level = effect_level(guns=[Gun("Pistol", ammo="Tracer", mode="auto")],
+                         ammo=[AmmoType("Tracer", trail="Smoke", speed=6.0, range=30.0, trail_override=True, trail_offset_z=0.4)],
+                         effects=[Effect("Smoke", kind="stream", rate=60.0, speed=0.0, life=3.0, collide=False)])
+    host, client = join_both(level)
+    try:
+        host.game.players[0].inventory.give_gun(level.guns[0])
+        host.step(Inputs(fire=True), DT)
+        assert host.game.projectiles.bullets[0].trail_offset == (0.0, 0.0, 0.4)
+        for _ in range(40):
+            host.step(Inputs(), DT)
+            client.step(Inputs(), DT)
+        bullet = host.game.projectiles.bullets[0]
+        assert client.bullet_offset(client.bullets[0]) == (0.0, 0.0, 0.4)
+        for who in (host, client):                                                  # both see the trail raised by 0.4
+            assert who.particles.particles
+            assert all(p.z == pytest.approx(bullet.z + 0.4, abs=0.02) for p in who.particles.particles)
+    finally:
+        host.close()
+
+
+def test_a_joiner_plays_a_muzzle_effect_with_an_offset_and_ignores_junk_offsets():
+    host, client = join_both(effect_level(effects=[Effect("Flash", count=1, spread=0.0, speed=0.0, life=5.0, collide=False)]))
+    try:
+        host.fx_out += [["Flash", 3.0, 3.0, 0.5, 1.0, 0.0, 0.0, 0.5, 0.0, 0.25], ["Flash", 1, 1, 1, 0, 0, 1, "x", 0, 0],
+                        ["Flash", 1, 1, 1, 0, 0, 1, 0.5]]
+        for _ in range(30):
+            host.step(Inputs(), DT)
+            client.step(Inputs(), DT)
+        spots = [(round(p.x, 2), round(p.y, 2), round(p.z, 2)) for p in client.particles.particles]
+        assert (3.5, 3.0, 0.75) in spots and client.ready
+    finally:
+        host.close()

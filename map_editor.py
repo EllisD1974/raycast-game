@@ -79,7 +79,13 @@ The Guns section (G or the Guns button) replaces the map with the list of the ma
 with "+ Add gun", click one to edit it in the Details pane (name, picture and its size, fire mode,
 damage, fire rate, magazine, spare ammunition, reload time, spread and its ammo type). Ammunition
 is listed under the guns: an ammo type is the bullet (picture, size, speed, range) and a damage
-multiplier, and guns of the same type share one pool of spare rounds. Click a Sprite row and then a tile in the atlas to set that picture. Hand a gun
+multiplier, and guns of the same type share one pool of spare rounds. The picture under the list is the game
+itself firing the selected gun down a corridor (fire rate, magazine, reload, recoil, muzzle effect and light, bullets
+with their trails and lights): tick "Fire continuously" to keep it shooting and reloading, press "Fire once" for a
+single pull, and tick "Dark room" to see flashes and bullet lights. It starts over whenever you change anything.
+A gun's Muzzle effect, an ammo type's Trail effect and an item's Emits each have a "Start offset" row: leave it on
+"Effect's own", or choose "Override" to say where that effect starts for this gun, ammo type or item (a gun's and an
+ammo type's are ahead, to the right and up of the muzzle or bullet; an item's are east, south and up). Click a Sprite row and then a tile in the atlas to set that picture. Hand a gun
 out with an item whose effect is "Give a gun" (or "Give ammo"); an "Inventory item" effect puts a
 named thing in the player's inventory instead. Choosing a map tool goes back to the map.
 
@@ -138,6 +144,7 @@ import hud
 from entities import describe
 from details import PANE_WIDTH, Field
 from inventory import GunState
+from gunpreview import GunPreview
 from particles import UP, ParticleSystem, placement
 from preview import Preview
 from window import maximize
@@ -333,6 +340,11 @@ class Editor:
         self.ammo_selected = None               # index in level.ammo_types of the ammo type being edited
         self.prefabs_mode = False               # the Prefabs section is showing instead of the map
         self.prefab_selected = None             # index in level.prefabs of the prefab being edited
+        self.gun_preview = None                 # the live gun in the Guns section (a GunPreview), built when needed
+        self.gun_preview_key = None             # what it was built for: (revision, gun, dark room)
+        self.gun_continuous = False             # the Guns preview keeps firing and reloading
+        self.gun_dark = False                   # ... in a dark room, so flashes and bullet lights show
+        self.hud_font = pygame.font.Font(None, 22)      # the game's own HUD font, for the text in the picture
         self.lights_mode = False                # the Lights section is showing instead of the map
         self.light_selected = None              # index in level.lights of the light being edited, or AMBIENT_ROW
         self.light_clock = 0.0                  # time for the flicker in a light's preview
@@ -380,6 +392,7 @@ class Editor:
         self._scaled = {}
         self._trans_cache = (None, None)
         self._atlas_stamp = self._atlas_mtime()
+        self.gun_preview = self.gun_preview_key = None      # the live gun is drawn with the old textures
         self.selection = {i for i in getattr(self, "selection", {0}) if i < len(tiles)} or {0}
         if getattr(self, "preview", None) is not None:
             self.preview.set_textures(atlas_array(tiles))
@@ -583,6 +596,7 @@ class Editor:
                    field("lift", "Lift", "num", step=0.1, low=-2.0, high=5.0),
                    field("shown", "Sprite", "enum", choices=(True, False), labels={True: "Shown", False: "Hidden"}),
                    field("emits", "Emits", "enum", choices=self.effect_choices(), labels=self.effect_labels()),
+                   *(self.offset_fields(field, "emits", ("Offset x (east)", "Offset y (south)", "Offset up")) if e.emits else []),
                    field("light", "Light", "enum", choices=self.light_choices(), labels=self.light_labels())]
         fields.append(Field("animations", "Animations (none)" if not e.animations else "Animations",
                             "header", None, None))
@@ -630,6 +644,7 @@ class Editor:
                             labels={"": "(default bullet)", **{n: n for n in names}}))
         fields.append(field("muzzle", "Muzzle effect", "enum", choices=self.effect_choices(),
                             labels=self.effect_labels()))
+        fields += self.offset_fields(field, "muzzle", ("Offset ahead", "Offset right", "Offset up")) if g.muzzle else []
         fields.append(field("flash", "Muzzle light", "enum", choices=self.light_choices(), labels=self.light_labels()))
         return fields
 
@@ -646,6 +661,7 @@ class Editor:
                 field("range", "Bullet range", "num", step=1.0, low=0.5, high=200.0),
                 field("damage_mult", "Damage x", "num", step=0.1, low=0.0, high=100.0),
                 field("trail", "Trail effect", "enum", choices=self.effect_choices(), labels=self.effect_labels()),
+                *(self.offset_fields(field, "trail", ("Offset behind", "Offset right", "Offset up")) if a.trail else []),
                 field("light", "Bullet light", "enum", choices=self.light_choices(), labels=self.light_labels())]
 
     def details_rows(self):
@@ -852,6 +868,17 @@ class Editor:
             self.prefab_selected = None
 
     # ---------------------------------------------------------------- particle effects
+
+    def offset_fields(self, field, prefix, labels):
+        """The rows that let whatever uses an effect (a gun, an ammo type, an item) say where the effect starts
+        instead of using the effect's own start offset: an on/off row, and the three offsets while it is on."""
+        fields = [field(f"{prefix}_override", "Start offset", "enum", choices=(False, True),
+                        labels={False: "Effect's own", True: "Override"})]
+        on = field(f"{prefix}_override", "", "enum").get()
+        if on:
+            fields += [field(f"{prefix}_offset_{axis}", label, "num", step=0.05, low=-10.0, high=10.0)
+                       for axis, label in zip("xyz", labels)]
+        return fields
 
     def effect_choices(self):
         return ("",) + tuple(f.name for f in self.level.effects)
@@ -1862,6 +1889,7 @@ class Editor:
         keys held while the mouse is over the 3D view (or is dragging in it)."""
         self.watch_textures()
         self.step_fx_preview(dt)
+        self.step_gun_preview(dt)
         self.light_clock += dt
         if not self.show_preview:
             return
@@ -2393,6 +2421,8 @@ class Editor:
         return rows, pygame.Rect(area.x + 20, start + len(rows) * self.GUN_ROW_H, 190, 34)
 
     def guns_click(self, pos):
+        if self.gun_controls_click(pos):
+            return
         rows, add = self.gun_rows()
         ammo_rows, add_ammo = self.ammo_rows()
         if add.collidepoint(pos):
@@ -2413,6 +2443,66 @@ class Editor:
                 self.tile_target = "tile"
                 self.field_edit = self.menu_open = None
                 return
+
+    def guns_card_rect(self):
+        """The rect of the preview card (gun or ammo) in the Guns section, where draw_guns puts it."""
+        area = self.map_area()
+        _rows, add_ammo = self.ammo_rows()
+        right = area.x + 20 + self._list_width() + 24
+        card_w = min(400, area.right - right - 20)
+        if card_w < 200:                                   # no room beside the lists: below them
+            right, card_w, top = area.x + 20, max(160, min(400, area.w - 40)), add_ammo.bottom + 20
+        else:
+            top = area.y + 74
+        if self.selected_ammo() is not None:
+            return pygame.Rect(right, top, card_w, 190)
+        return pygame.Rect(right, top, card_w, card_w * 9 // 16)
+
+    def gun_controls(self, card):
+        """{name: rect} of the controls under the gun picture (two check boxes and a button), flowing onto a
+        second row when the card is narrow, and the y below them."""
+        x, y = card.x, card.bottom + 10
+        boxes = {}
+        for name, label in (("continuous", "Fire continuously"), ("dark", "Dark room")):
+            width = 22 + self.small.size(label)[0] + 8
+            if x + width > card.right and x > card.x:
+                x, y = card.x, y + 28
+            boxes[name] = (pygame.Rect(x, y, 20, 20), label)
+            x += width + 18
+        if x + 92 > card.right and x > card.x:
+            x, y = card.x, y + 28
+        boxes["once"] = (pygame.Rect(x, y - 2, 92, 24), "Fire once")
+        return boxes, y + 28
+
+    def step_gun_preview(self, dt):
+        """Keep the live gun in the Guns section running: built again whenever the level, the gun or the dark
+        room setting changes, then run on by dt (firing all the time if Fire continuously is ticked)."""
+        gun = self.selected_gun()
+        if not self.guns_mode or gun is None:
+            return
+        if self.gun_preview is None:
+            self.gun_preview = GunPreview(atlas_array(self.tiles))
+        key = (self.revision, self.gun_selected, self.gun_dark)
+        if self.gun_preview_key != key:
+            self.gun_preview.build(self.level, gun.name, self.gun_dark)
+            self.gun_preview_key = key
+        self.gun_preview.update(dt, self.gun_continuous)
+
+    def gun_controls_click(self, pos):
+        """A click on the gun picture's controls; True if it hit one."""
+        if self.selected_gun() is None:
+            return False
+        controls, _bottom = self.gun_controls(self.guns_card_rect())
+        for name, (rect, _label) in controls.items():
+            if rect.collidepoint(pos):
+                if name == "continuous":
+                    self.gun_continuous = not self.gun_continuous
+                elif name == "dark":
+                    self.gun_dark = not self.gun_dark
+                elif self.gun_preview is not None:
+                    self.gun_preview.fire_once()
+                return True
+        return False
 
     def draw_guns(self, screen):
         """The Guns section: the map's guns and ammo types as lists, and a preview of the selected one."""
@@ -2454,20 +2544,15 @@ class Editor:
             screen.blit(self.small.render(summary, True, TEXT if on else DIM), (rect.x + 48, rect.y + 24))
             screen.set_clip(area)
         self._draw_add_button(screen, add_ammo, "+ Add ammo type")
-        right = area.x + 20 + self._list_width() + 24
-        card_w = min(400, area.right - right - 20)
-        if card_w < 200:                                   # no room beside the lists: below them
-            right, card_w, top = area.x + 20, max(160, min(400, area.w - 40)), add_ammo.bottom + 20
-        else:
-            top = area.y + 74
+        card = self.guns_card_rect()
         gun, ammo = self.selected_gun(), self.selected_ammo()
         if gun is not None:
-            self.draw_gun_preview(screen, pygame.Rect(right, top, card_w, card_w * 9 // 16), gun)
+            self.draw_gun_preview(screen, card, gun)
         elif ammo is not None:
-            self.draw_ammo_preview(screen, pygame.Rect(right, top, card_w, 190), ammo)
+            self.draw_ammo_preview(screen, card, ammo)
         else:
             note = "No guns yet: add one." if not self.level.guns else "Select a gun or an ammo type to edit it."
-            screen.blit(self.small.render(note, True, DIM), (right, top))
+            screen.blit(self.small.render(note, True, DIM), (card.x, card.y))
         screen.set_clip(None)
 
     def _draw_wrapped(self, screen, lines, x, y, width):
@@ -2499,16 +2584,45 @@ class Editor:
         screen.blit(self.small.render("bullet vs a 1 cell square", True, DIM), (box.right + 10, box.centery - 8))
 
     def draw_gun_preview(self, screen, card, gun):
-        """The gun as the player sees it at the bottom of the game picture (same drawing code), its
-        bullet at its real size next to a cell-sized square, and the numbers that matter."""
+        """The gun as the player sees it: the game's own picture of a corridor with the gun in hand, firing with
+        its real fire rate, magazine, reload, muzzle effect and light, bullets and trails (while Fire
+        continuously is ticked, or after Fire once). Under it, the bullet at its real size next to a cell-sized
+        square, and the numbers that matter."""
         ammo = self.level.ammo_for(gun)
-        picture = pygame.Surface((640, 360))
-        picture.fill((44, 48, 60))
-        pygame.draw.rect(picture, (64, 60, 52), (0, 300, 640, 60))
-        hud.draw_weapon(picture, self.tiles, GunState(gun, mag=gun.capacity), 0.0)
+        live = self.gun_preview
+        picture = None
+        if live is not None and live.ready and live.gun_name == gun.name and self.gun_preview_key is not None:
+            try:
+                picture = live.render(self.tiles, self.hud_font)
+            except Exception:                              # a half-finished edit must not take the editor down
+                picture = None
+        if picture is None:
+            picture = pygame.Surface((640, 360))
+            picture.fill((44, 48, 60))
+            pygame.draw.rect(picture, (64, 60, 52), (0, 300, 640, 60))
+            hud.draw_weapon(picture, self.tiles, GunState(gun, mag=gun.capacity), 0.0)
         screen.blit(pygame.transform.smoothscale(picture, card.size), card)
         pygame.draw.rect(screen, GRID, card.inflate(2, 2), 1)
-        box = pygame.Rect(card.x, card.bottom + 14, 56, 56)
+        controls, below = self.gun_controls(card)
+        for name, (rect, label) in controls.items():
+            if name == "once":
+                pygame.draw.rect(screen, BUTTON_HOT if rect.collidepoint(self.mouse) else BUTTON, rect, border_radius=4)
+                text = self.small.render(label, True, TEXT)
+                screen.blit(text, text.get_rect(center=rect.center))
+                continue
+            on = self.gun_continuous if name == "continuous" else self.gun_dark
+            pygame.draw.rect(screen, BUTTON_ON if on else BUTTON, rect, border_radius=3)
+            pygame.draw.rect(screen, GRID, rect, 1, border_radius=3)
+            if on:
+                pygame.draw.lines(screen, TEXT, False, [(rect.x + 4, rect.centery), (rect.x + 8, rect.bottom - 6),
+                                                        (rect.right - 4, rect.y + 5)], 2)
+            screen.blit(self.small.render(label, True, TEXT), (rect.right + 8, rect.y + 3))
+        if live is not None and live.ready and live.gun_name == gun.name:
+            count = live.shots_last_second()
+            screen.blit(self.small.render(f"{count} shot{'s' if count != 1 else ''} in the last second "
+                                          f"(set to {gun.fire_rate:g} a second)", True, DIM), (card.x, below - 4))
+            below += 18
+        box = pygame.Rect(card.x, below + 8, 56, 56)
         self._draw_bullet(screen, box, ammo)
         damage = gun.damage * ammo.damage_mult
         lines = (f"{damage:g} damage a bullet, {damage * gun.fire_rate:g} a second at full fire rate",

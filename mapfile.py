@@ -61,7 +61,7 @@ _UPPER_DEFAULTS = {"floor_tex": 3, "ceil_tex": 6, "floor_h": 0.0, "ceil_h": 0.0,
 
 ENTITY_MODES = ("once", "respawn", "persistent", "scenery")
 PREFAB_FIELDS = ("tile", "mode", "effect", "amount", "respawn", "size", "lift", "item", "gun", "ammo",
-                 "shown", "emits", "light")
+                 "shown", "emits", "emits_override", "emits_offset_x", "emits_offset_y", "emits_offset_z", "light")
 ENTITY_EFFECTS = ("none", "score", "health", "item", "gun", "ammo")
 MODE_LABELS = {"once": "Pick up once", "respawn": "Respawns", "persistent": "Stays", "scenery": "Scenery"}
 EFFECT_LABELS = {"none": "None", "score": "Score", "health": "Health", "item": "Inventory item",
@@ -233,7 +233,10 @@ class AmmoType:
     range        how far it flies before it disappears, in cells
     damage_mult  multiplies the damage of the gun that fires it (1.0 leaves it as it is)
     trail        name of the Effect that follows the bullet through the air ("" for none)
-    light        name of the Light the bullet carries as it flies ("" for none)"""
+    light        name of the Light the bullet carries as it flies ("" for none)
+    trail_override, trail_offset_x, trail_offset_y, trail_offset_z
+                 true: the trail starts at this offset (x along the bullet's heading, y to its right, z up, in
+                 cells) instead of the effect's own start offset"""
     name: str = "Bullet"
     tile: int = 14
     size: float = 0.1
@@ -242,6 +245,10 @@ class AmmoType:
     damage_mult: float = 1.0
     trail: str = ""
     light: str = ""
+    trail_override: bool = False
+    trail_offset_x: float = 0.0
+    trail_offset_y: float = 0.0
+    trail_offset_z: float = 0.0
 
     @classmethod
     def from_dict(cls, data):
@@ -256,7 +263,9 @@ class AmmoType:
         return cls(name=name, tile=number("tile", 0, 255, int), size=number("size", 0.01, 2.0),
                    speed=number("speed", 0.5, 200.0), range=number("range", 0.5, 200.0),
                    damage_mult=number("damage_mult", 0.0, 100.0), trail=str(data.get("trail", ""))[:MAX_NAME],
-                   light=str(data.get("light", ""))[:MAX_NAME])
+                   light=str(data.get("light", ""))[:MAX_NAME], trail_override=bool(data.get("trail_override", False)),
+                   trail_offset_x=number("trail_offset_x", -10.0, 10.0), trail_offset_y=number("trail_offset_y", -10.0, 10.0),
+                   trail_offset_z=number("trail_offset_z", -10.0, 10.0))
 
 
 @dataclass
@@ -285,7 +294,10 @@ class Gun:
                             like a single bullet until that is built
     pellets     bullets in a multi shot
     muzzle      name of the Effect played at the muzzle each time it fires ("" for none)
-    flash       name of the Light that flashes at the muzzle each time it fires ("" for none)"""
+    flash       name of the Light that flashes at the muzzle each time it fires ("" for none)
+    muzzle_override, muzzle_offset_x, muzzle_offset_y, muzzle_offset_z
+                true: the muzzle effect starts at this offset from the muzzle (x ahead along the aim, y to the
+                right, z up, in cells) instead of the effect's own start offset"""
     name: str = "Pistol"
     tile: int = 16
     size: float = 5.0
@@ -301,6 +313,10 @@ class Gun:
     pellets: int = 8
     muzzle: str = ""
     flash: str = ""
+    muzzle_override: bool = False
+    muzzle_offset_x: float = 0.0
+    muzzle_offset_y: float = 0.0
+    muzzle_offset_z: float = 0.0
 
     @property
     def capacity(self):
@@ -325,7 +341,9 @@ class Gun:
                    spread=number("spread", 0.0, 45.0),
                    shot=data.get("shot") if data.get("shot") in SHOT_TYPES else base.shot,
                    pellets=number("pellets", 1, 100, int), muzzle=str(data.get("muzzle", ""))[:MAX_NAME],
-                   flash=str(data.get("flash", ""))[:MAX_NAME])
+                   flash=str(data.get("flash", ""))[:MAX_NAME], muzzle_override=bool(data.get("muzzle_override", False)),
+                   muzzle_offset_x=number("muzzle_offset_x", -10.0, 10.0), muzzle_offset_y=number("muzzle_offset_y", -10.0, 10.0),
+                   muzzle_offset_z=number("muzzle_offset_z", -10.0, 10.0))
 
 
 @dataclass
@@ -372,6 +390,9 @@ class Entity:
                 changes all of them at once. Clearing `prefab` detaches an item: it keeps what it had.
     shown    whether the sprite is drawn (an item that only emits particles can hide it)
     emits    name of the particle Effect the item sends out while it is there ("" for none; it points up)
+    emits_override, emits_offset_x, emits_offset_y, emits_offset_z
+             true: the particles start at this offset from the item (x east, y south, z up, in cells) instead of
+             the effect's own start offset
     light    name of the Light the item gives off while it is there ("" for none); with Scenery and a hidden
              sprite an item is just a light placed in the map
     A "scenery" item cannot be touched or picked up: it is only there to look at (a torch, a vent)."""
@@ -391,6 +412,10 @@ class Entity:
     ammo: str = ""                  # effect "ammo": the name of the ammo type it gives (amount rounds)
     shown: bool = True              # draw the sprite
     emits: str = ""                 # the particle effect it sends out
+    emits_override: bool = False    # use emits_offset_* instead of the effect's own start offset
+    emits_offset_x: float = 0.0
+    emits_offset_y: float = 0.0
+    emits_offset_z: float = 0.0
     light: str = ""                 # the light it gives off
     name: str = ""                  # a prefab's name (an item placed in the map has none)
     prefab: str = ""                # the prefab this item is an instance of ("" for a plain item)
@@ -418,6 +443,10 @@ class Entity:
                        item=str(data.get("item", ""))[:MAX_NAME], gun=str(data.get("gun", ""))[:MAX_NAME],
                        ammo=str(data.get("ammo", ""))[:MAX_NAME],
                        shown=bool(data.get("shown", base.shown)), emits=str(data.get("emits", ""))[:MAX_NAME],
+                       emits_override=bool(data.get("emits_override", False)),
+                       emits_offset_x=float(data.get("emits_offset_x", 0.0)),
+                       emits_offset_y=float(data.get("emits_offset_y", 0.0)),
+                       emits_offset_z=float(data.get("emits_offset_z", 0.0)),
                        light=str(data.get("light", ""))[:MAX_NAME],
                        name=str(data.get("name", ""))[:MAX_NAME], prefab=str(data.get("prefab", ""))[:MAX_NAME])
 

@@ -30,6 +30,7 @@ class Projectile:
     ident: int = 0              # tells bullets apart (for the trail that follows each)
     trail: str = ""             # name of the particle Effect that follows it
     light: str = ""             # name of the Light it carries
+    trail_offset: tuple = None  # where its trail starts if the ammo type overrides the effect's offset, else None
 
 
 @dataclass
@@ -66,7 +67,8 @@ class Projectiles:
         self.bullets.append(Projectile(
             player.x + dx * MUZZLE, player.y + dy * MUZZLE, player.eye_z - 0.03 + dz * MUZZLE,
             dx * ammo.speed, dy * ammo.speed, dz * ammo.speed,
-            ammo.tile, ammo.size, gun.damage * ammo.damage_mult, ammo.range, self.next_ident, ammo.trail, ammo.light))
+            ammo.tile, ammo.size, gun.damage * ammo.damage_mult, ammo.range, self.next_ident, ammo.trail, ammo.light,
+            (ammo.trail_offset_x, ammo.trail_offset_y, ammo.trail_offset_z) if ammo.trail_override else None))
         self.next_ident += 1
 
     def update(self, world, dt):

@@ -6,6 +6,9 @@ machine, and only the picture depends on them. A ParticleSystem is fed three kin
     play(name, x, y, z, direction)    once: a burst, or a stream for its duration (a muzzle flash)
     attach(key, name, x, y, z, ...)   every frame while the thing is there: a stream leaves a trail along
                                       the path the point took, a burst repeats at the effect's interval
+    Both take an optional `offset` (x, y, z) that replaces the effect's own start offset: whatever uses an effect
+    (a gun, an ammo type, an item) can say where it starts. It is along the heading of the direction the effect is
+    played in (x ahead, y to the right), or the map's axes where there is none (an item).
     keep(keys)                        after a frame's attach calls: forget attached emitters not in `keys`
 
 then update(dt) moves everything on and sprites() gives what the renderer draws, as
@@ -50,17 +53,17 @@ class ParticleSystem:
 
     # ------------------------------------------------------------------ emitting
 
-    def play(self, name, x, y, z, direction=UP):
+    def play(self, name, x, y, z, direction=UP, offset=None):
         """Play an effect once at a point: a burst now, or a stream for its duration."""
         effect = self.effects.get(name)
         if effect is None:
             return
         if effect.kind == "burst":
-            self._emit(effect, effect.count, x, y, z, direction)
+            self._emit(effect, effect.count, x, y, z, direction, offset)
         else:
-            self.streams.append([effect, x, y, z, direction, effect.duration or ONE_SHOT_STREAM, 0.0])
+            self.streams.append([effect, x, y, z, direction, effect.duration or ONE_SHOT_STREAM, 0.0, offset])
 
-    def attach(self, key, name, x, y, z, direction=UP, dt=0.0):
+    def attach(self, key, name, x, y, z, direction=UP, dt=0.0, offset=None):
         """An emitter that follows a point, called every frame while it exists. A stream sends out its rate
         a second along the path the point travelled since the last call; a burst plays when first attached
         and again every `interval` seconds (never again if that is 0)."""
@@ -72,7 +75,7 @@ class ParticleSystem:
         if state is None or state["name"] != name:
             state = self.attached[key] = {"name": name, "last": (x, y, z), "owed": 0.0, "wait": 0.0}
             if effect.kind == "burst":
-                self._emit(effect, effect.count, x, y, z, direction)
+                self._emit(effect, effect.count, x, y, z, direction, offset)
             state["wait"] = effect.interval
             return
         if effect.kind == "stream":
@@ -82,12 +85,12 @@ class ParticleSystem:
             lx, ly, lz = state["last"]
             for i in range(n):                              # spread along the path, so a fast mover leaves no gaps
                 f = (i + 1) / n
-                self._emit(effect, 1, lx + (x - lx) * f, ly + (y - ly) * f, lz + (z - lz) * f, direction)
+                self._emit(effect, 1, lx + (x - lx) * f, ly + (y - ly) * f, lz + (z - lz) * f, direction, offset)
         elif effect.interval > 0:
             state["wait"] -= dt
             if state["wait"] <= 0:
                 state["wait"] += effect.interval
-                self._emit(effect, effect.count, x, y, z, direction)
+                self._emit(effect, effect.count, x, y, z, direction, offset)
         state["last"] = (x, y, z)
 
     def keep(self, keys):
@@ -97,8 +100,8 @@ class ParticleSystem:
         for key in [k for k in self.attached if k not in keys]:
             del self.attached[key]
 
-    def _emit(self, effect, n, x, y, z, direction):
-        (ox, oy, oz), direction = placement(effect, direction)
+    def _emit(self, effect, n, x, y, z, direction, offset=None):
+        (ox, oy, oz), direction = placement(effect, direction, offset)
         x, y, z = x + ox, y + oy, z + oz
         for _ in range(n):
             if len(self.particles) >= MAX_PARTICLES:
@@ -119,12 +122,12 @@ class ParticleSystem:
     def update(self, dt):
         """Move every particle on by dt seconds, drop the dead ones and run the one-shot streams."""
         for stream in self.streams:
-            effect, x, y, z, direction, left, owed = stream
+            effect, x, y, z, direction, left, owed, offset = stream
             step = min(dt, left)
             owed += effect.rate * step
             n = int(owed)
             stream[5], stream[6] = left - step, owed - n
-            self._emit(effect, n, x, y, z, direction)
+            self._emit(effect, n, x, y, z, direction, offset)
         self.streams = [s for s in self.streams if s[5] > 0]
         alive = []
         world = self.world
@@ -176,10 +179,12 @@ class ParticleSystem:
         return out
 
 
-def placement(effect, direction):
+def placement(effect, direction, offset=None):
     """((x, y, z) offset to start the particles at, direction to send them in) for an effect played in the
     automatic `direction`. The effect's offset and, if it has chosen one, its own direction are along the map's
-    axes, or along the automatic direction's heading when `relative` is set (x forward, y to its right)."""
+    axes, or along the automatic direction's heading when `relative` is set (x forward, y to its right).
+    An `offset` from whatever uses the effect replaces the effect's own offset, and is always along the heading
+    (the map's axes where there is no heading, as for an item)."""
     hx, hy = direction[0], direction[1]
     length = math.hypot(hx, hy)
     if effect.relative and length > 1e-6:
@@ -190,8 +195,16 @@ def placement(effect, direction):
     else:
         def turned(vx, vy, vz):
             return (vx, vy, vz)
-    offset = turned(effect.offset_x, effect.offset_y, effect.offset_z) \
-        if (effect.offset_x or effect.offset_y or effect.offset_z) else (0.0, 0.0, 0.0)
+    if offset is not None:
+        if length > 1e-6:
+            fx, fy = hx / length, hy / length
+            offset = (fx * offset[0] - fy * offset[1], fy * offset[0] + fx * offset[1], offset[2])
+        else:
+            offset = tuple(offset)
+    elif effect.offset_x or effect.offset_y or effect.offset_z:
+        offset = turned(effect.offset_x, effect.offset_y, effect.offset_z)
+    else:
+        offset = (0.0, 0.0, 0.0)
     if effect.aim == "custom" and (effect.dir_x or effect.dir_y or effect.dir_z):
         direction = turned(effect.dir_x, effect.dir_y, effect.dir_z)
     return offset, direction
@@ -222,14 +235,15 @@ def cone(direction, half_angle, rng):
 
 def follow(system, bullets, viewer=None, dt=0.0):
     """Attach each bullet's trail effect to it. `bullets` yields (id, trail effect name, x, y, z, vx, vy,
-    vz); the trail sprays back along where the bullet came from."""
+    vz[, offset]); the trail sprays back along where the bullet came from, and an offset (or None) replaces the
+    effect's own start offset."""
     keys = []
-    for ident, trail, x, y, z, vx, vy, vz in bullets:
+    for ident, trail, x, y, z, vx, vy, vz, *offset in bullets:
         if not trail:
             continue
         key = ("bullet", ident)
         keys.append(key)
-        system.attach(key, trail, x, y, z, (-vx, -vy, -vz), dt)
+        system.attach(key, trail, x, y, z, (-vx, -vy, -vz), dt, offset[0] if offset else None)
     return keys
 
 
@@ -245,5 +259,6 @@ def emitters_in_view(system, items, viewer, dt):
             continue
         key = ("item", index)
         keys.append(key)
-        system.attach(key, e.emits, e.x, e.y, item.z + e.size / 2, UP, dt)
+        offset = (e.emits_offset_x, e.emits_offset_y, e.emits_offset_z) if e.emits_override else None
+        system.attach(key, e.emits, e.x, e.y, item.z + e.size / 2, UP, dt, offset)
     return keys
