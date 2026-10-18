@@ -256,7 +256,7 @@ def test_the_entity_tool_shows_the_prefabs_to_place_and_placing_makes_a_linked_i
     e = place(ed, (4, 4))
     assert (e.prefab, e.effect, e.amount, e.tile) == ("Heart", "health", 40.0, 11)
     assert (e.x, e.y) == (4.5, 4.5)
-    assert keys(ed) == ["prefab"]                                # a linked item shows only which prefab it is
+    assert keys(ed)[:4] == ["prefab", "edit_prefab", "detach", "from_prefab"]    # a linked item shows which prefab it is, then its details
     ed.draw(pygame.display.get_surface())
     ed.deselect()
     click(ed, details.button_box(row(ed, "pick_1")).center)
@@ -318,7 +318,7 @@ def test_save_as_prefab_turns_an_item_into_a_reusable_one(ed):
     click(ed, details.button_box(row(ed, "make_prefab")).center)
     assert [p.name for p in ed.level.prefabs] == ["Red key pickup"]
     assert e.prefab == "Red key pickup" and ed.level.prefabs[0].item == "Red key"
-    assert ed.place_prefab == "Red key pickup" and keys(ed) == ["prefab"]
+    assert ed.place_prefab == "Red key pickup" and keys(ed)[0] == "prefab"
     ed.deselect()
     place(ed, (7, 7))
     assert ed.level.entities[1].prefab == "Red key pickup" and ed.level.entities[1].item == "Red key"
@@ -333,3 +333,115 @@ def test_a_selection_in_the_prefabs_section_does_not_leak_into_the_map(ed):
     assert ed.selected_prefab() is None and not ed.prefabs_mode
     ed.do("prefabs")
     assert ed.selected_entity() is None
+
+
+# ------------------------------------------------------------------ selecting a placed copy
+
+def placed_copy(ed, **prefab_settings):
+    """A prefab with some settings and a copy of it placed at cell (4, 4), selected."""
+    ed.level.effects = [] if not prefab_settings.get("emits") else [__import__("mapfile").Effect(prefab_settings["emits"])]
+    ed.level.prefabs = [Entity(0.0, 0.0, name="Torch", **prefab_settings)]
+    ed.do("tool:entity")
+    ed.place_prefab = "Torch"
+    ed.map_click((4, 4), 1)
+    ed.draw(pygame.display.get_surface())
+    return ed.level.entities[-1]
+
+
+def info(ed):
+    return {r.field.key: r.field.text() for r in ed.details_rows() if r.field.kind == "info"}
+
+
+def test_a_placed_copy_shows_its_own_details_and_not_only_a_list_of_prefabs(ed):
+    copy = placed_copy(ed, mode="persistent", effect="health", amount=25.0, size=0.5, lift=0.2, tile=11,
+                       animations=[Animation("rotate")], light="Glow", emits="Fire", emits_override=True,
+                       emits_offset_x=0.5, shown=False)
+    assert ed.selected_entity() is copy
+    assert keys(ed)[:4] == ["prefab", "edit_prefab", "detach", "from_prefab"]
+    shown = info(ed)
+    assert shown["where"] == "cell 4, 4 on Floor 1"
+    assert shown["sprite"] == "#12  (hidden)" and shown["mode"] == "Stays" and shown["effect"] == "Health: +25"
+    assert shown["size"] == "0.5" and shown["lift"] == "0.2" and shown["light"] == "Glow"
+    assert shown["emits"].startswith("Fire  from 0.5") and shown["animations"] == "Rotate"
+    assert "respawn" not in shown
+    ed.draw(pygame.display.get_surface())
+
+
+def test_a_respawning_copy_also_shows_its_respawn_time(ed):
+    placed_copy(ed, mode="respawn", respawn=12.0)
+    assert info(ed)["respawn"] == "12 s"
+
+
+def test_the_detail_rows_are_read_only_clicks_and_the_wheel_change_nothing(ed):
+    copy = placed_copy(ed, mode="persistent", effect="health", amount=25.0)
+    before = (copy.prefab, copy.mode, copy.effect, copy.amount, copy.size, ed.level.prefabs[0].size)
+    count = len(ed.level.undo) if hasattr(ed.level, "undo") else len(ed.undo)
+    for name in ("where", "sprite", "mode", "effect", "size", "lift", "emits", "light", "animations"):
+        r = row(ed, name)
+        for spot in (r.minus.center, r.value.center, r.plus.center, r.rect.center):
+            click(ed, spot)
+        ed.mouse = r.rect.center
+        ed.handle_event(pygame.event.Event(pygame.MOUSEWHEEL, x=0, y=3))
+        ed.handle_event(pygame.event.Event(pygame.MOUSEWHEEL, x=0, y=-3))
+    assert (copy.prefab, copy.mode, copy.effect, copy.amount, copy.size, ed.level.prefabs[0].size) == before
+    assert len(ed.undo) == count and ed.field_edit is None and ed.selected_entity() is copy
+
+
+def test_the_wheel_over_the_prefab_row_does_not_quietly_point_the_copy_at_another_prefab(ed):
+    copy = placed_copy(ed)
+    ed.level.prefabs.append(Entity(0.0, 0.0, name="Coin", effect="score"))
+    ed.draw(pygame.display.get_surface())
+    ed.mouse = row(ed, "prefab").rect.center
+    ed.handle_event(pygame.event.Event(pygame.MOUSEWHEEL, x=0, y=1))
+    ed.handle_event(pygame.event.Event(pygame.MOUSEWHEEL, x=0, y=-1))
+    assert copy.prefab == "Torch"
+    click(ed, row(ed, "prefab").plus.center)                                      # an explicit click on + still does
+    assert copy.prefab == "Coin"
+
+
+def test_edit_prefab_opens_the_prefabs_section_on_that_prefab(ed):
+    ed.level.prefabs = [Entity(0.0, 0.0, name="Coin"), Entity(0.0, 0.0, name="Torch", effect="health")]
+    ed.do("tool:entity")
+    ed.place_prefab = "Torch"
+    ed.map_click((4, 4), 1)
+    ed.draw(pygame.display.get_surface())
+    click(ed, details.button_box(row(ed, "edit_prefab")).center)
+    assert ed.prefabs_mode and ed.selected_prefab() is ed.level.prefabs[1] and ed.selected_entity() is None
+    assert "name" in keys(ed)                                                     # the pane is now the prefab's own
+    ed.draw(pygame.display.get_surface())
+
+
+def test_detach_turns_the_copy_into_a_plain_item_that_keeps_its_settings(ed):
+    copy = placed_copy(ed, mode="persistent", effect="health", amount=25.0, size=0.5)
+    click(ed, details.button_box(row(ed, "detach")).center)
+    assert copy.prefab == "" and (copy.effect, copy.amount, copy.size) == ("health", 25.0, 0.5)
+    assert ed.selected_entity() is copy and "amount" in keys(ed) and "edit_prefab" not in keys(ed)
+    click(ed, row(ed, "amount").plus.center)                                      # now editable, on its own
+    assert copy.amount == 30.0 and ed.level.prefabs[0].amount == 25.0                   # the prefab is untouched
+
+
+def test_an_atlas_click_with_a_copy_selected_changes_nothing_and_says_why(ed):
+    copy = placed_copy(ed, tile=11)
+    click(ed, ed.tile_rect(3).center)
+    assert copy.tile == 11 and ed.level.prefabs[0].tile == 11 and ed.entity_brush.tile != 3
+    assert "Torch" in ed.message and "Prefabs section" in ed.message
+
+
+def test_the_delete_button_removes_only_the_selected_copy_and_sits_below_every_row(ed):
+    copy = placed_copy(ed, effect="health")
+    other = Entity(6.5, 6.5, prefab="Torch")
+    ed.level.entities.append(other)
+    ed.draw(pygame.display.get_surface())
+    rows, rect = ed.details_rows(), ed.details_rect()
+    button = details.button_rect(rect, rows)
+    assert button.top > max(r.rect.bottom for r in rows) and button.bottom <= rect.bottom
+    click(ed, button.center)
+    assert copy not in ed.level.entities and other in ed.level.entities and len(ed.level.prefabs) == 1
+
+
+def test_clicking_the_map_next_to_a_selected_copy_selects_or_places_and_never_removes(ed):
+    copy = placed_copy(ed)
+    ed.map_click((5, 4), 1)                                                       # the next cell: a new copy is placed
+    assert len(ed.level.entities) == 2 and copy in ed.level.entities
+    ed.map_click((4, 4), 1)                                                       # back on the first: it is selected
+    assert ed.selected_entity() is copy and len(ed.level.entities) == 2

@@ -13,6 +13,7 @@ Field kinds:
             field that atlas clicks set (when a pane has more than one tile field)
     text    a name typed in (click it)
     header  a heading row for a group of fields; with an `action` it has a remove button
+    info    a read-only row: its label and a value shown dimmed (nothing to click or step)
     menu    a button that opens a drop-down list of choices; picking one calls `set(choice)`
             (used to add things); a menu with no choices is not shown
     button  a full-width button that calls `action`; with `get` it is drawn "on" while that is true,
@@ -48,11 +49,14 @@ class Field:
     action: Callable = None                     # header: called by its remove button
     text_override: str = ""                     # header / menu / button: the text shown
     icon: Any = None                            # button: atlas tile drawn at its left
+    wheel: bool = True                          # num / enum / tile: the mouse wheel over the row steps it
 
     def text(self):
         if self.kind in ("header", "menu", "button"):
             return self.text_override or self.label
         value = self.get()
+        if self.kind == "info":
+            return str(value)
         if self.kind == "text":
             return str(value)
         if self.kind == "enum":
@@ -181,6 +185,14 @@ def draw(screen, rect, title, rows, theme, fonts, editing=None, hover=None, tile
             box(wide, theme["button_hot"] if hot(wide) or open_menu == f.key else theme["button"])
             label = font.render(f.text(), True, theme["text"])
             screen.blit(label, label.get_rect(center=wide.center))
+            continue
+        if f.kind == "info":                                       # read-only: the label, and the value dimmed on the right
+            screen.blit(font.render(f.label, True, theme["text"]), (rect.x + 10, row.rect.y + 8))
+            text = small.render(f.text(), True, theme["dim"])
+            area = pygame.Rect(row.minus.x - 40, row.rect.y, row.plus.right - row.minus.x + 40, row.rect.h)
+            screen.set_clip(area)
+            screen.blit(text, text.get_rect(midright=(row.plus.right, row.rect.centery)))
+            screen.set_clip(None)
             continue
         screen.blit(font.render(f.label, True, theme["text"]), (rect.x + 10, row.rect.y + 8))
         for button, label in ((row.minus, "-"), (row.plus, "+")):
