@@ -300,7 +300,7 @@ def test_ammo_types_are_added_selected_and_deleted_in_the_guns_section(ed):
     rows, _add = ed.ammo_rows()
     click(ed, rows[0][0].center)
     assert ed.selected_ammo() is first
-    assert keys(ed) == ["name", "tile", "size", "speed", "range", "damage_mult", "trail", "light"]
+    assert keys(ed) == ["name", "tile", "size", "speed", "range", "damage_mult", "trail", "light", "hit_effect", "hit_light"]
     click(ed, details.button_rect(ed.details_rect(), ed.details_rows()).center)
     assert ed.level.ammo_types == [second] and ed.details_rect() is None
     ed.do("undo")

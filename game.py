@@ -167,6 +167,10 @@ class Game:
         players pick up what they touch. Returns {player id: pickup messages}."""
         targets = [(pid, state.body.x, state.body.y, state.body.z) for pid, state in self.players.items()]
         for hit in self.projectiles.update(self.world, dt, targets):
+            if hit.effect:                              # sprays back the way the bullet came
+                self.fx.append((hit.effect, hit.x, hit.y, hit.z, -hit.dx, -hit.dy, -hit.dz))
+            if hit.light:
+                self.flashes.append((hit.light, hit.x, hit.y, hit.z))
             if hit.target in self.players:
                 self.hurt(hit.target, hit.damage)
         self.items.advance(dt)

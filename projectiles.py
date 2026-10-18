@@ -42,6 +42,8 @@ class Projectile:
     light: str = ""             # name of the Light it carries
     trail_offset: tuple = None  # where its trail starts if the ammo type overrides the effect's offset, else None
     owner: int = None           # id of the player who fired it (it passes through them), None if nobody
+    hit_effect: str = ""        # name of the particle Effect played where it strikes
+    hit_light: str = ""         # name of the Light flashed there
 
 
 def struck_player(targets, owner, x, y, z):
@@ -61,6 +63,11 @@ class Hit:
     damage: float
     owner: int = None           # who fired the bullet
     target: int = None          # the player it struck, None if it hit a wall, floor or ceiling
+    effect: str = ""            # the bullet's hit effect and light to play at the hit (names, "" for none)
+    light: str = ""
+    dx: float = 0.0             # the way the bullet was heading (a unit vector)
+    dy: float = 0.0
+    dz: float = 0.0
 
 
 class Projectiles:
@@ -91,7 +98,8 @@ class Projectiles:
             player.x + dx * MUZZLE + sx, player.y + dy * MUZZLE + sy, player.eye_z - 0.03 + dz * MUZZLE + sz,
             dx * ammo.speed, dy * ammo.speed, dz * ammo.speed,
             ammo.tile, ammo.size, gun.damage * ammo.damage_mult, ammo.range, self.next_ident, ammo.trail, ammo.light,
-            (ammo.trail_offset_x, ammo.trail_offset_y, ammo.trail_offset_z) if ammo.trail_override else None, owner))
+            (ammo.trail_offset_x, ammo.trail_offset_y, ammo.trail_offset_z) if ammo.trail_override else None, owner,
+            ammo.hit_effect, ammo.hit_light))
         self.next_ident += 1
 
     def update(self, world, dt, targets=()):
@@ -102,17 +110,18 @@ class Projectiles:
             speed = math.sqrt(b.vx * b.vx + b.vy * b.vy + b.vz * b.vz)
             distance = min(speed * dt, b.range_left)
             steps = max(1, math.ceil(distance / MAX_STEP))
+            heading = (b.vx / speed, b.vy / speed, b.vz / speed)
             struck = False
             for _ in range(steps):
                 move = distance / steps
                 nx, ny, nz = (b.x + b.vx / speed * move, b.y + b.vy / speed * move, b.z + b.vz / speed * move)
                 if not world.point_open(nx, ny, nz):
-                    hits.append(Hit(b.x, b.y, b.z, b.damage, b.owner))
+                    hits.append(Hit(b.x, b.y, b.z, b.damage, b.owner, None, b.hit_effect, b.hit_light, *heading))
                     struck = True
                     break
                 target = struck_player(targets, b.owner, nx, ny, nz)
                 if target is not None:
-                    hits.append(Hit(nx, ny, nz, b.damage, b.owner, target))
+                    hits.append(Hit(nx, ny, nz, b.damage, b.owner, target, b.hit_effect, b.hit_light, *heading))
                     struck = True
                     break
                 b.x, b.y, b.z = nx, ny, nz

@@ -234,6 +234,8 @@ class AmmoType:
     damage_mult  multiplies the damage of the gun that fires it (1.0 leaves it as it is)
     trail        name of the Effect that follows the bullet through the air ("" for none)
     light        name of the Light the bullet carries as it flies ("" for none)
+    hit_effect   name of the Effect played where the bullet strikes a wall or a player ("" for none)
+    hit_light    name of the Light that flashes there ("" for none)
     trail_override, trail_offset_x, trail_offset_y, trail_offset_z
                  true: the trail starts at this offset (x along the bullet's heading, y to its right, z up, in
                  cells) instead of the effect's own start offset"""
@@ -249,6 +251,8 @@ class AmmoType:
     trail_offset_x: float = 0.0
     trail_offset_y: float = 0.0
     trail_offset_z: float = 0.0
+    hit_effect: str = ""
+    hit_light: str = ""
 
     @classmethod
     def from_dict(cls, data):
@@ -265,7 +269,8 @@ class AmmoType:
                    damage_mult=number("damage_mult", 0.0, 100.0), trail=str(data.get("trail", ""))[:MAX_NAME],
                    light=str(data.get("light", ""))[:MAX_NAME], trail_override=bool(data.get("trail_override", False)),
                    trail_offset_x=number("trail_offset_x", -10.0, 10.0), trail_offset_y=number("trail_offset_y", -10.0, 10.0),
-                   trail_offset_z=number("trail_offset_z", -10.0, 10.0))
+                   trail_offset_z=number("trail_offset_z", -10.0, 10.0),
+                   hit_effect=str(data.get("hit_effect", ""))[:MAX_NAME], hit_light=str(data.get("hit_light", ""))[:MAX_NAME])
 
 
 @dataclass

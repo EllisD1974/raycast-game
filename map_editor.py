@@ -109,7 +109,7 @@ and are worked out on each player's own machine.
 The Lights section (L or the Lights button) is where you design lights: "+ Add light", then set its colour,
 brightness, reach, flicker and flash length in the Details pane while a preview shows it from above. Lights
 are saved in the map and used by name: a gun's "Muzzle light" flashes where it fires, an ammo type's "Bullet
-light" travels with its bullets, an effect's "Particle light" makes every particle glow (and be drawn at full
+light" travels with its bullets and its "Hit light" flashes where they strike, an effect's "Particle light" makes every particle glow (and be drawn at full
 brightness), and an item's "Light" lights up around it (a Scenery item with a hidden sprite is just a light
 placed in the map). "Glowing wall tile" makes every wall made from that atlas tile light the open cells beside
 it. The first row, "Map ambient light", sets how bright the map is without lights: lower it to make the map
@@ -725,7 +725,9 @@ class Editor:
                 field("damage_mult", "Damage x", "num", step=0.1, low=0.0, high=100.0),
                 field("trail", "Trail effect", "enum", choices=self.effect_choices(), labels=self.effect_labels()),
                 *(self.offset_fields(field, "trail", ("Offset behind", "Offset right", "Offset up")) if a.trail else []),
-                field("light", "Bullet light", "enum", choices=self.light_choices(), labels=self.light_labels())]
+                field("light", "Bullet light", "enum", choices=self.light_choices(), labels=self.light_labels()),
+                field("hit_effect", "Hit effect", "enum", choices=self.effect_choices(), labels=self.effect_labels()),
+                field("hit_light", "Hit light", "enum", choices=self.light_choices(), labels=self.light_labels())]
 
     def details_rows(self):
         rect = self.details_rect()
@@ -1027,6 +1029,8 @@ class Editor:
             for a in self.level.ammo_types:
                 if a.trail == f.name:
                     a.trail = value
+                if a.hit_effect == f.name:
+                    a.hit_effect = value
             for e in self.level.entities + self.level.prefabs:
                 if e.emits == f.name:
                     e.emits = value
@@ -1043,6 +1047,8 @@ class Editor:
         for a in self.level.ammo_types:
             if a.trail == f.name:
                 a.trail = ""
+            if a.hit_effect == f.name:
+                a.hit_effect = ""
         for e in self.level.entities + self.level.prefabs:
             if e.emits == f.name:
                 e.emits = ""
@@ -1120,6 +1126,8 @@ class Editor:
             for a in self.level.ammo_types:
                 if a.light == light.name:
                     a.light = value
+                if a.hit_light == light.name:
+                    a.hit_light = value
             for f in self.level.effects:
                 if f.light == light.name:
                     f.light = value
@@ -1139,6 +1147,8 @@ class Editor:
         for a in self.level.ammo_types:
             if a.light == light.name:
                 a.light = ""
+            if a.hit_light == light.name:
+                a.hit_light = ""
         for f in self.level.effects:
             if f.light == light.name:
                 f.light = ""
@@ -3101,6 +3111,7 @@ class Editor:
         """Short names of what uses an effect: guns (muzzle), ammo types (trail) and how many items emit it."""
         users = [f"{g.name} muzzle" for g in self.level.guns if g.muzzle == effect.name]
         users += [f"{a.name} trail" for a in self.level.ammo_types if a.trail == effect.name]
+        users += [f"{a.name} hit" for a in self.level.ammo_types if a.hit_effect == effect.name]
         emitting = sum(1 for e in self.level.entities if e.emits == effect.name)
         if emitting:
             users.append(f"{emitting} item{'s' if emitting != 1 else ''}")
@@ -3238,6 +3249,7 @@ class Editor:
         """Short names of what carries a light: guns (muzzle), ammo (bullet), effects (particles), items and wall tiles."""
         users = [f"{g.name} muzzle" for g in self.level.guns if g.flash == light.name]
         users += [f"{a.name} bullet" for a in self.level.ammo_types if a.light == light.name]
+        users += [f"{a.name} hit" for a in self.level.ammo_types if a.hit_light == light.name]
         users += [f"{f.name} particles" for f in self.level.effects if f.light == light.name]
         carried = sum(1 for e in self.level.entities if e.light == light.name)
         if carried:
