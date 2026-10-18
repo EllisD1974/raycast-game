@@ -1,6 +1,7 @@
 """Bullets striking players: hurting them, passing through the shooter, stopping at walls, respawning."""
 import os
 import random
+from dataclasses import asdict
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -9,7 +10,7 @@ import pytest
 
 from constants import PLAYER_HEIGHT
 from game import Game
-from mapfile import Gun, Level
+from mapfile import AmmoType, Gun, Level
 from world import World
 
 DT = 1 / 60
@@ -86,3 +87,30 @@ def test_dying_puts_a_player_back_at_the_start_with_full_health_and_their_score(
     assert game.players[1] is state                       # same object: sessions hold on to it
     assert state.stats.health == 100.0 and state.stats.score == 7
     assert (state.body.x, state.body.y) == (game.level.start_x, game.level.start_y)
+
+
+def test_a_hit_plays_the_ammos_effect_and_light_where_the_bullet_struck():
+    game = two_player_game()
+    ammo = AmmoType(speed=30.0, hit_effect="Spark", hit_light="Pop")
+    game.projectiles.fire(game.players[0].body, Gun(damage=1.0), ammo, 0)
+    fly(game)
+    (name, x, y, z, dx, dy, dz), = game.take_fx()
+    assert name == "Spark" and 5.5 < x < 6.0 and y == pytest.approx(6.0)       # in the player's near edge
+    assert dx == pytest.approx(-1.0) and dy == pytest.approx(0.0)              # spraying back at the shooter
+    assert [(f[0], f[1:3]) for f in game.take_flashes()] == [("Pop", pytest.approx((x, y)))]
+
+
+def test_a_bullet_that_hits_a_wall_plays_its_hit_effect_too_and_one_without_plays_nothing():
+    game = two_player_game()
+    game.players[1].body.x = 20.0
+    game.world.point_open = lambda x, y, z: x < 4.5
+    game.projectiles.fire(game.players[0].body, Gun(), AmmoType(hit_effect="Spark"), 0)
+    game.projectiles.fire(game.players[0].body, Gun(), AmmoType(), 0)
+    fly(game)
+    assert [e[0] for e in game.take_fx()] == ["Spark"] and game.take_flashes() == []
+
+
+def test_hit_effect_and_light_are_kept_by_ammo_types_and_bad_values_are_repaired():
+    ammo = AmmoType.from_dict(asdict(AmmoType(hit_effect="Spark", hit_light="Pop")))
+    assert (ammo.hit_effect, ammo.hit_light) == ("Spark", "Pop")
+    assert AmmoType.from_dict({}).hit_effect == "" and AmmoType.from_dict({"hit_light": 5}).hit_light == "5"
