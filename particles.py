@@ -98,6 +98,8 @@ class ParticleSystem:
             del self.attached[key]
 
     def _emit(self, effect, n, x, y, z, direction):
+        (ox, oy, oz), direction = placement(effect, direction)
+        x, y, z = x + ox, y + oy, z + oz
         for _ in range(n):
             if len(self.particles) >= MAX_PARTICLES:
                 return
@@ -172,6 +174,27 @@ class ParticleSystem:
             if strength > 0.0:
                 out.append((p.x, p.y, p.z, e.light, strength))
         return out
+
+
+def placement(effect, direction):
+    """((x, y, z) offset to start the particles at, direction to send them in) for an effect played in the
+    automatic `direction`. The effect's offset and, if it has chosen one, its own direction are along the map's
+    axes, or along the automatic direction's heading when `relative` is set (x forward, y to its right)."""
+    hx, hy = direction[0], direction[1]
+    length = math.hypot(hx, hy)
+    if effect.relative and length > 1e-6:
+        fx, fy = hx / length, hy / length               # forward on the map; the right of that is (-fy, fx)
+
+        def turned(vx, vy, vz):
+            return (fx * vx - fy * vy, fy * vx + fx * vy, vz)
+    else:
+        def turned(vx, vy, vz):
+            return (vx, vy, vz)
+    offset = turned(effect.offset_x, effect.offset_y, effect.offset_z) \
+        if (effect.offset_x or effect.offset_y or effect.offset_z) else (0.0, 0.0, 0.0)
+    if effect.aim == "custom" and (effect.dir_x or effect.dir_y or effect.dir_z):
+        direction = turned(effect.dir_x, effect.dir_y, effect.dir_z)
+    return offset, direction
 
 
 def cone(direction, half_angle, rng):
