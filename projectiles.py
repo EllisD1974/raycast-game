@@ -46,6 +46,7 @@ class Projectile:
     player_lights: tuple = ()
     world_effects: tuple = ()   # ... and where it strikes anything else
     world_lights: tuple = ()
+    blast: AmmoType = None      # the ammo type it explodes as when it strikes something, None if it does not
 
 
 def struck_player(targets, owner, x, y, z):
@@ -70,6 +71,7 @@ class Hit:
     dx: float = 0.0             # the way the bullet was heading (a unit vector)
     dy: float = 0.0
     dz: float = 0.0
+    blast: AmmoType = None      # set when the bullet explodes (see explosions.py)
 
 
 class Projectiles:
@@ -101,7 +103,8 @@ class Projectiles:
             dx * ammo.speed, dy * ammo.speed, dz * ammo.speed,
             ammo.tile, ammo.size, gun.damage * ammo.damage_mult, ammo.range, self.next_ident, ammo.trail, ammo.light,
             (ammo.trail_offset_x, ammo.trail_offset_y, ammo.trail_offset_z) if ammo.trail_override else None, owner,
-            ammo.player_hit_effects, ammo.player_hit_lights, ammo.world_hit_effects, ammo.world_hit_lights))
+            ammo.player_hit_effects, ammo.player_hit_lights, ammo.world_hit_effects, ammo.world_hit_lights,
+            ammo if ammo.explodes else None))
         self.next_ident += 1
 
     def update(self, world, dt, targets=()):
@@ -118,12 +121,12 @@ class Projectiles:
                 move = distance / steps
                 nx, ny, nz = (b.x + b.vx / speed * move, b.y + b.vy / speed * move, b.z + b.vz / speed * move)
                 if not world.point_open(nx, ny, nz):
-                    hits.append(Hit(b.x, b.y, b.z, b.damage, b.owner, None, b.world_effects, b.world_lights, *heading))
+                    hits.append(Hit(b.x, b.y, b.z, b.damage, b.owner, None, b.world_effects, b.world_lights, *heading, b.blast))
                     struck = True
                     break
                 target = struck_player(targets, b.owner, nx, ny, nz)
                 if target is not None:
-                    hits.append(Hit(nx, ny, nz, b.damage, b.owner, target, b.player_effects, b.player_lights, *heading))
+                    hits.append(Hit(nx, ny, nz, b.damage, b.owner, target, b.player_effects, b.player_lights, *heading, b.blast))
                     struck = True
                     break
                 b.x, b.y, b.z = nx, ny, nz

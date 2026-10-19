@@ -258,7 +258,20 @@ class AmmoType:
                  the same where it strikes anything else: a wall, floor, ceiling or glass
     trail_override, trail_offset_x, trail_offset_y, trail_offset_z
                  true: the trail starts at this offset (x along the bullet's heading, y to its right, z up, in
-                 cells) instead of the effect's own start offset"""
+                 cells) instead of the effect's own start offset
+    explodes     true: where the bullet strikes anything (or anyone) it explodes, hurting and throwing every player
+                 in reach, the one who fired it included; walls shield from the blast
+    blast_radius how far the explosion reaches, in cells; damage and knockback fade to nothing at the edge
+    blast_damage damage at the very center of the explosion (a player the bullet hits directly takes this on
+                 top of the bullet's own damage, so a direct hit does the most)
+    knockback    speed in cells per second given to a player at the center of the explosion, along the line from
+                 the blast to them; it fades with distance like the damage (about 5 is a rocket jump)
+    air_knockback_mult
+                 multiplies the knockback of a player who is in the air when it reaches them
+    self_damage_mult, self_knockback_mult
+                 multiply the damage and the knockback the player who fired it takes from its explosion
+    explosion_effects, explosion_lights
+                 names of the Effects played and Lights flashed at the explosion (any number, all at once)"""
     name: str = "Bullet"
     tile: int = 14
     size: float = 0.1
@@ -275,6 +288,15 @@ class AmmoType:
     player_hit_lights: tuple = ()
     world_hit_effects: tuple = ()
     world_hit_lights: tuple = ()
+    explodes: bool = False
+    blast_radius: float = 3.0
+    blast_damage: float = 50.0
+    knockback: float = 5.0
+    air_knockback_mult: float = 1.5
+    self_damage_mult: float = 0.25
+    self_knockback_mult: float = 1.0
+    explosion_effects: tuple = ()
+    explosion_lights: tuple = ()
 
     @classmethod
     def from_dict(cls, data):
@@ -304,7 +326,13 @@ class AmmoType:
                    player_hit_effects=names("player_hit_effects", "hit_effect"),
                    player_hit_lights=names("player_hit_lights", "hit_light"),
                    world_hit_effects=names("world_hit_effects", "hit_effect"),
-                   world_hit_lights=names("world_hit_lights", "hit_light"))
+                   world_hit_lights=names("world_hit_lights", "hit_light"),
+                   explodes=bool(data.get("explodes", False)), blast_radius=number("blast_radius", 0.1, 20.0),
+                   blast_damage=number("blast_damage", 0.0, 1000.0), knockback=number("knockback", 0.0, 50.0),
+                   air_knockback_mult=number("air_knockback_mult", 0.0, 10.0),
+                   self_damage_mult=number("self_damage_mult", 0.0, 10.0),
+                   self_knockback_mult=number("self_knockback_mult", 0.0, 10.0),
+                   explosion_effects=names("explosion_effects", ""), explosion_lights=names("explosion_lights", ""))
 
 
 @dataclass

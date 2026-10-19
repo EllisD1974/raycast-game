@@ -301,7 +301,7 @@ def test_ammo_types_are_added_selected_and_deleted_in_the_guns_section(ed):
     click(ed, rows[0][0].center)
     assert ed.selected_ammo() is first
     assert keys(ed) == ["name", "tile", "size", "speed", "range", "damage_mult", "trail", "light", "player_hit_effects.0", "player_hit_lights.0",
-                      "world_hit_effects.0", "world_hit_lights.0"]
+                      "world_hit_effects.0", "world_hit_lights.0", "explodes"]
     click(ed, details.button_rect(ed.details_rect(), ed.details_rows()).center)
     assert ed.level.ammo_types == [second] and ed.details_rect() is None
     ed.do("undo")
@@ -384,3 +384,14 @@ def test_an_ammo_type_can_play_any_number_of_hit_effects_for_each_kind_of_hit(ed
     assert ammo.player_hit_effects == () and ammo.world_hit_effects == ()
     ed.do("undo")                                                            # undo brings the name back (on a copy)
     assert ed.level.ammo_types[0].player_hit_effects == ("Dirt",)
+
+
+def test_an_ammo_type_that_explodes_shows_its_explosion_rows(ed):
+    ammo = add_ammo(ed)
+    ed.set_ammo("explodes", True)
+    assert keys(ed)[-9:] == ["explodes", "blast_radius", "blast_damage", "knockback", "air_knockback_mult",
+                              "self_damage_mult", "self_knockback_mult", "explosion_effects.0", "explosion_lights.0"]
+    ed.set_ammo("knockback", 8.0)
+    assert ammo.knockback == 8.0
+    ed.set_ammo("explodes", False)
+    assert keys(ed)[-1] == "explodes"

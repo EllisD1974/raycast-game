@@ -89,7 +89,8 @@ To build the same thing on your own machine:
     uv sync --group dev
     uv run pyinstaller raycast-game.spec --noconfirm        # makes dist/RaycastGame/
 
-The first start compiles the renderer (about 20 seconds); it is cached in `%LOCALAPPDATA%aycast-game
+The first start compiles the renderer (about 20 seconds); it is cached in `%LOCALAPPDATA%
+aycast-game
 umba-cache`, so
 later starts take a second or two. Maps are read from and saved to the `maps` folder next to the programs.
 
@@ -165,7 +166,16 @@ the bullet's sprite, size, speed and range and a damage multiplier (an armour-pi
 x2). Give several guns the same ammo type and they draw on one shared pool of spare rounds, so a
 pistol and an SMG can both use 9mm; each gun still has its own magazine. An item with the **Give
 ammo** effect names an ammo type and adds rounds to that pool (even before you own a gun for it).
-A gun with no ammo type fires a plain default bullet. Maps saved before ammo types existed
+A gun with no ammo type fires a plain default bullet.
+
+An ammo type can **explode** (set Explosion to "Explodes"): where it strikes it blows up, hurting and throwing
+every player within the Blast radius, the one who fired it included. Damage and knockback are greatest at the
+center and fade to nothing at the edge; a player the bullet hits directly takes its own damage plus the full
+Blast damage, so a direct hit does the most. Knockback (cells per second, along the line from the blast to the
+player) is multiplied by "Air knockback x" for a player who is in the air. Self damage x and Self knockback x
+scale what the shooter takes from their own blast: a small damage multiplier with full knockback makes the
+ammo rocket-jumpable. Walls, floors and glass shield: the share of a player's body in sight of the blast
+scales both. The Explosion effect and light rows play at the blast, on top of the ordinary hit effects. Maps saved before ammo types existed
 have one made for each gun from its old bullet settings, when they are loaded.
 
 Bullets fly where you look (up and down included) and stop at walls, floors, ceilings and glass.

@@ -741,7 +741,20 @@ class Editor:
                 *self.name_list_fields(a, "player_hit_effects", "Player effect", self.effect_choices(), self.effect_labels()),
                 *self.name_list_fields(a, "player_hit_lights", "Player light", self.light_choices(), self.light_labels()),
                 *self.name_list_fields(a, "world_hit_effects", "World effect", self.effect_choices(), self.effect_labels()),
-                *self.name_list_fields(a, "world_hit_lights", "World light", self.light_choices(), self.light_labels())]
+                *self.name_list_fields(a, "world_hit_lights", "World light", self.light_choices(), self.light_labels()),
+                field("explodes", "Explosion", "enum", choices=(False, True), labels={False: "None", True: "Explodes"}),
+                *(self.explosion_fields(field, a) if a.explodes else [])]
+
+    def explosion_fields(self, field, a):
+        """The rows of an ammo type that explodes: how far, how hard, and how it treats the shooter."""
+        return [field("blast_radius", "Blast radius", "num", step=0.25, low=0.1, high=20.0),
+                field("blast_damage", "Blast damage", "num", step=5.0, low=0.0, high=1000.0),
+                field("knockback", "Knockback", "num", step=0.5, low=0.0, high=50.0, unit="/s"),
+                field("air_knockback_mult", "Air knockback x", "num", step=0.1, low=0.0, high=10.0),
+                field("self_damage_mult", "Self damage x", "num", step=0.05, low=0.0, high=10.0),
+                field("self_knockback_mult", "Self knockback x", "num", step=0.1, low=0.0, high=10.0),
+                *self.name_list_fields(a, "explosion_effects", "Explosion effect", self.effect_choices(), self.effect_labels()),
+                *self.name_list_fields(a, "explosion_lights", "Explosion light", self.light_choices(), self.light_labels())]
 
     def name_list_fields(self, a, key, label, choices, labels):
         """One dropdown for each name in an ammo type's list `key` (hit effects or lights), then one more,
@@ -1077,8 +1090,9 @@ class Editor:
             for a in self.level.ammo_types:
                 if a.trail == f.name:
                     a.trail = value
-                a.player_hit_effects, a.world_hit_effects = (
-                    tuple(value if n == f.name else n for n in names) for names in (a.player_hit_effects, a.world_hit_effects))
+                a.player_hit_effects, a.world_hit_effects, a.explosion_effects = (
+                    tuple(value if n == f.name else n for n in names)
+                    for names in (a.player_hit_effects, a.world_hit_effects, a.explosion_effects))
             for e in self.level.entities + self.level.prefabs:
                 if e.emits == f.name:
                     e.emits = value
@@ -1095,8 +1109,9 @@ class Editor:
         for a in self.level.ammo_types:
             if a.trail == f.name:
                 a.trail = ""
-            a.player_hit_effects, a.world_hit_effects = (
-                tuple(n for n in names if n != f.name) for names in (a.player_hit_effects, a.world_hit_effects))
+            a.player_hit_effects, a.world_hit_effects, a.explosion_effects = (
+                tuple(n for n in names if n != f.name)
+                for names in (a.player_hit_effects, a.world_hit_effects, a.explosion_effects))
         for e in self.level.entities + self.level.prefabs:
             if e.emits == f.name:
                 e.emits = ""
@@ -1174,8 +1189,9 @@ class Editor:
             for a in self.level.ammo_types:
                 if a.light == light.name:
                     a.light = value
-                a.player_hit_lights, a.world_hit_lights = (
-                    tuple(value if n == light.name else n for n in names) for names in (a.player_hit_lights, a.world_hit_lights))
+                a.player_hit_lights, a.world_hit_lights, a.explosion_lights = (
+                    tuple(value if n == light.name else n for n in names)
+                    for names in (a.player_hit_lights, a.world_hit_lights, a.explosion_lights))
             for f in self.level.effects:
                 if f.light == light.name:
                     f.light = value
@@ -1195,8 +1211,9 @@ class Editor:
         for a in self.level.ammo_types:
             if a.light == light.name:
                 a.light = ""
-            a.player_hit_lights, a.world_hit_lights = (
-                tuple(n for n in names if n != light.name) for names in (a.player_hit_lights, a.world_hit_lights))
+            a.player_hit_lights, a.world_hit_lights, a.explosion_lights = (
+                tuple(n for n in names if n != light.name)
+                for names in (a.player_hit_lights, a.world_hit_lights, a.explosion_lights))
         for f in self.level.effects:
             if f.light == light.name:
                 f.light = ""
@@ -3301,7 +3318,7 @@ class Editor:
         users = [f"{g.name} muzzle" for g in self.level.guns if g.flash == light.name]
         users += [f"{a.name} bullet" for a in self.level.ammo_types if a.light == light.name]
         users += [f"{a.name} hit" for a in self.level.ammo_types
-                  if light.name in a.player_hit_lights + a.world_hit_lights]
+                  if light.name in a.player_hit_lights + a.world_hit_lights + a.explosion_lights]
         users += [f"{f.name} particles" for f in self.level.effects if f.light == light.name]
         carried = sum(1 for e in self.level.entities if e.light == light.name)
         if carried:

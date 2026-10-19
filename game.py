@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from character import SHIRTS, VIEWS, character_view
 from constants import PLAYER_HEIGHT
 from entities import Entities, PlayerStats
+from explosions import blast_results
 from inventory import Inventory
 from physics import look, spawn, step
 from projectiles import MUZZLE, Projectiles, muzzle_shift
@@ -167,6 +168,24 @@ class Game:
             state.stats = PlayerStats(score=state.stats.score)
             state.inventory = Inventory()
 
+    def explode(self, hit):
+        """A bullet that explodes struck at `hit`: play its explosion, then hurt and throw every player it reaches.
+        A player thrown into the air loses the ground under them, so their own momentum takes over."""
+        for effect in hit.blast.explosion_effects:
+            self.fx.append((effect, hit.x, hit.y, hit.z, -hit.dx, -hit.dy, -hit.dz))
+        for light in hit.blast.explosion_lights:
+            self.flashes.append((light, hit.x, hit.y, hit.z))
+        bodies = [(pid, state.body) for pid, state in self.players.items()]
+        for pid, damage, (vx, vy, vz) in blast_results(self.world, hit.blast, hit.x, hit.y, hit.z, hit.owner, bodies):
+            state = self.players[pid]
+            body = state.body
+            self.hurt(pid, damage)
+            if state.body is body:                      # (not sent back to the start by it)
+                body.vx += vx
+                body.vy += vy
+                body.vz += vz
+                body.on_ground = False
+
     def take_fx(self):
         """The particle effects to play since the last call (a muzzle flash for each shot fired)."""
         out, self.fx = self.fx, []
@@ -188,6 +207,8 @@ class Game:
                 self.flashes.append((light, hit.x, hit.y, hit.z))
             if hit.target in self.players:
                 self.hurt(hit.target, hit.damage)
+            if hit.blast is not None:
+                self.explode(hit)
         self.items.advance(dt)
         return {pid: self.items.touch(state.body, state.stats, state.inventory, who=pid)
                 for pid, state in self.players.items()}
