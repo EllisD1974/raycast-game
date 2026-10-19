@@ -127,9 +127,40 @@ def arg_values(flag, count):
     return sys.argv[i + 1:i + 1 + count]
 
 
-def join(address, password, port, make_world, character_tile):
-    """Connect to a host and wait for its map and first snapshot; exits with a message if that fails."""
-    session = ClientSession(net.Client(address, port, password), make_world, character_tile)
+class Graphics:
+    """What the picture is drawn from: the atlas's tiles, the character pictures after them, and the renderer
+    built on all of those. It is empty until load() is given an atlas (a path or PNG bytes)."""
+
+    def __init__(self):
+        self.tiles = []
+        self.character_tile = 0
+        self.see_through = None
+        self.renderer = None
+
+    def load(self, atlas):
+        tiles = unpack_atlas(atlas)
+        textures = atlas_array(tiles + character_tiles())       # the character pictures follow the atlas's tiles
+        self.tiles, self.character_tile = tiles, len(tiles)
+        self.see_through = transparent_tiles(textures)[:len(tiles)]   # tiles with alpha make see-through walls
+        self.renderer = Renderer(textures)
+
+    def make_world(self, level):
+        if self.renderer is None:
+            raise ValueError("no textures: the host sent none and textures.png is missing here")
+        return World(level, len(self.tiles), self.see_through)
+
+
+def join(address, password, port, graphics):
+    """Connect to a host and wait for its map, textures and first snapshot; exits with a message if that fails.
+    The host's textures replace whatever `graphics` had loaded, so the joiner needs no map or textures of its own."""
+    def use_atlas(png):
+        try:
+            graphics.load(png)
+        except pygame.error as e:
+            raise ValueError(f"textures: {e}")
+        return graphics.character_tile
+
+    session = ClientSession(net.Client(address, port, password), graphics.make_world, graphics.character_tile, use_atlas)
     print(f"Joining {address}:{port}...")
     give_up = time.monotonic() + JOIN_TIMEOUT
     while not session.ready and not session.ended:
@@ -151,35 +182,30 @@ def main():
     screen = pygame.display.set_mode((WIDTH * 2, HEIGHT * 2), pygame.RESIZABLE)
     pygame.display.set_caption("simple raycaster")
     clock = pygame.time.Clock()
-    if not os.path.exists(ATLAS_PATH):
+    graphics = Graphics()
+    joining = bool(arg_values("--join", 2))
+    if os.path.exists(ATLAS_PATH):
+        graphics.load(ATLAS_PATH)
+    elif not joining:                                       # a joiner is sent the host's textures
         sys.exit("textures.png not found - run `python make_atlas.py` first")
-    tiles = unpack_atlas(ATLAS_PATH)
-
-    textures = atlas_array(tiles + character_tiles())       # the character pictures follow the atlas's tiles
-    character_tile = len(tiles)
-    see_through = transparent_tiles(textures)[:len(tiles)]   # tiles with alpha make see-through walls
-
-    def make_world(level):
-        return World(level, len(tiles), see_through)
-
-    renderer = Renderer(textures)
     port = int((arg_values("--port", 1) or [net.DEFAULT_PORT])[0])
-    if arg_values("--join", 2):
+    if joining:
         address, password = arg_values("--join", 2)
-        session = join(address, password, port, make_world, character_tile)
+        session = join(address, password, port, graphics)
     else:
         map_path = (arg_values("--map", 1) or [MAP_PATH])[0]
         if "--map" in sys.argv and not os.path.exists(map_path):
             sys.exit(f"map file not found: {map_path}")      # don't silently play another map
         level = load_or_default(map_path)
-        game = Game(level, make_world(level), character_tile=character_tile)
+        game = Game(level, graphics.make_world(level), character_tile=graphics.character_tile)
         if arg_values("--host", 1):
             bind = (arg_values("--bind", 1) or ["0.0.0.0"])[0]
             try:
                 host = net.Host(arg_values("--host", 1)[0], port, bind)
             except OSError as e:
                 sys.exit(f"cannot host on {bind}:{port}: {e}")
-            session = HostSession(game, host)
+            with open(ATLAS_PATH, "rb") as f:               # joiners draw with the host's textures
+                session = HostSession(game, host, f.read())
             print(f"Hosting on {bind}:{host.port}; others join with --join <your address> <password>")
         else:
             session = LocalSession(game)
@@ -199,7 +225,7 @@ def main():
         pitch = arg_values("--pitch", 1)
         if pitch:
             look(player, math.radians(float(pitch[0])))
-        pygame.image.save(renderer.draw(world, player, session.game.items.sprites(), session.lighting()), arg_values("--snapshot", 1)[0])
+        pygame.image.save(graphics.renderer.draw(world, player, session.game.items.sprites(), session.lighting()), arg_values("--snapshot", 1)[0])
         return
 
     maximize()                       # the game opens maximized; the picture scales to fit
@@ -248,8 +274,8 @@ def main():
         message_left = max(0.0, message_left - dt)
 
         me = session.me
-        picture = renderer.draw(session.world, me.body, session.sprites(), session.lighting())
-        draw_hud(picture, font, me.stats, message if message_left > 0 else "", me.inventory, tiles, kick)
+        picture = graphics.renderer.draw(session.world, me.body, session.sprites(), session.lighting())
+        draw_hud(picture, font, me.stats, message if message_left > 0 else "", me.inventory, graphics.tiles, kick)
         present(pygame.display.get_surface(), picture)
         pygame.display.set_caption(f"simple raycaster - {clock.get_fps():.0f} fps{session.status()}")
         pygame.display.flip()

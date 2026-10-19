@@ -61,8 +61,10 @@ milliseconds to a frame. Like particles, lights are only for looks and are worke
 
 ## Multiplayer
 
-One player hosts with a password and the others join with it. The host runs the game and sends the map
-to joiners; everyone needs the same code and textures.
+One player hosts with a password and the others join with it. The host runs the game and sends its map
+(guns, items, effects, lights and all) and its `textures.png` to every joiner as they join, so joiners need
+no map or textures of their own, only the same code. To publish an update, change the map or textures on
+the host and restart the host; joiners get the new version when they join again.
 
     uv run python main.py --host SECRET                      # host (listens on 0.0.0.0:7777)
     uv run python main.py --join 127.0.0.1 SECRET            # join (use the host's address)

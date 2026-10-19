@@ -10,6 +10,7 @@ No pygame. The three sessions look the same to main.py:
 The host runs the real Game. Joiners send their steps and get back snapshots of it, which they draw;
 a joiner predicts its own movement and smooths everyone else's (see ClientSession).
 """
+import base64
 import json
 import math
 import time
@@ -96,10 +97,11 @@ class HostSession(LocalSession):
     numbers the joiner predicted it with, so the two agree. The host only lets a joiner use as much
     time as has really passed, so sending extra or long steps does not make them faster."""
 
-    def __init__(self, game, host):
+    def __init__(self, game, host, atlas_png=None):
         super().__init__(game)
         self.host = host
         self.level_text = level_text(game.level)
+        self.atlas = base64.b64encode(atlas_png).decode() if atlas_png else None    # the textures joiners draw with
         self.queue = {}                         # joiner -> deque of (seq, Inputs, dt) not yet carried out
         self.credit = {}                        # joiner -> seconds of steps they may still use
         self.acked = {}                         # joiner -> seq of the last step carried out
@@ -116,7 +118,7 @@ class HostSession(LocalSession):
                 self.game.add_player(peer)
                 self.queue[peer], self.credit[peer] = deque(maxlen=MAX_QUEUE), MAX_STEP_DT
                 self.acked[peer], self.owed[peer] = 0, Events()
-                self.host.send(peer, {"type": "welcome", "id": peer, "level": self.level_text})
+                self.host.send(peer, {"type": "welcome", "id": peer, "level": self.level_text, "atlas": self.atlas})
             elif kind == "disconnect":
                 self.game.remove_player(peer)
                 for table in (self.queue, self.credit, self.acked, self.owed):
@@ -196,11 +198,15 @@ class ClientSession:
     of that moment, so their movement is smooth although it only arrives 30 times a second. Bullets
     come with their velocity and are carried on from the last snapshot.
 
-    `make_world(level)` builds the World to draw (it needs the textures, which only main.py has)."""
+    `make_world(level)` builds the World to draw (it needs the textures, which only main.py has).
+    The host sends its textures with the map: `use_atlas(png_bytes)` is called with them before the world is
+    built, and returns the tile where the character pictures start (it must raise ValueError for a picture
+    it cannot use). Without it, or with a host that sent none, we draw with the textures we already have."""
 
-    def __init__(self, client, make_world, character_tile=None):
+    def __init__(self, client, make_world, character_tile=None, use_atlas=None):
         self.client = client
         self.make_world = make_world
+        self.use_atlas = use_atlas
         self.character_tile = character_tile
         self.id = None
         self.level = self.world = self.items = None
@@ -269,8 +275,15 @@ class ClientSession:
         kind = message.get("type")
         if kind == "welcome":
             self.id = message.get("id")
-            self.level = parse_level(json.loads(message["level"]), "the host's map")
-            self.world = self.make_world(self.level)
+            try:
+                self.level = parse_level(json.loads(message["level"]), "the host's map")
+                if self.use_atlas and message.get("atlas"):
+                    self.character_tile = self.use_atlas(base64.b64decode(message["atlas"]))
+                self.world = self.make_world(self.level)
+            except (ValueError, KeyError, TypeError) as e:      # a broken map or picture from the host
+                self.ended = f"the host sent a game that cannot be loaded ({e})"
+                self.level = None
+                return
             self.items = Entities(self.level, self.world)
             self.particles = ParticleSystem(self.level.effects, self.world)
             self.lights = LightSystem(self.level, self.world)

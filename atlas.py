@@ -4,6 +4,7 @@ The atlas may have an alpha channel (paint it with transparent pixels in any ima
 with any transparent or semi-transparent pixel are see-through when used as walls: fully transparent
 pixels show what is behind, partly transparent ones blend (glass).
 """
+import io
 import os
 
 import numpy as np
@@ -14,12 +15,15 @@ from constants import TILE
 ATLAS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "textures.png")
 
 
-def unpack_atlas(path=ATLAS_PATH, tile=TILE):
+def unpack_atlas(source=ATLAS_PATH, tile=TILE):
     """Slice the texture map into individual tile x tile surfaces, row by row, keeping alpha.
 
+    `source` is the file's path, or the bytes of the PNG (what a host sends to its joiners).
     Map id N uses tiles[N - 1]. Needs a display (pygame.display.set_mode) for convert_alpha().
     """
-    atlas = pygame.image.load(path).convert_alpha()
+    if isinstance(source, (bytes, bytearray)):
+        source = io.BytesIO(source)
+    atlas = pygame.image.load(source, "textures.png").convert_alpha()
     return [
         atlas.subsurface((x, y, tile, tile)).copy()
         for y in range(0, atlas.get_height(), tile)

@@ -14,6 +14,7 @@ import pytest
 import net
 import physics
 import session
+from atlas import unpack_atlas
 from character import SHIRTS, VIEWS, character_tiles, character_view
 from game import Game, Inputs
 from mapfile import Entity, Gun, Level
@@ -66,6 +67,41 @@ def test_a_joiner_gets_the_map_a_player_and_snapshots(host_session):
     assert set(host_session.game.players) == {0, 1}
     assert (client.level.width, client.level.height) == (12, 12)
     assert client.me.body.x == pytest.approx(host_session.game.players[1].body.x)
+
+
+def test_a_joiner_is_given_the_hosts_textures(tmp_path):
+    pygame.display.set_mode((1, 1))
+    atlas = pygame.Surface((64, 32), pygame.SRCALPHA)
+    atlas.fill((10, 20, 30, 255))
+    path = tmp_path / "textures.png"
+    pygame.image.save(atlas, str(path))
+    host = HostSession(new_game(), net.Host("pw", port=0), path.read_bytes())
+    received = []
+
+    def use_atlas(png):
+        received.append(len(unpack_atlas(png)))
+        return 99
+
+    try:
+        client = ClientSession(net.Client("127.0.0.1", host.host.port, "pw"), make_world, FIRST_CHARACTER, use_atlas)
+        run([host, client], until=lambda: client.ready or client.ended)
+    finally:
+        host.close()
+    assert received == [2] and client.character_tile == 99 and client.ready
+
+
+def test_a_joiner_that_cannot_use_the_hosts_textures_gives_up(tmp_path):
+    host = HostSession(new_game(), net.Host("pw", port=0), b"not a picture")
+
+    def use_atlas(png):
+        raise ValueError("textures: bad")
+
+    try:
+        client = ClientSession(net.Client("127.0.0.1", host.host.port, "pw"), make_world, FIRST_CHARACTER, use_atlas)
+        run([host, client], until=lambda: client.ready or client.ended)
+    finally:
+        host.close()
+    assert "cannot be loaded" in client.ended and not client.ready
 
 
 def test_a_wrong_password_never_joins(host_session):
