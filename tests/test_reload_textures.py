@@ -36,10 +36,10 @@ def ed(tmp_path, monkeypatch):
     pygame.quit()
 
 
-def repaint(path, colour, tile=0):
-    """Fill one tile of the atlas file with a colour."""
+def repaint(path, color, tile=0):
+    """Fill one tile of the atlas file with a color."""
     image = pygame.image.load(str(path)).convert_alpha()      # the atlas file may be palettised
-    image.fill(colour, (tile % 16 * 32, tile // 16 * 32, 32, 32))
+    image.fill(color, (tile % 16 * 32, tile // 16 * 32, 32, 32))
     pygame.image.save(image, str(path))
 
 

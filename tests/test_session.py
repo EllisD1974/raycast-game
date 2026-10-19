@@ -1,4 +1,5 @@
 """A host and joiners playing one game over real sockets on this machine, without a window."""
+import math
 import os
 import random
 import sys
@@ -13,7 +14,8 @@ import pytest
 import net
 import physics
 import session
-from character import SHIRTS, character_tiles
+from atlas import unpack_atlas
+from character import SHIRTS, VIEWS, character_tiles, character_view
 from game import Game, Inputs
 from mapfile import Entity, Gun, Level
 from session import ClientSession, HostSession, LocalSession
@@ -67,6 +69,103 @@ def test_a_joiner_gets_the_map_a_player_and_snapshots(host_session):
     assert client.me.body.x == pytest.approx(host_session.game.players[1].body.x)
 
 
+def test_a_joiner_is_given_the_hosts_textures(tmp_path):
+    pygame.display.set_mode((1, 1))
+    atlas = pygame.Surface((64, 32), pygame.SRCALPHA)
+    atlas.fill((10, 20, 30, 255))
+    path = tmp_path / "textures.png"
+    pygame.image.save(atlas, str(path))
+    host = HostSession(new_game(), net.Host("pw", port=0), path.read_bytes())
+    received = []
+
+    def use_atlas(png):
+        received.append(len(unpack_atlas(png)))
+        return 99
+
+    try:
+        client = ClientSession(net.Client("127.0.0.1", host.host.port, "pw"), make_world, FIRST_CHARACTER, use_atlas)
+        run([host, client], until=lambda: client.ready or client.ended)
+    finally:
+        host.close()
+    assert received == [2] and client.character_tile == 99 and client.ready
+
+
+def test_a_joiner_that_cannot_use_the_hosts_textures_gives_up(tmp_path):
+    host = HostSession(new_game(), net.Host("pw", port=0), b"not a picture")
+
+    def use_atlas(png):
+        raise ValueError("textures: bad")
+
+    try:
+        client = ClientSession(net.Client("127.0.0.1", host.host.port, "pw"), make_world, FIRST_CHARACTER, use_atlas)
+        run([host, client], until=lambda: client.ready or client.ended)
+    finally:
+        host.close()
+    assert "cannot be loaded" in client.ended and not client.ready
+
+
+def new_level(width, height, *entities):
+    level = Level.blank(width, height)
+    level.entities = list(entities)
+    return level
+
+
+def test_a_reload_puts_the_host_and_every_joiner_in_the_new_map(host_session):
+    client = join(host_session)
+    host_session.me.stats.score = 7
+    level = new_level(20, 9, Entity(5.5, 5.5))
+    host_session.reload(level, make_world(level))
+    run([host_session, client], until=lambda: client.level.width == 20 and client.ready)
+    assert (host_session.game.level.width, host_session.world.width) == (20, 20)
+    assert client.loads == 2 and len(client.items.items) == 1
+    assert client.world.width == 20
+    assert host_session.me.stats.score == 7                 # the score stays
+    assert client.me.body.x == pytest.approx(host_session.game.players[1].body.x)
+    run([host_session, client], until=lambda: host_session.game.players[1].body.x > 3.0,
+        inputs={client: Inputs(forward=1)})                # still playing together afterwards
+
+
+def test_a_joiner_waits_for_a_snapshot_of_the_new_map(host_session):
+    client = join(host_session)
+    level = new_level(20, 9)
+    host_session.reload(level, make_world(level))
+    run([client], until=lambda: client.loads == 2)          # (the host is not stepped: no snapshot yet)
+    assert not client.ready
+    run([host_session, client], until=lambda: client.ready)
+
+
+def test_a_reload_sends_new_textures_to_joiners(tmp_path):
+    pygame.display.set_mode((1, 1))
+    atlas = pygame.Surface((96, 32), pygame.SRCALPHA)
+    path = tmp_path / "textures.png"
+    pygame.image.save(atlas, str(path))
+    host = HostSession(new_game(), net.Host("pw", port=0), b"first")
+    received = []
+    client = ClientSession(net.Client("127.0.0.1", host.host.port, "pw"), make_world, FIRST_CHARACTER,
+                           lambda png: received.append(png) or 5)
+    try:
+        run([host, client], until=lambda: client.ready or client.ended)
+        level = new_level(12, 12)
+        host.reload(level, make_world(level), 7, path.read_bytes())
+        run([host, client], until=lambda: client.loads == 2)
+    finally:
+        host.close()
+    assert received == [b"first", path.read_bytes()] and client.character_tile == 5
+
+
+def test_a_game_reloaded_starts_everyone_over_at_the_new_start():
+    game = new_game(Entity(2.5, 2.5, effect="score", amount=5, mode="once"))
+    state = game.add_player(3)
+    state.stats.score = 9
+    state.stats.health = 10
+    level = new_level(8, 8)
+    level.start_x, level.start_y = 6.5, 6.5
+    game.load_level(level, make_world(level), 20)
+    assert (state.body.x, state.body.y) == (6.5, 6.5)
+    assert (state.stats.score, state.stats.health) == (9, state.stats.max_health)
+    assert game.items.items == [] and game.character_tile == 20 and game.world.width == 8
+
+
 def test_a_wrong_password_never_joins(host_session):
     client = join(host_session, "wrong")
     assert client.ended == "wrong password" and not client.ready
@@ -84,10 +183,10 @@ def test_the_joiners_keys_move_them_on_the_host(host_session):
 def test_each_sees_the_other_as_a_character(host_session):
     client = join(host_session)
     run([host_session, client], until=lambda: client.history)
-    assert [s[4] for s in client.sprites() if s[4] >= FIRST_CHARACTER] == [FIRST_CHARACTER]    # the host: id 0
+    assert [(s[4] - FIRST_CHARACTER) // VIEWS for s in client.sprites() if s[4] >= FIRST_CHARACTER] == [0]    # the host: id 0
     assert all(s[3] == pytest.approx(0.8) for s in client.sprites() if s[4] >= FIRST_CHARACTER)
     seen_by_host = [s for s in host_session.sprites() if s[4] >= FIRST_CHARACTER]
-    assert [s[4] for s in seen_by_host] == [FIRST_CHARACTER + 1]
+    assert [(s[4] - FIRST_CHARACTER) // VIEWS for s in seen_by_host] == [1]
     assert seen_by_host[0][:2] == (host_session.game.players[1].body.x, host_session.game.players[1].body.y)
 
 
@@ -198,7 +297,7 @@ def test_other_players_are_drawn_a_little_in_the_past(host_session):
     client = join(host_session)
     client.history = {5: [(1.0, 0.0, 2.0, 0.0), (2.0, 10.0, 2.0, 0.0)]}
     client.game_time = 1.5 + session.INTERP_DELAY
-    drawn = [s for s in client.sprites() if s[4] == FIRST_CHARACTER + 5]
+    drawn = [s for s in client.sprites() if (s[4] - FIRST_CHARACTER) // VIEWS == 5 and s[4] >= FIRST_CHARACTER]
     assert len(drawn) == 1 and drawn[0][:3] == pytest.approx((5.0, 2.0, 0.0))
 
 
@@ -264,9 +363,42 @@ def test_junk_from_a_joiner_does_not_hurt_the_host(host_session):
 
 def test_character_pictures_are_see_through_around_the_figure():
     tiles = character_tiles()
-    assert len(tiles) == len(SHIRTS)
+    assert len(tiles) == len(SHIRTS) * VIEWS
     for tile in tiles:
         assert tile.get_at((0, 0)).a == 0 and tile.get_at((16, 8)).a == 255      # corner empty, head solid
+
+
+def test_each_shirt_color_replaces_the_sheets_marker():
+    tiles = character_tiles()
+    for shirt, first in zip(SHIRTS, range(0, len(tiles), VIEWS)):
+        pixels = {tuple(tiles[first].get_at((x, y)))[:3] for x in range(32) for y in range(32)}
+        assert shirt in pixels and (255, 0, 255) not in pixels
+
+
+def test_the_side_shown_follows_which_way_they_face():
+    assert character_view(0.0, math.pi) == 0                            # facing the viewer: the front
+    assert character_view(0.0, 0.0) == 4                                # facing away: the back
+    assert character_view(0.0, math.pi + math.pi / 2) == 2              # the two profiles are opposite
+    assert character_view(0.0, math.pi / 2) == 6
+    assert character_view(10.0, 10.0 + math.pi) == 0                    # only the difference matters
+    assert character_view(0.0, math.pi + 0.1) == 0                      # and nearby angles share a picture
+
+
+def test_the_picture_drawn_turns_with_the_other_player(host_session):
+    client = join(host_session)
+    client.history = {1: [(1.0, 0.0, 2.0, 0.0, 0.0), (2.0, 0.0, 2.0, 0.0, 0.0)]}
+    client.game_time = 1.5 + session.INTERP_DELAY
+    client.me.body.angle = 0.0
+    drawn = lambda: [s[4] for s in client.sprites() if s[4] >= FIRST_CHARACTER][0] - FIRST_CHARACTER - VIEWS
+    assert drawn() == 4                                                 # they face the way we look: their back
+    client.me.body.angle = math.pi
+    assert drawn() == 0
+
+
+def test_interpolated_angles_take_the_short_way_round():
+    samples = [(0.0, 0.0, 0.0, 0.0, math.tau - 0.1), (1.0, 0.0, 0.0, 0.0, 0.1)]
+    assert session.interpolate(samples, 0.5)[3] % math.tau == pytest.approx(0.0, abs=1e-9) or \
+        session.interpolate(samples, 0.5)[3] % math.tau == pytest.approx(math.tau, abs=1e-9)
 
 
 def test_a_local_session_is_just_the_game():

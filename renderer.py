@@ -7,6 +7,7 @@ import pygame
 from atlas import ensure_rgba
 from constants import FOG_DIST, FOV_DEG, HEIGHT, MAX_DEPTH, WIDTH
 from raykernel import draw_sprites, render_scene_depth
+from particles import IDENTITY
 from raylight import apply_lights, sprite_light
 from raypitch import render_scene_pitch
 
@@ -30,7 +31,7 @@ class Renderer:
 
     def draw(self, world, player, sprites=(), lighting=None):
         """Render the view from `player` and return the WIDTH x HEIGHT picture. `sprites` are
-        (x, y, z, size, tile[, spin[, alpha[, glow]]]) items drawn as flat pictures that face the player.
+        (x, y, z, size, tile[, spin[, alpha[, glow[, color]]]]) items drawn as flat pictures that face the player.
         `lighting` (lighting.Lighting, or None for a map with no lights and full ambient) lights the picture.
 
         A level view is drawn a column at a time (fast). A tilted view is drawn with one real 3D ray
@@ -54,7 +55,8 @@ class Renderer:
                          self.focal, lighting.lights, lighting.vis, lighting.occluder, ambient, FOG_DIST)
         if sprites:
             far_first = sorted(sprites, key=lambda s: -((s[0] - player.x) ** 2 + (s[1] - player.y) ** 2))
-            cols = np.array([tuple(s) + (0.0, 1.0, 0.0)[len(s) - 5:] for s in far_first], np.float64).reshape(-1, 8)
+            cols = np.array([tuple(s[:8]) + (0.0, 1.0, 0.0)[len(s) - 5:] for s in far_first], np.float64).reshape(-1, 8)
+            colors = np.array([s[8] if len(s) > 8 else IDENTITY for s in far_first], np.float64).reshape(-1, 3, 3)
             xs, ys, zs, sizes = (np.ascontiguousarray(cols[:, i]) for i in range(4))
             lit = np.zeros((len(cols), 3), np.float64)
             if lighting is not None:
@@ -63,13 +65,13 @@ class Renderer:
                          player.pitch, self.focal, xs, ys, zs, sizes,
                          np.clip(cols[:, 4], 0, len(self.textures) - 1).astype(np.int64),
                          np.ascontiguousarray(cols[:, 5]), np.ascontiguousarray(cols[:, 6]), lit,
-                         np.ascontiguousarray(cols[:, 7]), ambient, self.textures, MAX_DEPTH, FOG_DIST)
+                         np.ascontiguousarray(cols[:, 7]), colors, ambient, self.textures, MAX_DEPTH, FOG_DIST)
         pygame.surfarray.blit_array(self.surface, self.framebuffer)
         return self.surface
 
 
 def fit_rect(window_size, logical=(WIDTH, HEIGHT)):
-    """The largest rectangle with the picture's aspect ratio that fits the window, centred in it."""
+    """The largest rectangle with the picture's aspect ratio that fits the window, centerd in it."""
     window_w, window_h = window_size
     scale = min(window_w / logical[0], window_h / logical[1])
     w = max(1, min(window_w, round(logical[0] * scale)))        # round, not truncate: 16:9 in a 1009-high

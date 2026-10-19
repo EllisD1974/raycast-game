@@ -359,7 +359,7 @@ def test_the_camera_marker_is_drawn_on_the_map(ed):
     p = ed.preview.player
     origin = ed.cell_rect(0, 0)
     spot = (int(origin.x + p.x * ed.zoom), int(origin.y + p.y * ed.zoom))
-    assert tuple(screen.get_at(spot))[:3] == (255, 255, 255)   # the camera's centre dot
+    assert tuple(screen.get_at(spot))[:3] == (255, 255, 255)   # the camera's center dot
     ed.do("preview")
     ed.draw(screen)
     assert tuple(screen.get_at(spot))[:3] != (255, 255, 255)

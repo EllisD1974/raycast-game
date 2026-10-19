@@ -10,9 +10,9 @@ DIM = (170, 170, 180)
 UNIT = HEIGHT / 8                      # a gun's size of 1.0 draws its 32 pixel tile this many pixels tall
 
 
-def shadowed(picture, font, text, pos, colour=TEXT, centre=False):
-    label, shade = font.render(text, True, colour), font.render(text, True, SHADOW)
-    if centre:
+def shadowed(picture, font, text, pos, color=TEXT, center=False):
+    label, shade = font.render(text, True, color), font.render(text, True, SHADOW)
+    if center:
         pos = (pos[0] - label.get_width() // 2, pos[1])
     picture.blit(shade, (pos[0] + 1, pos[1] + 1))
     picture.blit(label, pos)
@@ -48,7 +48,7 @@ def draw_hud(picture, font, stats, message, inventory=None, tiles=None, kick=0.0
     shadowed(picture, font, f"Score {stats.score:g}", (8, 26))
     if message:
         shadowed(picture, font, message, (picture.get_width() // 2, picture.get_height() // 2 + 40),
-                 HIGHLIGHT, centre=True)
+                 HIGHLIGHT, center=True)
     if inventory is None:
         return
     y = picture.get_height() - 8

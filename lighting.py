@@ -98,7 +98,7 @@ class LightSystem:
 
     def flicker(self, light, x, y):
         """Brightness multiplier between 1 - light.flicker and 1, wobbling at the light's speed. The place gives
-        each light its own phase so neighbours do not flicker in step."""
+        each light its own phase so neighbors do not flicker in step."""
         if light.flicker <= 0.0:
             return 1.0
         phase = (x * 12.9898 + y * 78.233) % math.tau

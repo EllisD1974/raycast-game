@@ -1,4 +1,4 @@
-"""The centre crosshair, and looking around with the mouse (including up and down)."""
+"""The center crosshair, and looking around with the mouse (including up and down)."""
 import math
 import os
 import sys
@@ -41,7 +41,7 @@ def motion(dx, dy):
 
 @pytest.mark.parametrize("size", [(1920, 1009), (1280, 800), (640, 400), (1000, 1000), (3000, 500),
                                   (500, 3000), (1, 1), (7, 5)])
-def test_the_picture_keeps_its_aspect_ratio_and_is_centred(size):
+def test_the_picture_keeps_its_aspect_ratio_and_is_centerd(size):
     rect = main.fit_rect(size)
     window = pygame.Rect(0, 0, *size)
     assert window.contains(rect)
@@ -64,7 +64,7 @@ def crosshair_surface(arm, thickness, size=(101, 101)):
     return surface
 
 
-def test_the_crosshair_is_a_plus_centred_on_the_given_point():
+def test_the_crosshair_is_a_plus_centerd_on_the_given_point():
     surface = crosshair_surface(arm=8, thickness=1)
     cx, cy = 50, 50
     white = main.CROSSHAIR

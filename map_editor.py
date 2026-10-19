@@ -98,7 +98,8 @@ named thing in the player's inventory instead. Choosing a map tool goes back to 
 
 The Effects section (X or the Effects button) is where you design particle effects: "+ Add effect", then
 shape it in the Details pane (the particle picture from the atlas, a burst or a stream, how many, how long
-they live, speed, spread, gravity, drag, size and fade) while a live side view plays it. Effects are
+they live, speed, spread, gravity, drag, size and fade, and Color: a hue shift or an RGB tint of the particle
+picture) while a live side view plays it. Effects are
 saved in the map and reused by name (Start offset X / Y / height move where the particles start, and Direction
 "Custom" sends them in a direction of your own instead of the automatic one; Offset / dir. axes chooses map
 axes or the heading's): a gun's "Muzzle effect" plays where it fires, an ammo type's "Trail
@@ -106,10 +107,10 @@ effect" follows its bullets, and an item's "Emits" sends the effect up from the 
 Scenery so it cannot be picked up, and Sprite to Hidden to see only the particles). They are only for looks
 and are worked out on each player's own machine.
 
-The Lights section (L or the Lights button) is where you design lights: "+ Add light", then set its colour,
+The Lights section (L or the Lights button) is where you design lights: "+ Add light", then set its color,
 brightness, reach, flicker and flash length in the Details pane while a preview shows it from above. Lights
 are saved in the map and used by name: a gun's "Muzzle light" flashes where it fires, an ammo type's "Bullet
-light" travels with its bullets, an effect's "Particle light" makes every particle glow (and be drawn at full
+light" travels with its bullets and its Player and World hit lights flash where they strike a player or anything else (add as many as you like: each filled row gets an empty one below it; pick (none) to remove one), an effect's "Particle light" makes every particle glow (and be drawn at full
 brightness), and an item's "Light" lights up around it (a Scenery item with a hidden sprite is just a light
 placed in the map). "Glowing wall tile" makes every wall made from that atlas tile light the open cells beside
 it. The first row, "Map ambient light", sets how bright the map is without lights: lower it to make the map
@@ -127,7 +128,7 @@ The Key panel (K or the Key button shows and hides it) sits in the left panel un
 preview, or floats over the map's bottom-right corner in a window too short for that. It explains
 the small marks drawn on the map: the orange dot for a room on a floor above, the start marker (a
 ring when the start is on another floor), red outlines on problem cells, faded floors and walls,
-ramp arrows and height colours.
+ramp arrows and height colors.
 """
 import math
 import os
@@ -142,8 +143,8 @@ import pygame
 from atlas import ATLAS_PATH, atlas_array, transparent_tiles, unpack_atlas
 from constants import FOV_DEG, HEIGHT, MOUSE_SENSITIVITY, PLAYER_HEIGHT, TILE, WIDTH
 from mapfile import (ANIMATION_KINDS, ANIMATION_LABELS, DEFAULTS, EDIT_LAYERS, EFFECT_LABELS, ENTITY_EFFECTS,
-                     ENTITY_MODES, GUN_MODE_LABELS, GUN_MODES, MAP_PATH, MAX_NAME, MAX_NAME_LENGTH, MIN_WALL_GAP,
-                     EFFECT_AIM_LABELS, EFFECT_AIMS, EFFECT_KIND_LABELS, EFFECT_KINDS, MIN_AMBIENT, MODE_LABELS, SHOT_LABELS, SHOT_TYPES, Animation, AmmoType, Effect,
+                     ENTITY_MODES, GUN_MODE_LABELS, GUN_MODES, MAP_PATH, MAX_HIT_NAMES, MAX_NAME, MAX_NAME_LENGTH, MIN_WALL_GAP,
+                     EFFECT_AIM_LABELS, EFFECT_AIMS, EFFECT_COLOR_LABELS, EFFECT_COLORS, EFFECT_KIND_LABELS, EFFECT_KINDS, MIN_AMBIENT, MODE_LABELS, SHOT_LABELS, SHOT_TYPES, Animation, AmmoType, Effect,
                      Entity, Gun, Level, Light, default_level,
                      grid_name, load_level, save_level, split_grid_name)
 import details
@@ -179,10 +180,10 @@ VALUE_STEP = 0.25
 MIN_SPAN = PLAYER_HEIGHT + 0.1                  # smallest room the editor creates by itself
 SLAB = 0.25                                     # thickness of the slab between the floors
 HEIGHT_RANGE = {"floor_h": (-1.0, 3.0), "ceil_h": (0.0, 5.0),
-                "wall_h": (0.0, 3.0)}           # colour scale of the height views
+                "wall_h": (0.0, 3.0)}           # color scale of the height views
 VALUE_LIMITS = {"floor_h": (-4.0, 8.0), "ceil_h": (-4.0, 8.0),
                 "wall_h": (VALUE_STEP, 8.0)}    # a wall height of 0 would mean "full": erase for that
-WALL_FULL = (150, 70, 60)                       # colour of a full-height wall on the WallH layer
+WALL_FULL = (150, 70, 60)                       # color of a full-height wall on the WallH layer
 SHORT_WALL = (90, 220, 230)                     # the bar on a short wall (and its key icon)
 
 BG = (30, 31, 36)
@@ -212,7 +213,7 @@ TOOLS = {"paint": "B", "erase": "E", "fill": "F", "pick": "I", "start": "S", "st
 TOOL_KEYS = {pygame.K_b: "paint", pygame.K_e: "erase", pygame.K_f: "fill",
              pygame.K_i: "pick", pygame.K_s: "start", pygame.K_t: "stairs", pygame.K_c: "camera",
              pygame.K_n: "entity"}
-ENTITY_MODE_COLOURS = {"once": (255, 255, 255), "respawn": (90, 210, 255), "persistent": (110, 230, 120),
+ENTITY_MODE_COLORS = {"once": (255, 255, 255), "respawn": (90, 210, 255), "persistent": (110, 230, 120),
                        "scenery": (200, 150, 255)}
 FX_CELL = 70                                    # pixels a cell is drawn at in an effect's preview
 FX_BASE = 0.35                                  # cells above the preview's floor that the effect starts
@@ -223,9 +224,20 @@ GIZMO_DEPTH = (-0.15, 2.5)                        # cells ahead of the gun's usu
 GIZMO_NEAR = 0.1                                # the nearest to the eye (cells) that a handle is drawn at
 GUN_CARD_WIDTH = 540                             # the widest the gun picture and its placement views are drawn
 GIZMO_HIT = 13                                  # how close (pixels) a click must be to grab a handle
-GIZMO_COLOURS = {"bullet": (255, 170, 60), "effect": (80, 220, 255)}
+GIZMO_COLORS = {"bullet": (255, 170, 60), "effect": (80, 220, 255)}
 GIZMO_NAMES = {"bullet": "Bullets", "effect": "Effect"}
 AMBIENT_ROW = -1                                # light_selected value for the map's ambient light, listed first
+
+
+def recolored(picture, matrix):
+    """A copy of a picture with its colors put through a particle's 3 x 3 color matrix (9 numbers, see
+    particles.color_matrix), as the game draws a hue shifted or tinted particle."""
+    picture = picture.copy()
+    rgb = pygame.surfarray.pixels3d(picture)
+    out = np.clip(rgb.astype(np.float64) @ np.array(matrix, np.float64).reshape(3, 3).T, 0, 255)
+    rgb[...] = out.astype(np.uint8)
+    del rgb
+    return picture
 
 
 class PreviewFloor:
@@ -257,7 +269,7 @@ def line_cells(a, b):
 
 
 def heat(value, lo, hi):
-    """Colour for a height: blue (low) through green to yellow (high)."""
+    """Color for a height: blue (low) through green to yellow (high)."""
     t = max(0.0, min(1.0, (value - lo) / (hi - lo)))
     stops = ((40, 60, 150), (50, 160, 120), (240, 200, 60))
     a, b, f = (stops[0], stops[1], t * 2) if t < 0.5 else (stops[1], stops[2], t * 2 - 1)
@@ -725,7 +737,50 @@ class Editor:
                 field("damage_mult", "Damage x", "num", step=0.1, low=0.0, high=100.0),
                 field("trail", "Trail effect", "enum", choices=self.effect_choices(), labels=self.effect_labels()),
                 *(self.offset_fields(field, "trail", ("Offset behind", "Offset right", "Offset up")) if a.trail else []),
-                field("light", "Bullet light", "enum", choices=self.light_choices(), labels=self.light_labels())]
+                field("light", "Bullet light", "enum", choices=self.light_choices(), labels=self.light_labels()),
+                *self.name_list_fields(a, "player_hit_effects", "Player effect", self.effect_choices(), self.effect_labels()),
+                *self.name_list_fields(a, "player_hit_lights", "Player light", self.light_choices(), self.light_labels()),
+                *self.name_list_fields(a, "world_hit_effects", "World effect", self.effect_choices(), self.effect_labels()),
+                *self.name_list_fields(a, "world_hit_lights", "World light", self.light_choices(), self.light_labels()),
+                field("explodes", "Explosion", "enum", choices=(False, True), labels={False: "None", True: "Explodes"}),
+                *(self.explosion_fields(field, a) if a.explodes else [])]
+
+    def explosion_fields(self, field, a):
+        """The rows of an ammo type that explodes: how far, how hard, and how it treats the shooter."""
+        return [field("blast_radius", "Blast radius", "num", step=0.25, low=0.1, high=20.0),
+                field("blast_damage", "Blast damage", "num", step=5.0, low=0.0, high=1000.0),
+                field("knockback", "Knockback", "num", step=0.5, low=0.0, high=50.0, unit="/s"),
+                field("air_knockback_mult", "Air knockback x", "num", step=0.1, low=0.0, high=10.0),
+                field("self_damage_mult", "Self damage x", "num", step=0.05, low=0.0, high=10.0),
+                field("self_knockback_mult", "Self knockback x", "num", step=0.1, low=0.0, high=10.0),
+                *self.name_list_fields(a, "explosion_effects", "Explosion effect", self.effect_choices(), self.effect_labels()),
+                *self.name_list_fields(a, "explosion_lights", "Explosion light", self.light_choices(), self.light_labels())]
+
+    def name_list_fields(self, a, key, label, choices, labels):
+        """One dropdown for each name in an ammo type's list `key` (hit effects or lights), then one more,
+        empty, to add another. Choosing (none) on a row takes that name out of the list."""
+        names = getattr(a, key)
+
+        def setter(i):
+            return lambda v: self.set_ammo_name(key, i, v)
+        return [Field(f"{key}.{i}", f"{label} {i + 1}", "enum", (lambda i=i: names[i] if i < len(names) else ""),
+                      setter(i), choices=choices, labels=labels)
+                for i in range(len(names) + 1)]
+
+    def set_ammo_name(self, key, index, value):
+        """Set entry `index` of one of the selected ammo type's name lists (one past the end adds one; "" removes)."""
+        a = self.selected_ammo()
+        if a is None:
+            return
+        names = list(getattr(a, key))
+        if not value:
+            if index < len(names):
+                del names[index]
+        elif index < len(names):
+            names[index] = value
+        elif len(names) < MAX_HIT_NAMES:
+            names.append(value)
+        self.set_ammo(key, tuple(names))
 
     def details_rows(self):
         rect = self.details_rect()
@@ -982,8 +1037,16 @@ class Editor:
                    field("size_end", "Size at end", "num", step=0.02, low=0.0, high=3.0),
                    field("alpha_start", "Solid at start", "num", step=0.1, low=0.0, high=1.0),
                    field("alpha_end", "Solid at end", "num", step=0.1, low=0.0, high=1.0),
+                   field("color", "Color", "enum", choices=EFFECT_COLORS, labels=EFFECT_COLOR_LABELS),
                    field("collide", "Hits walls", "enum", choices=(True, False), labels={True: "Stops", False: "Passes through"}),
                    field("light", "Particle light", "enum", choices=self.light_choices(), labels=self.light_labels())]
+        at = next(i for i, x in enumerate(fields) if x.key == "color") + 1
+        if f.color == "hue":                               # what the color choice needs, right below it
+            fields.insert(at, field("hue", "Hue shift", "num", step=15.0, low=-180.0, high=180.0, unit=" deg"))
+        elif f.color == "rgb":
+            fields[at:at] = [field("tint_r", "Tint red", "num", int, step=15.0, low=0, high=255),
+                             field("tint_g", "Tint green", "num", int, step=15.0, low=0, high=255),
+                             field("tint_b", "Tint blue", "num", int, step=15.0, low=0, high=255)]
         if f.aim == "custom":                               # the direction to send them in, right below the Direction row
             at = next(i for i, x in enumerate(fields) if x.key == "aim") + 1
             fields[at:at] = [field("dir_x", "Direction X", "num", step=0.25, low=-100.0, high=100.0),
@@ -1027,6 +1090,9 @@ class Editor:
             for a in self.level.ammo_types:
                 if a.trail == f.name:
                     a.trail = value
+                a.player_hit_effects, a.world_hit_effects, a.explosion_effects = (
+                    tuple(value if n == f.name else n for n in names)
+                    for names in (a.player_hit_effects, a.world_hit_effects, a.explosion_effects))
             for e in self.level.entities + self.level.prefabs:
                 if e.emits == f.name:
                     e.emits = value
@@ -1043,6 +1109,9 @@ class Editor:
         for a in self.level.ammo_types:
             if a.trail == f.name:
                 a.trail = ""
+            a.player_hit_effects, a.world_hit_effects, a.explosion_effects = (
+                tuple(n for n in names if n != f.name)
+                for names in (a.player_hit_effects, a.world_hit_effects, a.explosion_effects))
         for e in self.level.entities + self.level.prefabs:
             if e.emits == f.name:
                 e.emits = ""
@@ -1100,7 +1169,7 @@ class Editor:
         self.level.lights.append(Light(name=self.new_light_name("Light")))
         self.light_selected = len(self.level.lights) - 1
         self.tile_target = "wall_tile"
-        self.say("Added a light: set its colour and reach in the Details pane, then give it to a gun, item, ammo or effect")
+        self.say("Added a light: set its color and reach in the Details pane, then give it to a gun, item, ammo or effect")
 
     def set_light(self, name, value):
         """Change one setting of the selected light (one undo step). Renaming keeps what carries it pointing at it."""
@@ -1120,6 +1189,9 @@ class Editor:
             for a in self.level.ammo_types:
                 if a.light == light.name:
                     a.light = value
+                a.player_hit_lights, a.world_hit_lights, a.explosion_lights = (
+                    tuple(value if n == light.name else n for n in names)
+                    for names in (a.player_hit_lights, a.world_hit_lights, a.explosion_lights))
             for f in self.level.effects:
                 if f.light == light.name:
                     f.light = value
@@ -1139,6 +1211,9 @@ class Editor:
         for a in self.level.ammo_types:
             if a.light == light.name:
                 a.light = ""
+            a.player_hit_lights, a.world_hit_lights, a.explosion_lights = (
+                tuple(n for n in names if n != light.name)
+                for names in (a.player_hit_lights, a.world_hit_lights, a.explosion_lights))
         for f in self.level.effects:
             if f.light == light.name:
                 f.light = ""
@@ -1363,7 +1438,7 @@ class Editor:
 
     @staticmethod
     def _make_backdrop(size, square=8):
-        """A grey checkerboard to put under tiles, so transparent pixels are visible as such."""
+        """A gray checkerboard to put under tiles, so transparent pixels are visible as such."""
         backdrop = pygame.Surface(size)
         backdrop.fill((46, 48, 56))
         for y in range(0, size[1], square):
@@ -1862,7 +1937,7 @@ class Editor:
         if action == "lights":
             self.lights_mode, self.effects_mode, self.guns_mode, self.prefabs_mode = not self.lights_mode, False, False, False
             self.deselect()
-            self.say("Lights: add one, set its colour and reach, then give it to a gun, item, ammo or effect"
+            self.say("Lights: add one, set its color and reach, then give it to a gun, item, ammo or effect"
                      if self.lights_mode else "Back to the map")
         elif action == "effects":
             self.effects_mode, self.guns_mode, self.prefabs_mode = not self.effects_mode, False, False
@@ -2407,10 +2482,10 @@ class Editor:
         else:
             source = "ceil_h" if layer == "ceil_h" else "floor_h"
             value = grids[g(source)][y][x]
-            colour = heat(value, *HEIGHT_RANGE[source])
+            color = heat(value, *HEIGHT_RANGE[source])
             if layer == "ramp":
-                colour = tuple(c // 2 for c in colour)
-            pygame.draw.rect(screen, colour, rect)
+                color = tuple(c // 2 for c in color)
+            pygame.draw.rect(screen, color, rect)
             if layer in VALUE_LAYERS and self.zoom >= 24:
                 label = self.small.render(fmt(value), True, (10, 10, 20))
                 screen.blit(label, label.get_rect(center=rect.center))
@@ -2420,13 +2495,13 @@ class Editor:
             draw_upper_mark(screen, rect)
 
     def draw_wall_ceiling(self, screen, x, y, rect):
-        """A wall on the CeilH layer where the ceiling over it matters: coloured like a ceiling, with
+        """A wall on the CeilH layer where the ceiling over it matters: colored like a ceiling, with
         the number if it was set, or the number in (brackets), duller, while it is automatic."""
         level = self.level
         value = level.wall_ceiling(x, y)
         explicit = level.has_explicit_wall_ceiling(x, y)
-        colour = heat(value, *HEIGHT_RANGE["ceil_h"])
-        pygame.draw.rect(screen, colour if explicit else tuple(c * 2 // 3 for c in colour), rect)
+        color = heat(value, *HEIGHT_RANGE["ceil_h"])
+        pygame.draw.rect(screen, color if explicit else tuple(c * 2 // 3 for c in color), rect)
         if level.short_wall_top(x, y) is not None:
             draw_short_wall_mark(screen, rect)
         if self.zoom >= 24:
@@ -2434,28 +2509,28 @@ class Editor:
             screen.blit(text, text.get_rect(center=rect.center))
 
     def draw_wall_height(self, screen, x, y, rect):
-        """A wall on the WallH layer: coloured by its height, with the number, or 'full'."""
+        """A wall on the WallH layer: colored by its height, with the number, or 'full'."""
         level = self.level
         value = level.grids["wall_h"][y][x]
         if level.short_wall_top(x, y) is None:          # 0, or tall enough to reach the ceiling
-            colour, label = WALL_FULL, ("full" if value <= 0 else fmt(value))
-            text_colour = (255, 255, 255)
+            color, label = WALL_FULL, ("full" if value <= 0 else fmt(value))
+            text_color = (255, 255, 255)
         else:
-            colour, label = heat(value, *HEIGHT_RANGE["wall_h"]), fmt(value)
-            text_colour = (10, 10, 20)
-        pygame.draw.rect(screen, colour, rect)
+            color, label = heat(value, *HEIGHT_RANGE["wall_h"]), fmt(value)
+            text_color = (10, 10, 20)
+        pygame.draw.rect(screen, color, rect)
         if self.zoom >= 24:
-            text = self.small.render(label, True, text_colour)
+            text = self.small.render(label, True, text_color)
             screen.blit(text, text.get_rect(center=rect.center))
 
-    def draw_arrow(self, screen, rect, kind, colour):
+    def draw_arrow(self, screen, rect, kind, color):
         dx, dy = RAMP_VECTORS[kind]
         cx, cy, r = rect.centerx, rect.centery, rect.w * 0.32
         tip = (cx + dx * r, cy + dy * r)
         tail = (cx - dx * r, cy - dy * r)
         side = (-dy * r * 0.7, dx * r * 0.7)
-        pygame.draw.line(screen, colour, tail, tip, max(2, rect.w // 10))
-        pygame.draw.polygon(screen, colour, [tip, (cx + side[0], cy + side[1]), (cx - side[0], cy - side[1])])
+        pygame.draw.line(screen, color, tail, tip, max(2, rect.w // 10))
+        pygame.draw.polygon(screen, color, [tip, (cx + side[0], cy + side[1]), (cx - side[0], cy - side[1])])
 
     def draw_map(self, screen):
         area, level, z = self.map_area(), self.level, self.zoom
@@ -2726,21 +2801,21 @@ class Editor:
         self.gizmo_drag = None
         self.touch()                                               # the preview starts over with the new place
 
-    def draw_gizmo_handle(self, screen, handle, centre, selected, hot):
+    def draw_gizmo_handle(self, screen, handle, center, selected, hot):
         """A handle: an orange disc for the bullets, a cyan diamond for the effect, ringed white when it is the
         picked one and larger while the mouse is on it."""
-        colour = GIZMO_COLOURS[handle]
+        color = GIZMO_COLORS[handle]
         r = 8 + (3 if hot else 0)
         if handle == "bullet":
-            pygame.draw.circle(screen, colour, centre, r)
-            pygame.draw.circle(screen, (20, 20, 28), centre, r, 1)
+            pygame.draw.circle(screen, color, center, r)
+            pygame.draw.circle(screen, (20, 20, 28), center, r, 1)
         else:
-            diamond = [(centre[0], centre[1] - r - 2), (centre[0] + r + 2, centre[1]), (centre[0], centre[1] + r + 2),
-                       (centre[0] - r - 2, centre[1])]
-            pygame.draw.polygon(screen, colour, diamond)
+            diamond = [(center[0], center[1] - r - 2), (center[0] + r + 2, center[1]), (center[0], center[1] + r + 2),
+                       (center[0] - r - 2, center[1])]
+            pygame.draw.polygon(screen, color, diamond)
             pygame.draw.polygon(screen, (20, 20, 28), diamond, 1)
         if selected:
-            pygame.draw.circle(screen, (255, 255, 255), centre, r + 6, 2)
+            pygame.draw.circle(screen, (255, 255, 255), center, r + 6, 2)
 
     def draw_gizmo(self, screen, card, gun):
         """The placement controls: the handles on the gun picture (where the bullets and the muzzle effect start, drawn
@@ -2769,17 +2844,17 @@ class Editor:
                     p2 = (a[0] + (b[0] - a[0]) * (i + 1) / steps, a[1] + (b[1] - a[1]) * (i + 1) / steps)
                     pygame.draw.line(screen, (230, 234, 245), p1, p2)
         for handle in [h for h in ("effect", "bullet") if h in points and h != picked] + [picked]:   # the picked one on top
-            centre = self.gizmo_pixel(card, points[handle])
-            self.draw_gizmo_handle(screen, handle, centre, handle == picked, hover == handle)
+            center = self.gizmo_pixel(card, points[handle])
+            self.draw_gizmo_handle(screen, handle, center, handle == picked, hover == handle)
             if handle == picked:
-                tag = self.small.render(GIZMO_NAMES[handle], True, GIZMO_COLOURS[handle])
+                tag = self.small.render(GIZMO_NAMES[handle], True, GIZMO_COLORS[handle])
                 back = pygame.Rect(0, 0, tag.get_width() + 6, tag.get_height() + 2)
-                back.midleft = (min(centre[0] + 16, card.right - back.w - 2), max(card.y + 10, centre[1] - 20))
+                back.midleft = (min(center[0] + 16, card.right - back.w - 2), max(card.y + 10, center[1] - 20))
                 pygame.draw.rect(screen, (16, 17, 22), back, border_radius=3)
                 screen.blit(tag, (back.x + 3, back.y + 1))
         screen.set_clip(None)
         track = layout["track"]                                    # the depth slider
-        colour = GIZMO_COLOURS[picked]
+        color = GIZMO_COLORS[picked]
         screen.blit(self.small.render("Depth (in / out)", True, TEXT), (card.x, track.centery - 8))
         pygame.draw.rect(screen, (40, 43, 54), track, border_radius=4)
         zero = track.x + round((0 - GIZMO_DEPTH[0]) / (GIZMO_DEPTH[1] - GIZMO_DEPTH[0]) * track.w)
@@ -2787,9 +2862,9 @@ class Editor:
         screen.blit(self.small.render("muzzle", True, DIM), (zero - 18, track.bottom + 6))
         depth = self.gizmo_depth(gun)
         knob = track.x + round(min(max((depth - GIZMO_DEPTH[0]) / (GIZMO_DEPTH[1] - GIZMO_DEPTH[0]), 0.0), 1.0) * track.w)
-        pygame.draw.rect(screen, colour, (track.x, track.y, max(0, knob - track.x), track.h), border_radius=4)
+        pygame.draw.rect(screen, color, (track.x, track.y, max(0, knob - track.x), track.h), border_radius=4)
         self.draw_gizmo_handle(screen, picked, (knob, track.centery), self.gizmo_drag == "slider", False)
-        screen.blit(self.small.render(f"{depth:+.2f}", True, colour), (track.right + 22, track.centery - 8))
+        screen.blit(self.small.render(f"{depth:+.2f}", True, color), (track.right + 22, track.centery - 8))
         if picked == "bullet":                                     # the numbers of the pane's rows
             a, r, u = gun.bullet_offset_x, gun.bullet_offset_y, gun.bullet_offset_z
             where = "from the gun's usual muzzle point"
@@ -2797,7 +2872,7 @@ class Editor:
             a, r, u = (points["effect"][i] - points["bullet"][i] for i in range(3))
             where = "from where the bullets start"
         screen.blit(self.small.render(f"Moving: {GIZMO_NAMES[picked]}   ahead {a:+.2f}  right {r:+.2f}  up {u:+.2f}",
-                                      True, colour), (card.x, layout["status"]))
+                                      True, color), (card.x, layout["status"]))
         self._draw_wrapped(screen, (f"Offsets {where}. Drag a handle on the picture (sideways and up), or click to put it "
                                     "there; the slider moves it in and out of the screen; the buttons switch handle.",),
                            card.x, layout["status"] + 17, card.w)
@@ -2917,7 +2992,7 @@ class Editor:
         pygame.draw.rect(screen, (70, 74, 88), (area.right - 8, top, 5, height), border_radius=2)
 
     def _draw_wrapped(self, screen, lines, x, y, width):
-        """Small grey lines of text wrapped to `width` pixels, starting at (x, y); returns the y below them."""
+        """Small gray lines of text wrapped to `width` pixels, starting at (x, y); returns the y below them."""
         for text in lines:
             line = ""
             for word in text.split():
@@ -3101,6 +3176,8 @@ class Editor:
         """Short names of what uses an effect: guns (muzzle), ammo types (trail) and how many items emit it."""
         users = [f"{g.name} muzzle" for g in self.level.guns if g.muzzle == effect.name]
         users += [f"{a.name} trail" for a in self.level.ammo_types if a.trail == effect.name]
+        users += [f"{a.name} hit" for a in self.level.ammo_types
+                  if effect.name in a.player_hit_effects + a.world_hit_effects]
         emitting = sum(1 for e in self.level.entities if e.emits == effect.name)
         if emitting:
             users.append(f"{emitting} item{'s' if emitting != 1 else ''}")
@@ -3136,30 +3213,32 @@ class Editor:
         pygame.draw.rect(screen, (30, 33, 44), card)
         floor_y = card.bottom - 26
         pygame.draw.rect(screen, (58, 54, 50), (card.x, floor_y, card.w, card.bottom - floor_y))
-        centre = card.centerx
+        center = card.centerx
         start_y = floor_y - FX_BASE * FX_CELL
-        pygame.draw.circle(screen, ACCENT, (centre, round(start_y)), 3)
+        pygame.draw.circle(screen, ACCENT, (center, round(start_y)), 3)
         if self.fx_sim is not None:                                 # where the particles really start, and which way they head
             (ox, _oy, oz), (dx, dy, dz) = placement(self.fx_sim[0].effects[self.selected_effect().name], UP)
-            origin = (round(centre + ox * FX_CELL), round(start_y - oz * FX_CELL))
+            origin = (round(center + ox * FX_CELL), round(start_y - oz * FX_CELL))
             norm = math.sqrt(dx * dx + dy * dy + dz * dz) or 1.0
             tip = (origin[0] + round(dx / norm * FX_CELL * 0.7), origin[1] - round(dz / norm * FX_CELL * 0.7))
             pygame.draw.line(screen, ACCENT, origin, tip, 2)
             pygame.draw.circle(screen, (255, 255, 255), origin, 4, 1)
-        for x in range(centre % FX_CELL, card.w, FX_CELL):          # a one cell grid so sizes can be judged
+        for x in range(center % FX_CELL, card.w, FX_CELL):          # a one cell grid so sizes can be judged
             pygame.draw.line(screen, (44, 48, 60), (card.x + x, card.y), (card.x + x, floor_y))
         if self.fx_sim is not None:
             screen.set_clip(card)
-            for (x, y, z, size, tile, _spin, alpha, _glow) in self.fx_sim[0].sprites()[:FX_CAP]:
+            for (x, y, z, size, tile, _spin, alpha, _glow, *color) in self.fx_sim[0].sprites()[:FX_CAP]:
                 pixels = max(2, round(size * FX_CELL))
-                picture = self.fx_scaled.get((tile, pixels))
+                picture = self.fx_scaled.get((tile, pixels, *color))
                 if picture is None:
                     picture = pygame.transform.scale(self.tiles[max(0, min(tile, len(self.tiles) - 1))], (pixels, pixels))
+                    if color:
+                        picture = recolored(picture, color[0])
                     if len(self.fx_scaled) > 600:
                         self.fx_scaled.clear()
-                    self.fx_scaled[(tile, pixels)] = picture
+                    self.fx_scaled[(tile, pixels, *color)] = picture
                 picture.set_alpha(round(255 * alpha))
-                screen.blit(picture, picture.get_rect(center=(round(centre + x * FX_CELL),
+                screen.blit(picture, picture.get_rect(center=(round(center + x * FX_CELL),
                                                               round(floor_y - (z + size / 2) * FX_CELL))))
             screen.set_clip(None)
         pygame.draw.rect(screen, GRID, card.inflate(2, 2), 1)
@@ -3238,6 +3317,8 @@ class Editor:
         """Short names of what carries a light: guns (muzzle), ammo (bullet), effects (particles), items and wall tiles."""
         users = [f"{g.name} muzzle" for g in self.level.guns if g.flash == light.name]
         users += [f"{a.name} bullet" for a in self.level.ammo_types if a.light == light.name]
+        users += [f"{a.name} hit" for a in self.level.ammo_types
+                  if light.name in a.player_hit_lights + a.world_hit_lights + a.explosion_lights]
         users += [f"{f.name} particles" for f in self.level.effects if f.light == light.name]
         carried = sum(1 for e in self.level.entities if e.light == light.name)
         if carried:
@@ -3252,7 +3333,7 @@ class Editor:
 
     def draw_light_preview(self, screen, card, light):
         """The light seen from above on a floor of one cell squares, with a wall along its right side that the
-        light cannot pass: how far it reaches, its colour and how it flickers (the same falloff the game uses)."""
+        light cannot pass: how far it reaches, its color and how it flickers (the same falloff the game uses)."""
         pygame.draw.rect(screen, (22, 24, 30), card)
         w, h = card.size
         cx, cy = w // 2, h // 2
@@ -3267,9 +3348,9 @@ class Editor:
             t = self.light_clock * light.flicker_speed * math.tau
             wobble = 1.0 - light.flicker * (1.0 - (0.5 + 0.25 * math.sin(t) + 0.25 * math.sin(t * 2.31)))
         gain = light.intensity * wobble * falloff
-        colour = np.array((light.r, light.g, light.b), np.float64) / 255.0
+        color = np.array((light.r, light.g, light.b), np.float64) / 255.0
         floor = np.array((70, 66, 60), np.float64)
-        lit = np.clip(floor[None, None, :] * (0.25 + gain[:, :, None] * colour[None, None, :] * 1.6), 0, 255)
+        lit = np.clip(floor[None, None, :] * (0.25 + gain[:, :, None] * color[None, None, :] * 1.6), 0, 255)
         picture = pygame.surfarray.make_surface(lit.astype(np.uint8).swapaxes(0, 1))
         screen.blit(picture, card)
         for gx in range(cx % LIGHT_CELL, w, LIGHT_CELL):            # a one cell grid so the reach can be judged
@@ -3394,7 +3475,7 @@ class Editor:
                      notes=notes)
 
     def draw_entities(self, screen):
-        """Items on the floor being edited: their sprite on the map, ringed in the colour of their mode
+        """Items on the floor being edited: their sprite on the map, ringed in the color of their mode
         (white once, cyan respawning, green staying)."""
         z = self.zoom
         origin = self.cell_rect(0, 0)
@@ -3407,7 +3488,7 @@ class Editor:
             sprite = pygame.transform.scale(self.tiles[max(0, min(e.tile, len(self.tiles) - 1))], (size, size))
             pygame.draw.circle(screen, (20, 20, 30), (cx, cy), size // 2 + 2)
             screen.blit(sprite, sprite.get_rect(center=(cx, cy)))
-            pygame.draw.circle(screen, ENTITY_MODE_COLOURS[e.mode], (cx, cy), size // 2 + 2, 2)
+            pygame.draw.circle(screen, ENTITY_MODE_COLORS[e.mode], (cx, cy), size // 2 + 2, 2)
             if e is chosen:                              # the selected item gets a bright outer ring
                 pygame.draw.circle(screen, ACCENT, (cx, cy), size // 2 + 6, 3)
 
@@ -3458,7 +3539,7 @@ class Editor:
         """[(icon, text)] explaining the marks that can be on the map in the current view, so the
         key never lists something that cannot be seen: the dot only where a floor exists above,
         the start as a solid or a hollow marker as drawn, the red outline only while there are
-        problem cells, and the arrow and height colours only on the layers that draw them."""
+        problem cells, and the arrow and height colors only on the layers that draw them."""
         entries = []
         if self.camera_visible():
             entries.append(("camera", "3D view camera (wedge = view)"))
@@ -3577,8 +3658,8 @@ class Editor:
         elif kind == "see_through":
             screen.blit(self.legend_tile(self.see_through_wall_tile() - 1, False), box)
         elif kind == "wall_ceiling":
-            colour = heat(3.0, *HEIGHT_RANGE["ceil_h"])
-            pygame.draw.rect(screen, tuple(c * 2 // 3 for c in colour), box)
+            color = heat(3.0, *HEIGHT_RANGE["ceil_h"])
+            pygame.draw.rect(screen, tuple(c * 2 // 3 for c in color), box)
             text = self.small.render("(n)", True, (10, 10, 20))
             screen.blit(text, text.get_rect(center=box.center))
         elif kind == "ramp":
@@ -3639,9 +3720,9 @@ class Editor:
             pygame.draw.rect(screen, ACCENT, rect, 1)
             self.draw_arrow(screen, rect, self.ramp_dir, TEXT)
         else:
-            colour = {"erase": WARN, "fill": (120, 200, 255), "pick": (200, 120, 255),
+            color = {"erase": WARN, "fill": (120, 200, 255), "pick": (200, 120, 255),
                       "start": (60, 220, 110), "stairs": (120, 200, 255)}.get(self.tool, ACCENT)
-            pygame.draw.rect(screen, colour, self.cell_rect(*cell), 2)
+            pygame.draw.rect(screen, color, self.cell_rect(*cell), 2)
 
     def draw_panel(self, screen):
         h = self._size()[1]
@@ -3706,12 +3787,12 @@ class Editor:
             active = action in (f"tool:{self.tool}", f"layer:{self.layer}") \
                 or (action == "legend" and self.show_legend) or (action == "guns" and self.guns_mode) \
                 or (action == "prefabs" and self.prefabs_mode) or (action == "effects" and self.effects_mode) or (action == "lights" and self.lights_mode)
-            colour = BUTTON_ON if active else (BUTTON_HOT if rect.collidepoint(self.mouse) else BUTTON)
-            pygame.draw.rect(screen, colour, rect, border_radius=4)
+            color = BUTTON_ON if active else (BUTTON_HOT if rect.collidepoint(self.mouse) else BUTTON)
+            pygame.draw.rect(screen, color, rect, border_radius=4)
             text = self.font.render(label, True, TEXT)
             screen.blit(text, text.get_rect(center=rect.center))
-        for text, pos, colour in self.readouts:
-            screen.blit(self.font.render(text, True, colour), pos)
+        for text, pos, color in self.readouts:
+            screen.blit(self.font.render(text, True, color), pos)
 
     def draw_dropdown_button(self, screen, rect, label):
         """The closed dropdown: the current floor's name and an arrow, or a text box while renaming."""
@@ -3721,8 +3802,8 @@ class Editor:
             caret = "|" if int(time.time() * 2) % 2 == 0 else " "
             screen.blit(self.font.render(self.rename + caret, True, TEXT), (rect.x + 8, rect.y + 8))
             return
-        colour = BUTTON_ON if self.dropdown_open else (BUTTON_HOT if rect.collidepoint(self.mouse) else BUTTON)
-        pygame.draw.rect(screen, colour, rect, border_radius=4)
+        color = BUTTON_ON if self.dropdown_open else (BUTTON_HOT if rect.collidepoint(self.mouse) else BUTTON)
+        pygame.draw.rect(screen, color, rect, border_radius=4)
         screen.blit(self.font.render(label, True, TEXT), (rect.x + 10, rect.y + 8))
         cx, cy = rect.right - 16, rect.centery
         arrow = [(cx - 6, cy - 3), (cx + 6, cy - 3), (cx, cy + 4)]
@@ -3734,8 +3815,8 @@ class Editor:
             return
         for index, (rect, label, action) in enumerate(self.dropdown_items()):
             current = action == f"floor:{self.floor}"
-            colour = BUTTON_ON if current else (BUTTON_HOT if rect.collidepoint(self.mouse) else PANEL_BG)
-            pygame.draw.rect(screen, colour, rect)
+            color = BUTTON_ON if current else (BUTTON_HOT if rect.collidepoint(self.mouse) else PANEL_BG)
+            pygame.draw.rect(screen, color, rect)
             pygame.draw.rect(screen, GRID, rect, 1)
             text = self.font.render(label, True, ACCENT if action == "addfloor" else TEXT)
             screen.blit(text, (rect.x + 10, rect.y + 6))

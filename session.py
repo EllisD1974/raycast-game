@@ -10,7 +10,9 @@ No pygame. The three sessions look the same to main.py:
 The host runs the real Game. Joiners send their steps and get back snapshots of it, which they draw;
 a joiner predicts its own movement and smooths everyone else's (see ClientSession).
 """
+import base64
 import json
+import math
 import time
 from collections import deque
 
@@ -52,6 +54,14 @@ class LocalSession:
         events = self.game.tick({LOCAL_ID: wish}, dt)[LOCAL_ID]
         self.animate(dt, self.game.take_fx(), self.game.take_flashes())
         return events
+
+    def reload(self, level, world, character_tile=None, atlas_png=None):
+        """Carry on in a new map (see Game.load_level). `atlas_png` is the textures it is drawn with, if they
+        changed: a host passes them on to its joiners."""
+        self.game.load_level(level, world, character_tile)
+        self.world = world
+        self.particles = ParticleSystem(level.effects, world)
+        self.lights = LightSystem(level, world)
 
     def animate(self, dt, effects, flashes=()):
         """Move the particles and lights on: play the effects and flashes just fired, attach trails and lights
@@ -95,10 +105,11 @@ class HostSession(LocalSession):
     numbers the joiner predicted it with, so the two agree. The host only lets a joiner use as much
     time as has really passed, so sending extra or long steps does not make them faster."""
 
-    def __init__(self, game, host):
+    def __init__(self, game, host, atlas_png=None):
         super().__init__(game)
         self.host = host
         self.level_text = level_text(game.level)
+        self.atlas = base64.b64encode(atlas_png).decode() if atlas_png else None    # the textures joiners draw with
         self.queue = {}                         # joiner -> deque of (seq, Inputs, dt) not yet carried out
         self.credit = {}                        # joiner -> seconds of steps they may still use
         self.acked = {}                         # joiner -> seq of the last step carried out
@@ -115,7 +126,7 @@ class HostSession(LocalSession):
                 self.game.add_player(peer)
                 self.queue[peer], self.credit[peer] = deque(maxlen=MAX_QUEUE), MAX_STEP_DT
                 self.acked[peer], self.owed[peer] = 0, Events()
-                self.host.send(peer, {"type": "welcome", "id": peer, "level": self.level_text})
+                self.host.send(peer, {"type": "welcome", "id": peer, "level": self.level_text, "atlas": self.atlas})
             elif kind == "disconnect":
                 self.game.remove_player(peer)
                 for table in (self.queue, self.credit, self.acked, self.owed):
@@ -142,6 +153,16 @@ class HostSession(LocalSession):
             self.since_snapshot = min(self.since_snapshot - 1 / SNAPSHOT_RATE, 1 / SNAPSHOT_RATE)
             self.send_snapshots()
         return events
+
+    def reload(self, level, world, character_tile=None, atlas_png=None):
+        """Carry on in a new map and send it (with the textures, if they changed) to every joiner, who
+        switch to it between two snapshots."""
+        super().reload(level, world, character_tile, atlas_png)
+        self.level_text = level_text(level)
+        if atlas_png:
+            self.atlas = base64.b64encode(atlas_png).decode()
+        self.fx_out, self.flashes_out = [], []
+        self.host.broadcast({"type": "reload", "level": self.level_text, "atlas": self.atlas})
 
     def backlog(self):
         """Seconds of joiner steps waiting their turn, for the worst joiner (0 when keeping up)."""
@@ -195,18 +216,23 @@ class ClientSession:
     of that moment, so their movement is smooth although it only arrives 30 times a second. Bullets
     come with their velocity and are carried on from the last snapshot.
 
-    `make_world(level)` builds the World to draw (it needs the textures, which only main.py has)."""
+    `make_world(level)` builds the World to draw (it needs the textures, which only main.py has).
+    The host sends its textures with the map: `use_atlas(png_bytes)` is called with them before the world is
+    built, and returns the tile where the character pictures start (it must raise ValueError for a picture
+    it cannot use). Without it, or with a host that sent none, we draw with the textures we already have."""
 
-    def __init__(self, client, make_world, character_tile=None):
+    def __init__(self, client, make_world, character_tile=None, use_atlas=None):
         self.client = client
         self.make_world = make_world
+        self.use_atlas = use_atlas
         self.character_tile = character_tile
         self.id = None
+        self.loads = 0                          # maps loaded so far: the first, then one for each reload
         self.level = self.world = self.items = None
         self.me = PlayerState(Player(0.0, 0.0, 0.0))
         self.pending = []                       # (seq, Inputs, dt) sent and not yet carried out by the host
         self.seq = 0
-        self.history = {}                       # other player id -> [(game time, x, y, z)], oldest first
+        self.history = {}                       # other player id -> [(game time, x, y, z, angle)], oldest first
         self.game_time = None                   # our estimate of the host's game time
         self.bullets = []                       # as sent: [x, y, z, vx, vy, vz, size, tile, id, trail, light]
         self.lights = None                      # looks only, like the particles
@@ -268,13 +294,30 @@ class ClientSession:
         kind = message.get("type")
         if kind == "welcome":
             self.id = message.get("id")
-            self.level = parse_level(json.loads(message["level"]), "the host's map")
-            self.world = self.make_world(self.level)
-            self.items = Entities(self.level, self.world)
-            self.particles = ParticleSystem(self.level.effects, self.world)
-            self.lights = LightSystem(self.level, self.world)
+            self.load(message)
+        elif kind == "reload" and self.level is not None:
+            self.load(message)
         elif kind == "state" and self.level is not None:
             self.apply_snapshot(message)
+
+    def load(self, message):
+        """Switch to the map (and textures) in a welcome or reload message. A reload drops what we knew
+        about the old game: the others' positions, the bullets and the clock."""
+        try:
+            level = parse_level(json.loads(message["level"]), "the host's map")
+            if self.use_atlas and message.get("atlas"):
+                self.character_tile = self.use_atlas(base64.b64decode(message["atlas"]))
+            world = self.make_world(level)
+        except (ValueError, KeyError, TypeError) as e:      # a broken map or picture from the host
+            self.ended = f"the host sent a game that cannot be loaded ({e})"
+            return
+        self.level, self.world = level, world
+        self.items = Entities(level, world)
+        self.particles = ParticleSystem(level.effects, world)
+        self.lights = LightSystem(level, world)
+        self.loads += 1
+        self.history, self.bullets, self.game_time = {}, [], None
+        self.ready = False                      # until the first snapshot of the new map
 
     def apply_snapshot(self, message):
         players = {int(pid): fields for pid, fields in message["players"].items()}
@@ -299,7 +342,7 @@ class ClientSession:
         for pid, fields in players.items():
             if pid != self.id:
                 samples = self.history.setdefault(pid, [])
-                samples.append((now, fields[0], fields[1], fields[2]))
+                samples.append((now, fields[0], fields[1], fields[2], fields[3]))
                 del samples[:-MAX_SAMPLES]
         self.bullets, self.bullet_age = message["bullets"], 0.0
         for event in message.get("fx", [])[:MAX_FX]:
@@ -324,8 +367,9 @@ class ClientSession:
             sprites.append((x, y, z - bullet[6] / 2, bullet[6], bullet[7], 0.0, 1.0, 1.0 if bullet[10] else 0.0))
         if self.character_tile is not None and self.game_time is not None:
             for pid, samples in self.history.items():
-                x, y, z = interpolate(samples, self.game_time - INTERP_DELAY)
-                sprites.append((x, y, z, PLAYER_HEIGHT, character_tile_for(self.character_tile, pid)))
+                x, y, z, *angle = interpolate(samples, self.game_time - INTERP_DELAY)
+                tile = character_tile_for(self.character_tile, pid, self.me.body.angle, angle[0] if angle else None)
+                sprites.append((x, y, z, PLAYER_HEIGHT, tile))
         if self.particles is not None:
             sprites += self.particles.sprites()
         return sprites
@@ -345,13 +389,16 @@ class ClientSession:
 
 
 def interpolate(samples, t):
-    """(x, y, z) at game time t from [(time, x, y, z), ...] oldest first: on the line between the two
-    samples either side of t, and the nearest sample if t is outside them (no guessing ahead)."""
+    """(x, y, z[, angle]) at game time t from [(time, x, y, z[, angle]), ...] oldest first: on the line
+    between the two samples either side of t, and the nearest sample if t is outside them (no guessing
+    ahead). An angle takes the short way round."""
     if t <= samples[0][0]:
         return tuple(samples[0][1:])
     for (t0, *a), (t1, *b) in zip(samples, samples[1:]):
         if t0 <= t <= t1:
             f = (t - t0) / (t1 - t0) if t1 > t0 else 1.0
+            if len(a) > 3:
+                b[3] = a[3] + (b[3] - a[3] + math.pi) % math.tau - math.pi
             return tuple(p + (q - p) * f for p, q in zip(a, b))
     return tuple(samples[-1][1:])
 

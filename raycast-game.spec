@@ -6,7 +6,7 @@
 dist/RaycastGame/RaycastGame.exe   the game          (RaycastGame.exe --map maps/other.json, --host ..., --join ...)
 dist/RaycastGame/RaycastEditor.exe the map editor    (its "Play" button starts RaycastGame.exe next to it)
 
-The folder carries assets/textures.png and the maps next to the programs' own files. The renderer's numba source files are
+The folder carries assets/textures.png, assets/character.png and the maps next to the programs' own files. The renderer's numba source files are
 included too: numba compiles from them (and caches the result) when the program starts.
 """
 import os
@@ -15,6 +15,7 @@ root = os.path.abspath(SPECPATH)
 
 datas = [
     (os.path.join(root, "assets", "textures.png"), "assets"),
+    (os.path.join(root, "assets", "character.png"), "assets"),
     (os.path.join(root, "maps"), "maps"),
 ]
 for source in ("raykernel.py", "raypitch.py", "raylight.py"):     # numba reads these to compile and cache the renderer

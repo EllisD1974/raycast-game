@@ -304,3 +304,33 @@ def test_the_preview_starts_particles_at_the_offset_and_draws_without_trouble(ed
     sim = ed.fx_sim[0]
     assert sim.count() == 5 and all(abs(p.x - 1.5) < 1e-6 for p in sim.particles)
     ed.draw(pygame.display.get_surface())
+
+
+def test_the_color_choice_shows_only_the_rows_it_needs_and_they_all_fit_the_pane(ed):
+    effect = add_effect(ed)
+    assert "hue" not in keys(ed) and "tint_r" not in keys(ed)
+    choose(ed, "color", "hue")
+    assert effect.color == "hue" and "hue" in keys(ed) and "tint_r" not in keys(ed)
+    click(ed, row(ed, "hue").plus.center)
+    assert effect.hue == 15.0
+    choose(ed, "color", "rgb")
+    assert [k for k in keys(ed) if k.startswith("tint")] == ["tint_r", "tint_g", "tint_b"] and "hue" not in keys(ed)
+    click(ed, row(ed, "tint_g").minus.center)
+    assert effect.tint_g == 240
+    ed.draw(pygame.display.get_surface())
+    assert details.button_rect(ed.details_rect(), ed.details_rows()).bottom <= ed.details_rect().bottom
+
+
+def test_the_preview_draws_a_tinted_effect_in_its_tint(ed):
+    effect = add_effect(ed)
+    effect.count = 10
+    ed.set_effect("color", "rgb")
+    ed.set_effect("tint_r", 0)
+    for _ in range(3):
+        ed.update(1 / 60, pygame.key.get_pressed())
+    ed.draw(pygame.display.get_surface())                                   # a tinted sprite is longer than 8 numbers
+    from particles import color_matrix
+    white = pygame.Surface((4, 4))
+    white.fill((200, 200, 200))
+    assert map_editor.recolored(white, color_matrix(0.0, 0, 255, 255)).get_at((0, 0))[:3] == (0, 200, 200)
+    assert white.get_at((0, 0))[:3] == (200, 200, 200)                      # the original is left alone

@@ -4,6 +4,7 @@ import math
 import os
 import random
 import sys
+from dataclasses import asdict
 
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -17,7 +18,7 @@ import particles
 import physics
 from game import Game, Inputs
 from mapfile import AmmoType, Effect, Entity, Gun, Level, level_text, parse_level
-from particles import MAX_PARTICLES, ParticleSystem, cone
+from particles import MAX_PARTICLES, ParticleSystem, color_matrix, cone
 from renderer import Renderer
 from session import ClientSession, HostSession, LocalSession
 from world import World
@@ -379,6 +380,51 @@ def test_sprite_alpha_blends_a_particle_into_the_picture():
     assert renderer.draw(world, player, [(4.0, 4.0, 0.2, 0.6, 1)]).get_at((w // 2, h // 2))[:3] == seen[1.0]
 
 
+def test_a_particle_is_drawn_in_its_hue_or_rgb_tint():
+    pygame.display.set_mode((100, 100))
+    textures = np.zeros((2, 32, 32, 4), np.uint8)
+    textures[0, ..., :3] = 120
+    textures[0, ..., 3] = 255
+    textures[1, ..., :3] = (255, 0, 0)                                  # a red particle
+    textures[1, ..., 3] = 255
+    renderer = Renderer(textures)
+    level = Level.blank(8, 8)
+    world = World(level, 2)
+    from physics import spawn
+    player = spawn(level, world)
+    player.x, player.y, player.angle = 2.5, 4.0, 0.0
+
+    def center(color):
+        picture = renderer.draw(world, player, [(4.0, 4.0, 0.2, 0.6, 1, 0.0, 1.0, 1.0) + color])
+        w, h = picture.get_size()
+        return picture.get_at((w // 2, h // 2))[:3]
+    red = center(())
+    green = center((color_matrix(120.0),))
+    half = center((color_matrix(0.0, 128, 255, 255),))
+    assert red[0] > 200 and red[1] < 60 and red[2] < 60
+    assert green[1] > green[0] + 100 and green[1] > green[2] + 100       # turned a third of the way round: green
+    assert half[0] == pytest.approx(red[0] / 2, abs=4)                   # the tint halved the red
+
+
+def test_the_effects_color_choice_decides_what_its_particles_are_put_through():
+    from particles import IDENTITY, effect_color
+    assert effect_color(Effect("E")) == IDENTITY
+    assert effect_color(Effect("E", hue=90.0, tint_r=0)) == IDENTITY       # not chosen: ignored
+    assert effect_color(Effect("E", color="hue", hue=0.0)) == IDENTITY
+    assert effect_color(Effect("E", color="hue", hue=90.0)) != IDENTITY
+    assert effect_color(Effect("E", color="rgb", tint_g=0))[4] == 0.0     # no green out of green
+    ps = system(Effect("E", count=1, color="rgb", tint_b=0))
+    ps.play("E", 2.0, 2.0, 1.0, (0.0, 0.0, 1.0))
+    assert len(ps.sprites()[0]) == 9
+
+
+def test_color_settings_are_saved_and_bad_ones_repaired():
+    e = Effect.from_dict(asdict(Effect("E", color="rgb", hue=-90.0, tint_r=10, tint_g=20, tint_b=30)))
+    assert (e.color, e.hue, e.tint_r, e.tint_g, e.tint_b) == ("rgb", -90.0, 10, 20, 30)
+    assert Effect.from_dict({"color": "pink", "hue": 999, "tint_r": -5}).color == "original"
+    assert Effect.from_dict({"hue": 999, "tint_r": -5}).hue == 180.0 and Effect.from_dict({"tint_r": -5}).tint_r == 0
+
+
 # ------------------------------------------------------------------ where they start and which way they go
 
 def still(**settings):
@@ -477,8 +523,8 @@ def test_no_override_leaves_the_effects_own_offset_and_a_zero_override_cancels_i
     ps = system(still(offset_x=2.0))
     ps.play("E", 0.0, 0.0, 0.0)
     ps.play("E", 0.0, 0.0, 0.0, offset=(0.0, 0.0, 0.0))
-    own, cancelled = ps.particles
-    assert own.x == pytest.approx(2.0) and cancelled.x == 0.0
+    own, canceled = ps.particles
+    assert own.x == pytest.approx(2.0) and canceled.x == 0.0
 
 
 def test_a_trail_and_an_item_can_override_the_offset():

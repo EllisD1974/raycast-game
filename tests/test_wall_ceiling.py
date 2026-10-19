@@ -292,7 +292,7 @@ def test_the_ceiling_layer_shows_the_ceiling_over_short_walls_set_or_automatic(e
     heat_auto = map_editor.heat(3.0, *map_editor.HEIGHT_RANGE["ceil_h"])
     heat_set = map_editor.heat(1.5, *map_editor.HEIGHT_RANGE["ceil_h"])
     assert surface.get_at((auto.left + 3, auto.top + 3))[:3] == tuple(c * 2 // 3 for c in heat_auto)   # duller: automatic
-    assert surface.get_at((explicit.left + 3, explicit.top + 3))[:3] == heat_set                     # full colour: set
+    assert surface.get_at((explicit.left + 3, explicit.top + 3))[:3] == heat_set                     # full color: set
     assert surface.get_at((full.left + 3, full.top + 3))[:3] not in (heat_auto, heat_set)            # a plain dimmed wall
     ed.do("layer:walls")
     ed.draw(surface)                                                 # other layers do not show it

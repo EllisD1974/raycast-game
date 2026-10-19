@@ -27,7 +27,7 @@ class Player:
     angle: float = 0.0          # radians; 0 faces +x, increasing turns right
     vz: float = 0.0
     on_ground: bool = True
-    span: int = 0               # index of the floor under the player's centre; kept while moving
+    span: int = 0               # index of the floor under the player's center; kept while moving
     vx: float = 0.0             # horizontal velocity, cells per second. On the ground it simply
     vy: float = 0.0             # follows the keys; in the air it is momentum (see step)
     pitch: float = 0.0          # radians; positive looks up. Only affects the view
@@ -157,14 +157,14 @@ def step(world, p, forward, strafe, turn, jump, dt, sprint=False):
     else:
         p.vy = 0.0
 
-    span = world.span_at(p.x, p.y, p.z, p.span, p.on_ground)       # the floor under the centre
+    span = world.span_at(p.x, p.y, p.z, p.span, p.on_ground)       # the floor under the center
     if span < 0:                                    # nowhere to stand (should not happen)
         return
     p.span = span
     ground = world.floor_of(span, p.x, p.y)
     ceiling = world.ceil_of(span, p.x, p.y)
     if p.on_ground and p.z - ground > STEP_HEIGHT + EPS:
-        # The centre is past an edge. Only fall once the whole box is off it: while any corner
+        # The center is past an edge. Only fall once the whole box is off it: while any corner
         # is still on the ledge the player stays up. Otherwise they would drop into the gap with
         # part of their body still inside the floor slab they walked off.
         held = ledge_floor(world, p.x, p.y, p.z, p.span, True)

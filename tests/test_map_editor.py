@@ -251,7 +251,7 @@ def test_new_upper_floor_lowers_the_lower_ceiling_into_a_slab(ed):
     ed.do("layer:floor_h")
     click(ed, 4, 4)
     assert ed.level.grids["ceil_h"][4][4] == pytest.approx(1.25)        # 1.5 minus a 0.25 slab
-    assert ed.level.grids["ceil_h"][4][5] == 3.0                        # neighbours unchanged
+    assert ed.level.grids["ceil_h"][4][5] == 3.0                        # neighbors unchanged
     assert ed.level.problems() == []
 
 

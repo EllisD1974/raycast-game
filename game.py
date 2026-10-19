@@ -8,9 +8,10 @@ import math
 import random
 from dataclasses import dataclass, field
 
-from character import SHIRTS
+from character import SHIRTS, VIEWS, character_view
 from constants import PLAYER_HEIGHT
 from entities import Entities, PlayerStats
+from explosions import blast_results
 from inventory import Inventory
 from physics import look, spawn, step
 from projectiles import MUZZLE, Projectiles, muzzle_shift
@@ -72,14 +73,16 @@ def muzzle_event(effect, body, offset=None, shift=(0.0, 0.0, 0.0)):
     return event + tuple(offset) if offset is not None else event
 
 
-def character_tile_for(first_tile, player_id):
-    """The picture of a player seen by someone else: the shirt colour follows their id."""
-    return first_tile + player_id % len(SHIRTS)
+def character_tile_for(first_tile, player_id, viewer_angle=None, angle=None):
+    """The picture of a player seen by someone else: the shirt color follows their id, the side shown
+    which way they face (`angle`) as seen looking along `viewer_angle` (the front if either is unknown)."""
+    view = 0 if viewer_angle is None or angle is None else character_view(viewer_angle, angle)
+    return first_tile + (player_id % len(SHIRTS)) * VIEWS + view
 
 
-def character_sprite(body, first_tile, player_id):
+def character_sprite(body, first_tile, player_id, viewer_angle=None):
     """(x, y, z, size, tile) of a player seen by someone else."""
-    return (body.x, body.y, body.z, PLAYER_HEIGHT, character_tile_for(first_tile, player_id))
+    return (body.x, body.y, body.z, PLAYER_HEIGHT, character_tile_for(first_tile, player_id, viewer_angle, body.angle))
 
 
 @dataclass
@@ -110,6 +113,21 @@ class Game:
         self.fx = []                # particle effects to play, (name, x, y, z, dx, dy, dz[, ox, oy, oz]), until take_fx()
         self.flashes = []           # lights to flash, (name, x, y, z), until take_flashes()
 
+    def load_level(self, level, world, character_tile=None):
+        """Swap in a new map while the game runs. Everything in flight is dropped and every player is back at
+        the new start with full health and only what a new player carries (their score stays): the old
+        inventories name guns and ammo the new map may no longer have."""
+        self.level, self.world = level, world
+        if character_tile is not None:
+            self.character_tile = character_tile
+        self.items = Entities(level, world)
+        self.projectiles.bullets = []
+        self.fx, self.flashes = [], []
+        for state in self.players.values():             # in place: sessions hold on to these PlayerStates
+            state.body = spawn(level, world)
+            state.stats = PlayerStats(score=state.stats.score)
+            state.inventory = Inventory()
+
     def add_player(self, player_id):
         """Put a new player at the level's start."""
         state = PlayerState(spawn(self.level, self.world))
@@ -131,7 +149,7 @@ class Game:
         move_body(self.world, body, wish, dt)
         fired = inventory.update(dt, wish.fire, wish.reload)
         for gun in fired:
-            self.projectiles.fire(body, gun, self.level.ammo_for(gun))
+            self.projectiles.fire(body, gun, self.level.ammo_for(gun), player_id)
             shift = muzzle_shift(gun, body.angle)
             if gun.muzzle:
                 self.fx.append(muzzle_event(gun.muzzle, body, (gun.muzzle_offset_x, gun.muzzle_offset_y, gun.muzzle_offset_z)
@@ -139,6 +157,34 @@ class Game:
             if gun.flash:
                 self.flashes.append(muzzle_event(gun.flash, body, None, shift)[:4])
         return len(fired)
+
+    def hurt(self, player_id, damage):
+        """Take `damage` off a player's health. At zero they are out: back at the level's start, with full
+        health and only what a new player carries (their score stays)."""
+        state = self.players[player_id]
+        state.stats.health = max(0.0, state.stats.health - damage)
+        if state.stats.health <= 0.0:
+            state.body = spawn(self.level, self.world)              # in place: sessions hold on to this PlayerState
+            state.stats = PlayerStats(score=state.stats.score)
+            state.inventory = Inventory()
+
+    def explode(self, hit):
+        """A bullet that explodes struck at `hit`: play its explosion, then hurt and throw every player it reaches.
+        A player thrown into the air loses the ground under them, so their own momentum takes over."""
+        for effect in hit.blast.explosion_effects:
+            self.fx.append((effect, hit.x, hit.y, hit.z, -hit.dx, -hit.dy, -hit.dz))
+        for light in hit.blast.explosion_lights:
+            self.flashes.append((light, hit.x, hit.y, hit.z))
+        bodies = [(pid, state.body) for pid, state in self.players.items()]
+        for pid, damage, (vx, vy, vz) in blast_results(self.world, hit.blast, hit.x, hit.y, hit.z, hit.owner, bodies):
+            state = self.players[pid]
+            body = state.body
+            self.hurt(pid, damage)
+            if state.body is body:                      # (not sent back to the start by it)
+                body.vx += vx
+                body.vy += vy
+                body.vz += vz
+                body.on_ground = False
 
     def take_fx(self):
         """The particle effects to play since the last call (a muzzle flash for each shot fired)."""
@@ -151,9 +197,18 @@ class Game:
         return out
 
     def advance_world(self, dt):
-        """The shared part of dt seconds: bullets fly, items come back, players pick up what they touch.
-        Returns {player id: pickup messages}."""
-        self.projectiles.update(self.world, dt)
+        """The shared part of dt seconds: bullets fly (and hurt the players they strike), items come back,
+        players pick up what they touch. Returns {player id: pickup messages}."""
+        targets = [(pid, state.body.x, state.body.y, state.body.z) for pid, state in self.players.items()]
+        for hit in self.projectiles.update(self.world, dt, targets):
+            for effect in hit.effects:                  # sprays back the way the bullet came
+                self.fx.append((effect, hit.x, hit.y, hit.z, -hit.dx, -hit.dy, -hit.dz))
+            for light in hit.lights:
+                self.flashes.append((light, hit.x, hit.y, hit.z))
+            if hit.target in self.players:
+                self.hurt(hit.target, hit.damage)
+            if hit.blast is not None:
+                self.explode(hit)
         self.items.advance(dt)
         return {pid: self.items.touch(state.body, state.stats, state.inventory, who=pid)
                 for pid, state in self.players.items()}
@@ -174,5 +229,6 @@ class Game:
     def player_sprites(self, viewer=None):
         if self.character_tile is None:
             return []
-        return [character_sprite(state.body, self.character_tile, pid)
+        looking = self.players[viewer].body.angle if viewer in self.players else None
+        return [character_sprite(state.body, self.character_tile, pid, looking)
                 for pid, state in self.players.items() if pid != viewer]

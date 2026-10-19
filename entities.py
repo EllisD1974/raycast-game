@@ -71,7 +71,7 @@ class Entities:
                 continue
             e = item.entity
             z, spin = item.z, 0.0
-            # (a phase from the position keeps neighbouring items from moving in lockstep)
+            # (a phase from the position keeps neighboring items from moving in lockstep)
             phase = (e.x * 7.13 + e.y * 3.71) % 1.0
             for a in e.animations:
                 t = (self.clock * a.speed + phase) * math.tau

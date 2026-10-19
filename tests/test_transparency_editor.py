@@ -62,7 +62,7 @@ def test_transparent_atlas_pixels_show_a_checkerboard_behind_them(ed):
     ed.draw(surface)
     rect = ed.tile_rect(GLASS_INDEX)
     hole = {tuple(surface.get_at((rect.x + 18 + dx, rect.y + 4 + dy)))[:3] for dx in range(0, 8) for dy in range(0, 8)}
-    assert hole <= {(46, 48, 56), (70, 72, 82)} and len(hole) == 2   # exactly the two checker colours
+    assert hole <= {(46, 48, 56), (70, 72, 82)} and len(hole) == 2   # exactly the two checker colors
 
 
 def test_a_see_through_wall_shows_the_cell_behind_it_in_the_map(ed):
@@ -121,8 +121,8 @@ def test_the_key_icon_for_a_see_through_wall_shows_the_real_tile(ed):
                       rect.y + map_editor.LEGEND_TITLE + row * map_editor.LEGEND_ROW
                       + (map_editor.LEGEND_ROW - map_editor.LEGEND_ICON) // 2,
                       map_editor.LEGEND_ICON, map_editor.LEGEND_ICON)
-    colours = {tuple(surface.get_at((x, y)))[:3] for x in range(box.left, box.right) for y in range(box.top, box.bottom)}
-    assert (220, 40, 40) in colours and map_editor.EMPTY_CELL in colours
+    colors = {tuple(surface.get_at((x, y)))[:3] for x in range(box.left, box.right) for y in range(box.top, box.bottom)}
+    assert (220, 40, 40) in colors and map_editor.EMPTY_CELL in colors
 
 
 def test_a_see_through_short_wall_gets_the_short_wall_mark_too(ed):

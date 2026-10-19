@@ -29,7 +29,7 @@ from raykernel import MAX_PANES, SIDE_SHADE, _clamp01, _shade, plane_z
 
 @njit(cache=True)
 def _fetch(textures, tex, tx, ty, shade):
-    """Colour of a texel with fog shading applied."""
+    """Color of a texel with fog shading applied."""
     return (textures[tex, ty, tx, 0] * shade, textures[tex, ty, tx, 1] * shade, textures[tex, ty, tx, 2] * shade)
 
 

@@ -29,7 +29,7 @@ def display():
 
 
 def flat_textures():
-    """Plain colours so a pixel's kind is obvious: red walls, green floors, blue ceilings."""
+    """Plain colors so a pixel's kind is obvious: red walls, green floors, blue ceilings."""
     textures = np.zeros((16, 32, 32, 4), np.uint8)
     textures[..., :3] = 120
     textures[..., 3] = 255

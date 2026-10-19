@@ -38,8 +38,8 @@ def display():
 def make_textures():
     t = np.zeros((8, 32, 32, 4), np.uint8)
     t[..., 3] = 255
-    for index, colour in {0: (200, 40, 40), 1: (40, 200, 40), 4: (120, 120, 120), 5: (60, 60, 80)}.items():
-        t[index, :, :, :3] = colour
+    for index, color in {0: (200, 40, 40), 1: (40, 200, 40), 4: (120, 120, 120), 5: (60, 60, 80)}.items():
+        t[index, :, :, :3] = color
     t[2, :, :, :3] = (30, 60, 255)                                  # the fence: bars 4 px wide every 8
     t[2, :, :, 3] = np.where(np.arange(32) % 8 < 4, 255, 0)[None, :]
     t[3, :, :, :3] = (255, 255, 255)                                # white glass
@@ -96,7 +96,7 @@ def shade(distance, side_x=True):
     return max(0.2, 1 - distance / FOG_DIST) * (1.0 if side_x else 0.7)
 
 
-def centre_row(fb, row=HEIGHT // 2):
+def center_row(fb, row=HEIGHT // 2):
     return fb[:, row, :]
 
 
@@ -141,7 +141,7 @@ def test_an_atlas_without_alpha_is_fully_opaque(tmp_path):
     assert not transparent_tiles(textures).any()
 
 
-def test_colour_only_textures_gain_an_opaque_alpha_channel():
+def test_color_only_textures_gain_an_opaque_alpha_channel():
     rgb = TEXTURES[..., :3].copy()
     rgba = ensure_rgba(rgb)
     assert rgba.shape[-1] == 4 and (rgba[..., 3] == 255).all()
@@ -226,7 +226,7 @@ def test_the_pane_blocks_from_every_side():
 
 def test_you_see_through_the_gaps_of_a_fence_and_the_bars_cover_the_rest(renderer):
     """Looking straight at a fence with a green wall far behind it: across the fence's width the
-    centre row alternates between blue bars and green wall seen through the gaps."""
+    center row alternates between blue bars and green wall seen through the gaps."""
     level = hall()
     place(level, 6, 5, FENCE)
     for y in range(2, 9):
@@ -259,7 +259,7 @@ def test_the_fence_is_not_solid_when_the_world_is_built_without_transparency(ren
 
 
 def test_glass_blends_with_what_is_behind_it(renderer):
-    """A pixel seen through white glass of alpha 128 is half the glass's colour (shaded by
+    """A pixel seen through white glass of alpha 128 is half the glass's color (shaded by
     distance) and half the picture behind it."""
     level = place(hall(), 6, 5, GLASS)
     for y in range(2, 9):
@@ -301,7 +301,7 @@ def test_nearer_glass_is_blended_over_farther_glass(renderer):
         far_only = np.floor(np.array((255, 40, 40)) * far_shade * a + none[x, y] * (1 - a))
         expected = np.floor(np.array((40, 40, 255)) * near_shade * a + far_only * (1 - a))
         assert np.all(np.abs(both[x, y] - expected) <= 3), (x, y, both[x, y], expected)
-    # and the order matters: swapping the colours gives a different picture
+    # and the order matters: swapping the colors gives a different picture
     swapped = hall()
     place(swapped, 5, 5, RED_GLASS)
     place(swapped, 7, 5, BLUE_GLASS)
@@ -357,7 +357,7 @@ def test_panes_also_work_when_seen_from_the_side(renderer):
 
 
 def test_floor_and_ceiling_textures_ignore_alpha(renderer):
-    """Only walls are see-through. A floor tile with transparent pixels is drawn with its colours."""
+    """Only walls are see-through. A floor tile with transparent pixels is drawn with its colors."""
     holey = TEXTURES.copy()
     holey[4, ::2, ::2, 3] = 0                                         # the floor tile gets holes
     level = hall()

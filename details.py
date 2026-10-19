@@ -27,7 +27,7 @@ import pygame
 
 PANE_WIDTH = 340
 ROW_H = 34
-MIN_ROW_H = 26                                  # rows shrink to this when a pane has too many for the window
+MIN_ROW_H = 22                                  # rows shrink to this when a pane has too many for the window
 TITLE_H = 34
 BUTTON_W = 28
 MENU_ITEM_H = 28
@@ -150,8 +150,8 @@ def draw(screen, rect, title, rows, theme, fonts, editing=None, hover=None, tile
     pygame.draw.line(screen, theme["grid"], rect.topleft, rect.bottomleft)
     screen.blit(font.render(title, True, theme["accent"]), (rect.x + 10, rect.y + 8))
 
-    def box(area, colour, border=False):
-        pygame.draw.rect(screen, colour, area, border_radius=4)
+    def box(area, color, border=False):
+        pygame.draw.rect(screen, color, area, border_radius=4)
         if border:
             pygame.draw.rect(screen, theme["accent"], area, 1, border_radius=4)
 

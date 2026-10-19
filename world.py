@@ -131,6 +131,14 @@ class World:
                 return True
         return False
 
+    def line_clear(self, a, b, step=0.1):
+        """True if nothing solid is between points a and b (x, y, z): every sample along the line, `step`
+        apart, is open space. Walls, glass, floors and ceilings all block it, as they block bullets."""
+        dx, dy, dz = b[0] - a[0], b[1] - a[1], b[2] - a[2]
+        steps = max(1, math.ceil(math.sqrt(dx * dx + dy * dy + dz * dz) / step))
+        return all(self.point_open(a[0] + dx * i / steps, a[1] + dy * i / steps, a[2] + dz * i / steps)
+                   for i in range(1, steps))
+
     def is_blocked(self, cx, cy):
         return not (0 <= cx < self.width and 0 <= cy < self.height) or bool(self.blocked[cy, cx])
 
@@ -154,7 +162,7 @@ class World:
         that has another floor's room overhead, and step off a ledge onto the floor below.
         While airborne (grounded False) a point belongs to the floor whose room contains the
         player's feet, preferring `current` if it does. Sticking to the floor under the player's
-        centre would be wrong over a hole in one floor: the far side of the hole would then be
+        center would be wrong over a hole in one floor: the far side of the hole would then be
         judged against the floor below, whose ceiling there is inside the slab the player is
         jumping onto, and the jump would be stopped dead."""
         cx, cy = math.floor(x), math.floor(y)

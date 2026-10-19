@@ -31,6 +31,7 @@ import time
 HOST_ID = 0
 DEFAULT_PORT = 7777
 MAX_FRAME = 1 << 20             # bytes in one message; anything bigger is a broken or hostile peer
+MAX_HOST_FRAME = 32 << 20       # the same for what a client reads from its host (the map and textures are big)
 HANDSHAKE_TIMEOUT = 5.0         # seconds a new connection has to give the right password
 CONNECT_TIMEOUT = 5.0           # seconds a client waits for the host to answer
 
@@ -46,8 +47,9 @@ def proof(salt, password):
 class Connection:
     """One socket carrying length-prefixed JSON messages, read and written without blocking."""
 
-    def __init__(self, sock):
+    def __init__(self, sock, max_frame=MAX_FRAME):
         self.sock = sock
+        self.max_frame = max_frame
         self.sock.setblocking(False)
         self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self.inbox = bytearray()
@@ -87,7 +89,7 @@ class Connection:
         messages = []
         while len(self.inbox) >= _HEADER.size:
             (size,) = _HEADER.unpack_from(self.inbox)
-            if size > MAX_FRAME:
+            if size > self.max_frame:
                 self.close("message too large")
                 break
             if len(self.inbox) < _HEADER.size + size:
@@ -257,7 +259,7 @@ class Client:
             if not writable:
                 return events
             self.connecting = False
-            self.conn = Connection(self.sock)
+            self.conn = Connection(self.sock, MAX_HOST_FRAME)
         for message in self.conn.read():
             kind = message.get("type")
             if kind == "hello" and not self.connected:

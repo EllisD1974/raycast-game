@@ -1,13 +1,13 @@
-"""Lighting, compiled with numba: point lights that colour what the renderer has drawn.
+"""Lighting, compiled with numba: point lights that color what the renderer has drawn.
 
 The scene is drawn first (raykernel.py / raypitch.py) with its distance fog and a depth picture. Lighting is
 a pass over that picture. Each pixel's place in the world is found from its depth and its ray, and every
 light near enough adds to it:
 
-    colour = colour * (ambient + light / fog_shade)
+    color = color * (ambient + light / fog_shade)
 
 `ambient` is how bright the map is without lights (1 leaves a map exactly as it was before lights existed;
-less is dark) and `light` is the sum over lights of colour * intensity * (1 - (distance / radius)^2)^2 for the
+less is dark) and `light` is the sum over lights of color * intensity * (1 - (distance / radius)^2)^2 for the
 lights that can see the spot (eased off above 1 so overlapping lights do not burn out to white). Dividing by the
 fog shade lets a light shine through the distance fog, so a lit patch far away is not dimmed by being far
 from the camera.
@@ -17,7 +17,7 @@ grid of wall cells), and a pixel reads that grid around the spot just in front o
 blending the four nearest cells so the edge of a shadow is not blocky. It is a flat map of cells: floors above
 and below a light are not told apart, only the distance (so a light reaches through a slab a little).
 
-lights is a float64 array, one row per light: x, y, z, red, green, blue (colour * intensity, 0 to about 20) and
+lights is a float64 array, one row per light: x, y, z, red, green, blue (color * intensity, 0 to about 20) and
 radius. vis is float32 [light, cell row, cell column]; occluder is uint8 [cell row, cell column], 1 where a wall
 cell stops light.
 """
@@ -56,7 +56,7 @@ def _can_see(lx, ly, tx, ty, occluder):
 
 @njit(cache=True)
 def build_visibility(lights, occluder, vis):
-    """Fill vis[i] (zeroed first) with 1 for each open map cell within light i's reach whose centre it sees."""
+    """Fill vis[i] (zeroed first) with 1 for each open map cell within light i's reach whose center it sees."""
     n = lights.shape[0]
     h, w = occluder.shape
     for i in range(n):
@@ -74,7 +74,7 @@ def build_visibility(lights, occluder, vis):
 
 @njit(cache=True, inline="always")
 def _sample_visibility(vis, occluder, i, x, y):
-    """How much of the map around (x, y) light i can see: the four nearest open cells' centres, blended."""
+    """How much of the map around (x, y) light i can see: the four nearest open cells' centers, blended."""
     h, w = occluder.shape
     u, v = x - 0.5, y - 0.5
     cx0, cy0 = int(math.floor(u)), int(math.floor(v))
@@ -151,7 +151,7 @@ def apply_lights(fb, zb, px, py, eye_z, dir_x, dir_y, pitch, focal, lights, vis,
 
 @njit(cache=True)
 def sprite_light(sp_x, sp_y, sp_z, sp_size, lights, vis, occluder, out):
-    """out[i] = the light (r, g, b) at the middle of sprite i, for draw_sprites to colour it with."""
+    """out[i] = the light (r, g, b) at the middle of sprite i, for draw_sprites to color it with."""
     for i in range(sp_x.shape[0]):
         r, g, b = _light_at(lights, vis, occluder, sp_x[i], sp_y[i], sp_z[i] + sp_size[i] * 0.5, sp_x[i], sp_y[i])
         out[i, 0], out[i, 1], out[i, 2] = r, g, b

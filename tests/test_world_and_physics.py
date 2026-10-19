@@ -575,7 +575,7 @@ def test_a_player_hanging_half_over_the_ledge_stays_up_until_fully_off_it():
     for _ in range(40):
         physics.step(world, player, 1.0, 0.0, 0.0, False, 1 / 60)
         if player.y > 2.0 and player.z == pytest.approx(1.75, abs=1e-6):
-            seen_held = True                                     # centre is over the slot, body still on the ledge
+            seen_held = True                                     # center is over the slot, body still on the ledge
             assert player.y < 2.0 + 0.2 + 0.01                   # ... but never further than the half-width of the box
     assert seen_held and player.z < 1.75                         # and it did fall once fully off
 
