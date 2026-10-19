@@ -55,6 +55,14 @@ class LocalSession:
         self.animate(dt, self.game.take_fx(), self.game.take_flashes())
         return events
 
+    def reload(self, level, world, character_tile=None, atlas_png=None):
+        """Carry on in a new map (see Game.load_level). `atlas_png` is the textures it is drawn with, if they
+        changed: a host passes them on to its joiners."""
+        self.game.load_level(level, world, character_tile)
+        self.world = world
+        self.particles = ParticleSystem(level.effects, world)
+        self.lights = LightSystem(level, world)
+
     def animate(self, dt, effects, flashes=()):
         """Move the particles and lights on: play the effects and flashes just fired, attach trails and lights
         to the bullets and emitters and lights to the items that have them, and age everything."""
@@ -146,6 +154,16 @@ class HostSession(LocalSession):
             self.send_snapshots()
         return events
 
+    def reload(self, level, world, character_tile=None, atlas_png=None):
+        """Carry on in a new map and send it (with the textures, if they changed) to every joiner, who
+        switch to it between two snapshots."""
+        super().reload(level, world, character_tile, atlas_png)
+        self.level_text = level_text(level)
+        if atlas_png:
+            self.atlas = base64.b64encode(atlas_png).decode()
+        self.fx_out, self.flashes_out = [], []
+        self.host.broadcast({"type": "reload", "level": self.level_text, "atlas": self.atlas})
+
     def backlog(self):
         """Seconds of joiner steps waiting their turn, for the worst joiner (0 when keeping up)."""
         return max((sum(step[2] for step in queue) for queue in self.queue.values()), default=0.0)
@@ -209,6 +227,7 @@ class ClientSession:
         self.use_atlas = use_atlas
         self.character_tile = character_tile
         self.id = None
+        self.loads = 0                          # maps loaded so far: the first, then one for each reload
         self.level = self.world = self.items = None
         self.me = PlayerState(Player(0.0, 0.0, 0.0))
         self.pending = []                       # (seq, Inputs, dt) sent and not yet carried out by the host
@@ -275,20 +294,30 @@ class ClientSession:
         kind = message.get("type")
         if kind == "welcome":
             self.id = message.get("id")
-            try:
-                self.level = parse_level(json.loads(message["level"]), "the host's map")
-                if self.use_atlas and message.get("atlas"):
-                    self.character_tile = self.use_atlas(base64.b64decode(message["atlas"]))
-                self.world = self.make_world(self.level)
-            except (ValueError, KeyError, TypeError) as e:      # a broken map or picture from the host
-                self.ended = f"the host sent a game that cannot be loaded ({e})"
-                self.level = None
-                return
-            self.items = Entities(self.level, self.world)
-            self.particles = ParticleSystem(self.level.effects, self.world)
-            self.lights = LightSystem(self.level, self.world)
+            self.load(message)
+        elif kind == "reload" and self.level is not None:
+            self.load(message)
         elif kind == "state" and self.level is not None:
             self.apply_snapshot(message)
+
+    def load(self, message):
+        """Switch to the map (and textures) in a welcome or reload message. A reload drops what we knew
+        about the old game: the others' positions, the bullets and the clock."""
+        try:
+            level = parse_level(json.loads(message["level"]), "the host's map")
+            if self.use_atlas and message.get("atlas"):
+                self.character_tile = self.use_atlas(base64.b64decode(message["atlas"]))
+            world = self.make_world(level)
+        except (ValueError, KeyError, TypeError) as e:      # a broken map or picture from the host
+            self.ended = f"the host sent a game that cannot be loaded ({e})"
+            return
+        self.level, self.world = level, world
+        self.items = Entities(level, world)
+        self.particles = ParticleSystem(level.effects, world)
+        self.lights = LightSystem(level, world)
+        self.loads += 1
+        self.history, self.bullets, self.game_time = {}, [], None
+        self.ready = False                      # until the first snapshot of the new map
 
     def apply_snapshot(self, message):
         players = {int(pid): fields for pid, fields in message["players"].items()}

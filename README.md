@@ -63,8 +63,13 @@ milliseconds to a frame. Like particles, lights are only for looks and are worke
 
 One player hosts with a password and the others join with it. The host runs the game and sends its map
 (guns, items, effects, lights and all) and its `textures.png` to every joiner as they join, so joiners need
-no map or textures of their own, only the same code. To publish an update, change the map or textures on
-the host and restart the host; joiners get the new version when they join again.
+no map or textures of their own, only the same code.
+
+To publish an update, save the map (from the editor) or `textures.png` on the host's machine. The host
+notices within a second, loads them and sends them to everyone playing, who switch over without
+rejoining. A reload starts everyone over at the map's start with full health and no guns (scores are
+kept), because the new map may not have the old guns. A map or picture that cannot be read is reported on
+screen and the game carries on with the old one. This works when playing alone too.
 
     uv run python main.py --host SECRET                      # host (listens on 0.0.0.0:7777)
     uv run python main.py --join 127.0.0.1 SECRET            # join (use the host's address)

@@ -33,6 +33,7 @@ from mapfile import MAP_PATH, load_or_default
 from physics import look
 from renderer import BACKGROUND, Renderer, fit_rect  # noqa: F401  (re-exported: main.Renderer etc.)
 from session import ClientSession, HostSession, LocalSession
+from watch import FileWatcher
 from window import maximize
 from world import World
 
@@ -175,6 +176,16 @@ def join(address, password, port, graphics):
     return session
 
 
+def reload_game(session, graphics, map_path):
+    """Read the map and textures again and carry on in them (a host tells its joiners). Raises if either
+    cannot be read, leaving the game as it was."""
+    level = load_or_default(map_path)
+    with open(ATLAS_PATH, "rb") as f:
+        png = f.read()
+    graphics.load(png)
+    session.reload(level, graphics.make_world(level), graphics.character_tile, png)
+
+
 def main():
     pygame.init()
     # A normal resizable window: the picture is scaled onto it by present(), not by pygame, so
@@ -189,6 +200,7 @@ def main():
     elif not joining:                                       # a joiner is sent the host's textures
         sys.exit("textures.png not found - run `python make_atlas.py` first")
     port = int((arg_values("--port", 1) or [net.DEFAULT_PORT])[0])
+    watcher = None                                          # a joiner is sent new maps by its host instead
     if joining:
         address, password = arg_values("--join", 2)
         session = join(address, password, port, graphics)
@@ -209,7 +221,8 @@ def main():
             print(f"Hosting on {bind}:{host.port}; others join with --join <your address> <password>")
         else:
             session = LocalSession(game)
-    kick = 0.0                                    # 1 right after a shot, fading to 0 (the gun's recoil)
+        watcher = FileWatcher([map_path, ATLAS_PATH])       # a saved map or texture change is picked up live
+    kick = 0.0                                   # 1 right after a shot, fading to 0 (the gun's recoil)
     font = pygame.font.Font(None, 22)
     message, message_left = "", 0.0
 
@@ -234,6 +247,7 @@ def main():
     print("Compiling the renderer (first run only; later runs use the cache)...")
     jump_pressed = reload_pressed = False
     equips, cycle = [], 0
+    loads = getattr(session, "loads", 0)
     running = True
     while running:
         elapsed = clock.tick(FPS_CAP) / 1000
@@ -262,7 +276,16 @@ def main():
                       mouse.captured and pygame.mouse.get_pressed()[0], reload_pressed, tuple(equips), cycle)
         jump_pressed = reload_pressed = False
         equips, cycle = [], 0
+        if watcher and watcher.changed():
+            try:
+                reload_game(session, graphics, map_path)
+                message, message_left = "Map reloaded", 2.0
+            except (OSError, ValueError, KeyError, TypeError, pygame.error) as e:   # keep playing the old map
+                print(f"Reload failed: {e}")
+                message, message_left = f"Reload failed: {e}"[:80], 4.0
         happened = session.step(wish, dt, elapsed)
+        if getattr(session, "loads", 0) > loads:            # (a joiner) the host switched to a new map
+            loads, message, message_left = session.loads, "The host loaded a new map", 2.0
         if session.ended:
             print(f"Game over: {session.ended}")
             running = False

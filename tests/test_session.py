@@ -104,6 +104,68 @@ def test_a_joiner_that_cannot_use_the_hosts_textures_gives_up(tmp_path):
     assert "cannot be loaded" in client.ended and not client.ready
 
 
+def new_level(width, height, *entities):
+    level = Level.blank(width, height)
+    level.entities = list(entities)
+    return level
+
+
+def test_a_reload_puts_the_host_and_every_joiner_in_the_new_map(host_session):
+    client = join(host_session)
+    host_session.me.stats.score = 7
+    level = new_level(20, 9, Entity(5.5, 5.5))
+    host_session.reload(level, make_world(level))
+    run([host_session, client], until=lambda: client.level.width == 20 and client.ready)
+    assert (host_session.game.level.width, host_session.world.width) == (20, 20)
+    assert client.loads == 2 and len(client.items.items) == 1
+    assert client.world.width == 20
+    assert host_session.me.stats.score == 7                 # the score stays
+    assert client.me.body.x == pytest.approx(host_session.game.players[1].body.x)
+    run([host_session, client], until=lambda: host_session.game.players[1].body.x > 3.0,
+        inputs={client: Inputs(forward=1)})                # still playing together afterwards
+
+
+def test_a_joiner_waits_for_a_snapshot_of_the_new_map(host_session):
+    client = join(host_session)
+    level = new_level(20, 9)
+    host_session.reload(level, make_world(level))
+    run([client], until=lambda: client.loads == 2)          # (the host is not stepped: no snapshot yet)
+    assert not client.ready
+    run([host_session, client], until=lambda: client.ready)
+
+
+def test_a_reload_sends_new_textures_to_joiners(tmp_path):
+    pygame.display.set_mode((1, 1))
+    atlas = pygame.Surface((96, 32), pygame.SRCALPHA)
+    path = tmp_path / "textures.png"
+    pygame.image.save(atlas, str(path))
+    host = HostSession(new_game(), net.Host("pw", port=0), b"first")
+    received = []
+    client = ClientSession(net.Client("127.0.0.1", host.host.port, "pw"), make_world, FIRST_CHARACTER,
+                           lambda png: received.append(png) or 5)
+    try:
+        run([host, client], until=lambda: client.ready or client.ended)
+        level = new_level(12, 12)
+        host.reload(level, make_world(level), 7, path.read_bytes())
+        run([host, client], until=lambda: client.loads == 2)
+    finally:
+        host.close()
+    assert received == [b"first", path.read_bytes()] and client.character_tile == 5
+
+
+def test_a_game_reloaded_starts_everyone_over_at_the_new_start():
+    game = new_game(Entity(2.5, 2.5, effect="score", amount=5, mode="once"))
+    state = game.add_player(3)
+    state.stats.score = 9
+    state.stats.health = 10
+    level = new_level(8, 8)
+    level.start_x, level.start_y = 6.5, 6.5
+    game.load_level(level, make_world(level), 20)
+    assert (state.body.x, state.body.y) == (6.5, 6.5)
+    assert (state.stats.score, state.stats.health) == (9, state.stats.max_health)
+    assert game.items.items == [] and game.character_tile == 20 and game.world.width == 8
+
+
 def test_a_wrong_password_never_joins(host_session):
     client = join(host_session, "wrong")
     assert client.ended == "wrong password" and not client.ready

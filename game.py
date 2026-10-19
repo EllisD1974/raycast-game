@@ -112,6 +112,21 @@ class Game:
         self.fx = []                # particle effects to play, (name, x, y, z, dx, dy, dz[, ox, oy, oz]), until take_fx()
         self.flashes = []           # lights to flash, (name, x, y, z), until take_flashes()
 
+    def load_level(self, level, world, character_tile=None):
+        """Swap in a new map while the game runs. Everything in flight is dropped and every player is back at
+        the new start with full health and only what a new player carries (their score stays): the old
+        inventories name guns and ammo the new map may no longer have."""
+        self.level, self.world = level, world
+        if character_tile is not None:
+            self.character_tile = character_tile
+        self.items = Entities(level, world)
+        self.projectiles.bullets = []
+        self.fx, self.flashes = [], []
+        for state in self.players.values():             # in place: sessions hold on to these PlayerStates
+            state.body = spawn(level, world)
+            state.stats = PlayerStats(score=state.stats.score)
+            state.inventory = Inventory()
+
     def add_player(self, player_id):
         """Put a new player at the level's start."""
         state = PlayerState(spawn(self.level, self.world))
