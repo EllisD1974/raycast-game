@@ -350,6 +350,46 @@ def test_sprites_are_lit_too_and_glowing_ones_stay_bright_in_the_dark():
     assert max(glowing) >= 150                                                      # as bright as its own picture
 
 
+@pytest.mark.parametrize("pitch", [0.0, 0.4])
+def test_light_worked_out_at_every_other_pixel_matches_lighting_every_pixel(pitch):
+    """apply_lights works light out at only some pixels and blends between them; the picture must still be what
+    lighting each pixel on its own gives, including along the edges of walls in front of others."""
+    import math
+    from constants import FOG_DIST, HEIGHT
+    from raykernel import _shade
+    from raylight import _pixel_light, apply_lights
+    level = room(lights=[Light("Torch", intensity=3.0, radius=6.0)], ambient=0.3,
+                 walls=[(5, y, 2) for y in range(2, 5)] + [(8, y, 2) for y in range(5, 9)])
+    world = World(level, 16)
+    player = spawn(level, world)
+    player.x, player.y, player.angle, player.pitch = 2.5, 5.0, 0.2, pitch
+    torch = LightSystem(level, world)
+    torch.attach("t", "Torch", 4.5, 5.5, 0.5)
+    lighting = torch.prepare((player.x, player.y, player.eye_z))
+    renderer = Renderer(textures())
+    renderer.draw(world, player)                                # the unlit picture and its depths
+    fb, zb = renderer.framebuffer.copy(), renderer.depth
+    unlit = fb.astype(float)
+    dir_x, dir_y = math.cos(player.angle), math.sin(player.angle)
+    apply_lights(fb, zb, player.x, player.y, player.eye_z, dir_x, dir_y, pitch, HEIGHT / 2, renderer.focal,
+                 lighting.lights, lighting.vis, lighting.occluder, lighting.ambient, FOG_DIST)
+    cp, sp = math.cos(pitch), math.sin(pitch)
+    camera = (dir_x * cp, dir_y * cp, sp, -dir_y, dir_x, -dir_x * sp, -dir_y * sp, cp)
+    rng = np.random.default_rng(1)
+    worst, brightened, off = 0, 0, 0
+    for x, y in zip(rng.integers(0, fb.shape[0], 4000), rng.integers(0, fb.shape[1], 4000)):
+        depth = float(zb[x, y])
+        light = _pixel_light(x, y, depth, player.x, player.y, player.eye_z, *camera, HEIGHT / 2, renderer.focal,
+                             fb.shape[0], lighting.lights, lighting.vis, lighting.occluder)
+        factor = lighting.ambient + np.array(light) / _shade(depth, FOG_DIST)
+        want = np.minimum(255.0, unlit[x, y] * factor).astype(np.uint8).astype(int)
+        miss = int(np.abs(fb[x, y].astype(int) - want).max())
+        worst, off = max(worst, miss), off + (miss > 3)
+        brightened += factor.max() > lighting.ambient + 0.2
+    assert brightened > 400                                     # (the torch lights a good part of the picture)
+    assert worst <= 10 and off < 40                             # (a shadow's edge on a floor blurs a little)
+
+
 # ------------------------------------------------------------------ guns, bullets, items and the network
 
 def effect_level(*entities, guns=(), ammo=(), effects=(), lights=(), ambient=1.0):

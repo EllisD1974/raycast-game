@@ -14,8 +14,9 @@ rows and never fight over pixels. A column ends when it has no branches left or 
 too long. Floors/ceilings are planes (flat or sloped); 1/distance is linear in screen y
 across a plane, which gives perspective-correct texturing without per-pixel ray casting.
 
-This is the renderer for a level view. A camera tilted up or down is drawn by raypitch.py instead
-(one real 3D ray per pixel), because the column approach can only fake tilting by shifting the picture.
+This is the renderer for a level view, and for one tilted only a little (renderer.SHEAR_PITCH), where moving
+the horizon up or down the screen looks the same as tilting. A camera tilted further is drawn by raypitch.py
+instead (one real 3D ray per pixel), because the column approach can only fake tilting by shifting the picture.
 
 Transparent walls (fences, windows, glass) are cells the ray passes straight through. Each face the
 ray passes is remembered, and after the column is drawn the faces are blended over it, farthest
@@ -343,13 +344,13 @@ def render_scene(fb, px, py, eye_z, eye_span, dir_x, dir_y, plane_x, plane_y, ho
 
 
 @njit(cache=True, parallel=True)
-def draw_sprites(fb, zb, px, py, eye_z, dir_x, dir_y, pitch, focal,
+def draw_sprites(fb, zb, px, py, eye_z, dir_x, dir_y, pitch, horizon, focal,
                  sp_x, sp_y, sp_z, sp_size, sp_tex, sp_spin, sp_alpha, sp_lit, sp_glow, sp_color, ambient, textures, max_dist,
                  fog_dist):
     """Draw flat sprites that always face the camera, over a picture already drawn by
     render_scene_depth (or raypitch.render_scene_pitch). The camera looks along (dir_x, dir_y),
-    tilted up by `pitch` radians. The sprites must be sorted farthest first. sp_z is the height of a
-    sprite's bottom, sp_size its height and width in world units. A sprite pixel shows only where it
+    tilted up by `pitch` radians, with the middle of its view at screen row `horizon` (see
+    raylight.apply_lights). The sprites must be sorted farthest first. sp_z is the height of a sprite's bottom, sp_size its height and width in world units. A sprite pixel shows only where it
     is nearer than what is already there (zb), so walls, ledges and floors hide it; texture alpha
     blends it (0 is see-through, 255 opaque). sp_spin is an angle in radians: the sprite turns around
     its vertical axis, so it narrows to a sliver edge-on and shows mirrored once it has turned its back.
@@ -362,34 +363,51 @@ def draw_sprites(fb, zb, px, py, eye_z, dir_x, dir_y, pitch, focal,
     tsize = textures.shape[1]
     cp, sp = math.cos(pitch), math.sin(pitch)
     n = sp_x.shape[0]
+    # Where each sprite lands on the screen, worked out once: the columns it covers (col0 up to col1), its
+    # left edge and width, its top and bottom rows, and how brightly it is drawn.
+    col0 = np.zeros(n, np.int64)
+    col1 = np.zeros(n, np.int64)                             # col1 <= col0: not drawn
+    left = np.empty(n, np.float64)
+    across_width = np.empty(n, np.float64)
+    behind = np.empty(n, np.bool_)
+    tops = np.empty(n, np.float64)
+    bottoms = np.empty(n, np.float64)
+    depths = np.empty(n, np.float64)
+    lit = np.empty((n, 3), np.float64)
+    for i in prange(n):
+        dx, dy = sp_x[i] - px, sp_y[i] - py
+        ahead = dx * dir_x + dy * dir_y                      # distance along the view direction on the map
+        right = -dx * dir_y + dy * dir_x
+        dz_mid = sp_z[i] + sp_size[i] * 0.5 - eye_z
+        depth = ahead * cp + dz_mid * sp                     # distance along the camera's axis
+        if depth < 0.05 or depth > max_dist:
+            continue
+        center = width * 0.5 + right / depth * focal
+        turn = math.cos(sp_spin[i])
+        half = sp_size[i] * focal / depth * 0.5 * max(abs(turn), 0.03)
+        dz_top = sp_z[i] + sp_size[i] - eye_z
+        dz_bot = sp_z[i] - eye_z
+        ytop = horizon - (dz_top * cp - ahead * sp) / max(ahead * cp + dz_top * sp, 0.05) * focal
+        ybot = horizon - (dz_bot * cp - ahead * sp) / max(ahead * cp + dz_bot * sp, 0.05) * focal
+        if ybot <= ytop:
+            continue
+        # columns x with center - half <= x + 0.5 < center + half
+        col0[i] = int(math.ceil(max(-1.0, min(width + 1.0, center - half - 0.5))))
+        col1[i] = int(math.ceil(max(-1.0, min(width + 1.0, center + half - 0.5))))
+        left[i], across_width[i], behind[i] = center - half, 2.0 * half, turn < 0.0
+        tops[i], bottoms[i], depths[i] = ytop, ybot, depth
+        shade = _shade(depth, fog_dist)
+        for c in range(3):
+            lit[i, c] = max(shade * ambient + sp_lit[i, c], sp_glow[i])
     for x in prange(width):
         for i in range(n):
-            dx, dy = sp_x[i] - px, sp_y[i] - py
-            ahead = dx * dir_x + dy * dir_y                      # distance along the view direction on the map
-            right = -dx * dir_y + dy * dir_x
-            dz_mid = sp_z[i] + sp_size[i] * 0.5 - eye_z
-            depth = ahead * cp + dz_mid * sp                     # distance along the camera's axis
-            if depth < 0.05 or depth > max_dist:
+            if x < col0[i] or x >= col1[i]:
                 continue
-            center = width * 0.5 + right / depth * focal
-            turn = math.cos(sp_spin[i])
-            half = sp_size[i] * focal / depth * 0.5 * max(abs(turn), 0.03)
-            if x + 0.5 < center - half or x + 0.5 >= center + half:
-                continue
-            across = (x + 0.5 - (center - half)) / (2.0 * half)
-            if turn < 0.0:
+            across = (x + 0.5 - left[i]) / across_width[i]
+            if behind[i]:
                 across = 1.0 - across                            # seen from behind
             tx = min(tsize - 1, int(across * tsize))
-            dz_top = sp_z[i] + sp_size[i] - eye_z
-            dz_bot = sp_z[i] - eye_z
-            ytop = height * 0.5 - (dz_top * cp - ahead * sp) / max(ahead * cp + dz_top * sp, 0.05) * focal
-            ybot = height * 0.5 - (dz_bot * cp - ahead * sp) / max(ahead * cp + dz_bot * sp, 0.05) * focal
-            if ybot <= ytop:
-                continue
-            shade = _shade(depth, fog_dist)
-            lit_r = max(shade * ambient + sp_lit[i, 0], sp_glow[i])
-            lit_g = max(shade * ambient + sp_lit[i, 1], sp_glow[i])
-            lit_b = max(shade * ambient + sp_lit[i, 2], sp_glow[i])
+            ytop, ybot, depth = tops[i], bottoms[i], depths[i]
             for r in range(max(0, int(math.ceil(ytop))), min(height, int(math.ceil(ybot)))):
                 if depth >= zb[x, r]:
                     continue
@@ -403,6 +421,6 @@ def draw_sprites(fb, zb, px, py, eye_z, dir_x, dir_y, pitch, focal,
                 cr = min(255.0, max(0.0, sp_color[i, 0, 0] * tr + sp_color[i, 0, 1] * tg + sp_color[i, 0, 2] * tb))
                 cg = min(255.0, max(0.0, sp_color[i, 1, 0] * tr + sp_color[i, 1, 1] * tg + sp_color[i, 1, 2] * tb))
                 cb = min(255.0, max(0.0, sp_color[i, 2, 0] * tr + sp_color[i, 2, 1] * tg + sp_color[i, 2, 2] * tb))
-                fb[x, r, 0] = np.uint8(min(255.0, cr * lit_r) * a + fb[x, r, 0] * (1.0 - a))
-                fb[x, r, 1] = np.uint8(min(255.0, cg * lit_g) * a + fb[x, r, 1] * (1.0 - a))
-                fb[x, r, 2] = np.uint8(min(255.0, cb * lit_b) * a + fb[x, r, 2] * (1.0 - a))
+                fb[x, r, 0] = np.uint8(min(255.0, cr * lit[i, 0]) * a + fb[x, r, 0] * (1.0 - a))
+                fb[x, r, 1] = np.uint8(min(255.0, cg * lit[i, 1]) * a + fb[x, r, 1] * (1.0 - a))
+                fb[x, r, 2] = np.uint8(min(255.0, cb * lit[i, 2]) * a + fb[x, r, 2] * (1.0 - a))

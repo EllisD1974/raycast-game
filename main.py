@@ -20,8 +20,10 @@ import math
 import os
 import sys
 import time
+import warnings
 
 import pygame
+from pygame._sdl2 import sdl2, video
 
 import net
 from atlas import ATLAS_PATH, atlas_array, transparent_tiles, unpack_atlas
@@ -44,13 +46,23 @@ CROSSHAIR_OUTLINE = (0, 0, 0)
 
 # ------------------------------------------------------------------ putting the picture on the window
 
+def crosshair_bars(center, arm, thickness):
+    """The two bars of a + centerd on `center`. `arm` is how far each reaches from the center, in pixels."""
+    cx, cy = center
+    half = thickness // 2
+    return (pygame.Rect(cx - arm, cy - half, 2 * arm + 1, thickness),       # horizontal
+            pygame.Rect(cx - half, cy - arm, thickness, 2 * arm + 1))       # vertical
+
+
+def crosshair_size(rect):
+    """(arm, thickness) of the crosshair over a picture shown in `rect`: thin however big the window is."""
+    return max(6, rect.height // 60), max(1, rect.height // 450)
+
+
 def draw_crosshair(surface, center, arm, thickness):
     """A thin + centerd on `center`: white with a one pixel dark outline so it shows on any
     background. `arm` is how far each bar reaches from the center, in pixels."""
-    cx, cy = center
-    half = thickness // 2
-    bars = (pygame.Rect(cx - arm, cy - half, 2 * arm + 1, thickness),       # horizontal
-            pygame.Rect(cx - half, cy - arm, thickness, 2 * arm + 1))       # vertical
+    bars = crosshair_bars(center, arm, thickness)
     for bar in bars:
         pygame.draw.rect(surface, CROSSHAIR_OUTLINE, bar.inflate(2, 2))
     for bar in bars:
@@ -63,7 +75,63 @@ def present(screen, frame):
     screen.fill((0, 0, 0))
     rect = fit_rect(screen.get_size())
     pygame.transform.scale(frame, rect.size, screen.subsurface(rect))
-    draw_crosshair(screen, rect.center, max(6, rect.height // 60), max(1, rect.height // 450))
+    draw_crosshair(screen, rect.center, *crosshair_size(rect))
+
+
+class Screen:
+    """The game's window, and putting each picture on it.
+
+    The picture is handed to the graphics card, which stretches it to the window (keeping its aspect ratio,
+    black bars around it) and draws the crosshair over it at the window's resolution. Where no GPU renderer
+    can be made (some drivers, some remote desktops), the window's own surface is used instead and
+    present() scales the picture on the CPU, which looks the same but is slower in a big window."""
+
+    def __init__(self, title, size):
+        self.window = pygame.Window(title, size, resizable=True)
+        self.fullscreen = False
+        self.gpu = self.texture = None
+        try:                                        # (the graphics card's renderer if there is one)
+            self.gpu = video.Renderer(self.window)
+            self.texture = video.Texture(self.gpu, (WIDTH, HEIGHT), streaming=True)
+        except (pygame.error, sdl2.error):
+            self.gpu = self.texture = None
+
+    @property
+    def title(self):
+        return self.window.title
+
+    @title.setter
+    def title(self, text):
+        if text != self.window.title:
+            self.window.title = text
+
+    def toggle_fullscreen(self):
+        """Fill the whole screen, or go back to a window."""
+        self.fullscreen = not self.fullscreen
+        if self.fullscreen:
+            self.window.set_fullscreen(desktop=True)
+        else:
+            self.window.set_windowed()
+
+    def show(self, frame):
+        """Put `frame` (a WIDTH x HEIGHT surface) on the window, with the crosshair."""
+        if self.gpu is None:
+            present(self.window.get_surface(), frame)
+            self.window.flip()
+            return
+        rect = fit_rect(self.window.size)
+        self.texture.update(frame)
+        self.gpu.draw_color = (0, 0, 0, 255)
+        self.gpu.clear()
+        self.texture.draw(dstrect=rect)
+        bars = crosshair_bars(rect.center, *crosshair_size(rect))
+        self.gpu.draw_color = (*CROSSHAIR_OUTLINE, 255)
+        for bar in bars:
+            self.gpu.fill_rect(bar.inflate(2, 2))
+        self.gpu.draw_color = (*CROSSHAIR, 255)
+        for bar in bars:
+            self.gpu.fill_rect(bar)
+        self.gpu.present()
 
 
 # ------------------------------------------------------------------ input
@@ -73,19 +141,27 @@ class MouseLook:
 
     While captured the cursor is hidden and held in the window, and movement is reported without
     limit (so you can keep turning). Mouse movement is in screen pixels, so how far the view turns
-    for a given hand movement does not depend on the window size."""
+    for a given hand movement does not depend on the window size.
 
-    def __init__(self):
+    `window` is the pygame.Window to hold the mouse in; without one it is the window pygame.display opened."""
+
+    def __init__(self, window=None):
+        self.window = window
         self.captured = False
         self.dx = 0
         self.dy = 0
 
     def set_captured(self, captured):
         self.captured = captured
-        pygame.event.set_grab(captured)
+        if self.window is not None:
+            self.window.grab_mouse = captured
+        else:
+            pygame.event.set_grab(captured)
         pygame.mouse.set_visible(not captured)
         try:
-            pygame.mouse.set_relative_mode(captured)
+            with warnings.catch_warnings():         # (pygame warns about relative mode without display.set_mode,
+                warnings.simplefilter("ignore", DeprecationWarning)     # but it works with a pygame.Window)
+                pygame.mouse.set_relative_mode(captured)
         except pygame.error:                        # some drivers have no relative mouse mode
             pass
         pygame.mouse.get_rel()                      # forget movement from before the change
@@ -188,10 +264,9 @@ def reload_game(session, graphics, map_path):
 
 def main():
     pygame.init()
-    # A normal resizable window: the picture is scaled onto it by present(), not by pygame, so
-    # mouse movement arrives in plain screen pixels.
-    screen = pygame.display.set_mode((WIDTH * 2, HEIGHT * 2), pygame.RESIZABLE)
-    pygame.display.set_caption("simple raycaster")
+    # A normal resizable window: the picture is scaled onto it by Screen (on the graphics card), not by
+    # pygame.display, so mouse movement arrives in plain screen pixels.
+    screen = Screen("simple raycaster", (WIDTH * 2, HEIGHT * 2))
     clock = pygame.time.Clock()
     graphics = Graphics()
     joining = bool(arg_values("--join", 2))
@@ -241,8 +316,8 @@ def main():
         pygame.image.save(graphics.renderer.draw(world, player, session.game.items.sprites(), session.lighting()), arg_values("--snapshot", 1)[0])
         return
 
-    maximize()                       # the game opens maximized; the picture scales to fit
-    mouse = MouseLook()
+    maximize(screen.window)          # the game opens maximized; the picture scales to fit
+    mouse = MouseLook(screen.window)
     mouse.set_captured(True)
     print("Compiling the renderer (first run only; later runs use the cache)...")
     jump_pressed = reload_pressed = False
@@ -253,10 +328,11 @@ def main():
         elapsed = clock.tick(FPS_CAP) / 1000
         dt = min(elapsed, 0.05)
         for event in pygame.event.get():
-            if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
+            if (event.type in (pygame.QUIT, pygame.WINDOWCLOSE)
+                    or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE)):
                 running = False
             elif event.type == pygame.KEYDOWN and event.key == pygame.K_F11:
-                pygame.display.toggle_fullscreen()
+                screen.toggle_fullscreen()
             elif event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
                 jump_pressed = True
             elif event.type == pygame.KEYDOWN and event.key == pygame.K_TAB:
@@ -299,9 +375,8 @@ def main():
         me = session.me
         picture = graphics.renderer.draw(session.world, me.body, session.sprites(), session.lighting())
         draw_hud(picture, font, me.stats, message if message_left > 0 else "", me.inventory, graphics.tiles, kick)
-        present(pygame.display.get_surface(), picture)
-        pygame.display.set_caption(f"simple raycaster - {clock.get_fps():.0f} fps{session.status()}")
-        pygame.display.flip()
+        screen.show(picture)
+        screen.title = f"simple raycaster - {clock.get_fps():.0f} fps{session.status()}"
     mouse.set_captured(False)
     session.close()
     pygame.quit()

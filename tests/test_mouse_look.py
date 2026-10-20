@@ -279,3 +279,77 @@ def test_the_crosshair_is_not_part_of_the_rendered_view(renderer):
     cx, cy = WIDTH // 2, HEIGHT // 2
     assert tuple(frame[cx, cy]) != main.CROSSHAIR or tuple(frame[cx + 6, cy]) != main.CROSSHAIR
     assert surface.get_size() == (WIDTH, HEIGHT)
+
+
+# ------------------------------------------------------------------ the game window
+
+def red_frame():
+    frame = pygame.Surface((WIDTH, HEIGHT))
+    frame.fill((200, 40, 40))
+    return frame
+
+
+def white_pixels(surface):
+    return {(x, y) for x in range(surface.get_width()) for y in range(surface.get_height())
+            if surface.get_at((x, y))[:3] == main.CROSSHAIR}
+
+
+def test_the_screen_shows_the_picture_fitted_with_the_crosshair_through_its_renderer():
+    size = (1000, 1000)
+    screen = main.Screen("test", size)
+    try:
+        assert screen.gpu is not None
+        screen.show(red_frame())
+        shown = screen.gpu.to_surface()
+        rect = main.fit_rect(size)
+        assert shown.get_at((rect.left + 2, rect.top + 2))[:3] == (200, 40, 40)
+        assert shown.get_at((rect.right - 3, rect.bottom - 3))[:3] == (200, 40, 40)
+        assert shown.get_at((5, 5))[:3] == (0, 0, 0)            # letterbox bars
+        assert shown.get_at((5, size[1] - 5))[:3] == (0, 0, 0)
+        cpu = pygame.Surface(size)
+        main.present(cpu, red_frame())
+        assert white_pixels(shown) == white_pixels(cpu)         # the same crosshair as the CPU way draws
+    finally:
+        screen.window.destroy()
+
+
+def test_without_a_renderer_the_screen_scales_the_picture_itself(monkeypatch):
+    def no_renderer(*args, **kwargs):
+        raise main.sdl2.error("Couldn't find matching render driver")
+    monkeypatch.setattr(main.video, "Renderer", no_renderer)
+    size = (1000, 1000)
+    screen = main.Screen("test", size)
+    try:
+        assert screen.gpu is None
+        screen.show(red_frame())
+        shown = screen.window.get_surface()
+        rect = main.fit_rect(size)
+        assert shown.get_at((rect.left + 2, rect.top + 2))[:3] == (200, 40, 40)
+        assert shown.get_at(rect.center)[:3] == main.CROSSHAIR
+    finally:
+        screen.window.destroy()
+
+
+def test_f11_fills_the_screen_and_back_and_the_title_shows_what_it_is_given():
+    screen = main.Screen("test", (800, 450))
+    try:
+        screen.toggle_fullscreen()
+        assert screen.fullscreen
+        screen.toggle_fullscreen()
+        assert not screen.fullscreen and screen.window.size == (800, 450)
+        screen.title = "simple raycaster - 120 fps"
+        assert screen.window.title == screen.title == "simple raycaster - 120 fps"
+    finally:
+        screen.window.destroy()
+
+
+def test_the_mouse_is_held_in_the_game_window_while_captured():
+    screen = main.Screen("test", (800, 450))
+    try:
+        look = main.MouseLook(screen.window)
+        look.set_captured(True)
+        assert screen.window.grab_mouse and not pygame.mouse.get_visible()
+        look.set_captured(False)
+        assert not screen.window.grab_mouse and pygame.mouse.get_visible()
+    finally:
+        screen.window.destroy()
