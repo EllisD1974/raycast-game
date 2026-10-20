@@ -81,6 +81,45 @@ def test_a_tiny_tilt_looks_the_same_as_the_level_view():
         assert np.abs(level_fb - tilted_fb).mean() < 4.0
 
 
+def test_a_small_tilt_is_drawn_sheared_and_looks_like_the_rotated_view(monkeypatch):
+    """Below SHEAR_PITCH the fast column renderer draws the view with its horizon moved up or down; that
+    near level looks the same as the real rotation it stands in for."""
+    import renderer as renderer_module
+    from atlas import atlas_array, unpack_atlas
+    renderer = Renderer(atlas_array(unpack_atlas()))
+    world = World(load_level(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                          "maps", "map.json")), 256)
+    for x, y, angle in ((1.5, 4.5, 0.0), (5.5, 5.5, 2.0), (3.5, 7.5, -1.0)):
+        for pitch in (renderer_module.SHEAR_PITCH * 0.95, -renderer_module.SHEAR_PITCH * 0.95):
+            sheared, _ = frame(world, pitch, x, y, angle, renderer)
+            with monkeypatch.context() as m:
+                m.setattr(renderer_module, "SHEAR_PITCH", 0.0)          # every tilt rotated
+                rotated, _ = frame(world, pitch, x, y, angle, renderer)
+            close = (np.abs(sheared - rotated) <= 24).all(axis=2)
+            assert close.mean() > 0.9, f"{close.mean():.3f} of the pixels agree at ({x}, {y}, {pitch:.3f})"
+            assert np.abs(sheared - rotated).mean() < 6.0
+
+
+def test_in_a_sheared_view_walls_and_sprites_land_where_the_moved_horizon_puts_them():
+    textures = flat_textures()
+    textures[7, ..., :3] = (255, 255, 0)                       # tile 7: yellow sprite
+    renderer = Renderer(textures)
+    pitch = math.radians(-3)                                   # looking slightly down: sheared, not rotated
+    sprite = (8.5, 8.5, 0.0, 0.6, 7)                            # 4 cells ahead, standing on the floor
+    fb, _ = frame(hall(), pitch, renderer=renderer, sprites=[sprite])
+    horizon = HEIGHT / 2 + math.tan(pitch) * renderer.focal
+    wall, _floor, _ceiling = kind(fb)
+    rows = np.nonzero(wall[10])[0]                              # (a column clear of the sprite)
+    d = 15 - 4.5
+    assert abs(rows.min() - (horizon - 0.5 / d * renderer.focal)) <= 2
+    assert abs(rows.max() + 1 - (horizon + 0.5 / d * renderer.focal)) <= 2
+    yellow = (fb[..., 0] > 150) & (fb[..., 1] > 150) & (fb[..., 2] < 80)
+    rows, cols = np.nonzero(yellow.T)
+    assert abs(rows.min() - (horizon - 0.1 / 4.0 * renderer.focal)) <= 2
+    assert abs(rows.max() + 1 - (horizon + 0.5 / 4.0 * renderer.focal)) <= 2
+    assert abs(cols.mean() - WIDTH / 2) <= 3
+
+
 # ------------------------------------------------------------------ it is a real rotation
 
 @pytest.mark.parametrize("pitch_deg", [-40, -15, 15, 40, 65])

@@ -32,6 +32,8 @@ KNEE = 1.0               # light adds up linearly to this much, then eases off s
 HEADROOM = 1.5           # and at most this much more is added beyond the knee, however many lights overlap
 BACK_OFF = 0.04          # how far in front of a surface the spot that is looked up in the visibility map is
 SIGHT_STEP = 0.2         # cells between the points checked along a line of sight
+LIGHT_STEP = 2           # pixels between the ones lighting is worked out for; those between are blended
+DEPTH_MATCH = 0.05       # a pixel is blended only from samples this close to its depth (as a fraction of it)
 
 
 @njit(cache=True)
@@ -122,27 +124,83 @@ def _light_at(lights, vis, occluder, x, y, z, qx, qy):
     return _soft(r), _soft(g), _soft(b)
 
 
+@njit(cache=True, inline="always")
+def _pixel_light(x, y, depth, px, py, eye_z, fx, fy, fz, rx, ry, ux, uy, uz, horizon, focal, width,
+                 lights, vis, occluder):
+    """The light (r, g, b) falling on what pixel (x, y) shows, `depth` along its ray."""
+    u = (x + 0.5 - width * 0.5) / focal
+    v = (horizon - (y + 0.5)) / focal
+    ddx, ddy, ddz = fx + u * rx + v * ux, fy + u * ry + v * uy, fz + v * uz
+    wx, wy, wz = px + depth * ddx, py + depth * ddy, eye_z + depth * ddz
+    norm = math.sqrt(ddx * ddx + ddy * ddy + ddz * ddz)
+    qx, qy = wx - ddx / norm * BACK_OFF, wy - ddy / norm * BACK_OFF
+    return _light_at(lights, vis, occluder, wx, wy, wz, qx, qy)
+
+
 @njit(cache=True, parallel=True)
-def apply_lights(fb, zb, px, py, eye_z, dir_x, dir_y, pitch, focal, lights, vis, occluder, ambient, fog_dist):
+def apply_lights(fb, zb, px, py, eye_z, dir_x, dir_y, pitch, horizon, focal, lights, vis, occluder, ambient, fog_dist):
     """Light the picture in fb (W, H, 3) in place, using the depth picture zb (W, H) (1e9 where nothing was
-    drawn). The camera is at (px, py, eye_z) looking along (dir_x, dir_y) tilted up by `pitch`."""
+    drawn). The camera is at (px, py, eye_z) looking along (dir_x, dir_y) tilted up by `pitch`, with the middle
+    of its view at screen row `horizon` (the middle row, unless a level camera is sheared to look up or down).
+
+    Light changes slowly across a surface, so it is worked out only at every LIGHT_STEP-th pixel across and down
+    and blended between those for the pixels in between. Where the samples around a pixel are not all on its
+    surface (their depths differ: the edge of a wall, a sprite's outline), the pixel is worked out on its own."""
     width, height = fb.shape[0], fb.shape[1]
     cp, sp = math.cos(pitch), math.sin(pitch)
     fx, fy, fz = dir_x * cp, dir_y * cp, sp                  # where the camera looks
     rx, ry = -dir_y, dir_x                                   # to the right of the picture
     ux, uy, uz = -dir_x * sp, -dir_y * sp, cp                # up the picture
+    sw = (width + LIGHT_STEP - 2) // LIGHT_STEP + 1          # samples across, the last on the last column
+    sh = (height + LIGHT_STEP - 2) // LIGHT_STEP + 1
+    sample = np.zeros((sw, sh, 3), np.float64)
+    sample_depth = np.empty((sw, sh), np.float64)
+    for i in prange(sw):
+        x = min(i * LIGHT_STEP, width - 1)
+        for j in range(sh):
+            y = min(j * LIGHT_STEP, height - 1)
+            depth = zb[x, y]
+            sample_depth[i, j] = depth
+            if depth > 1e8:
+                continue
+            sample[i, j, 0], sample[i, j, 1], sample[i, j, 2] = _pixel_light(
+                x, y, depth, px, py, eye_z, fx, fy, fz, rx, ry, ux, uy, uz, horizon, focal, width, lights, vis, occluder)
     for x in prange(width):
-        u = (x + 0.5 - width * 0.5) / focal
+        i0 = x // LIGHT_STEP
+        i1 = min(i0 + 1, sw - 1)
+        x0, x1 = min(i0 * LIGHT_STEP, width - 1), min(i1 * LIGHT_STEP, width - 1)
+        ax = (x - x0) / (x1 - x0) if x1 > x0 else 0.0
         for y in range(height):
             depth = zb[x, y]
             if depth > 1e8:
                 continue
-            v = (height * 0.5 - (y + 0.5)) / focal
-            ddx, ddy, ddz = fx + u * rx + v * ux, fy + u * ry + v * uy, fz + v * uz
-            wx, wy, wz = px + depth * ddx, py + depth * ddy, eye_z + depth * ddz
-            norm = math.sqrt(ddx * ddx + ddy * ddy + ddz * ddz)
-            qx, qy = wx - ddx / norm * BACK_OFF, wy - ddy / norm * BACK_OFF
-            lr, lg, lb = _light_at(lights, vis, occluder, wx, wy, wz, qx, qy)
+            j0 = y // LIGHT_STEP
+            j1 = min(j0 + 1, sh - 1)
+            y0, y1 = min(j0 * LIGHT_STEP, height - 1), min(j1 * LIGHT_STEP, height - 1)
+            ay = (y - y0) / (y1 - y0) if y1 > y0 else 0.0
+            lr = lg = lb = 0.0
+            same_surface = True
+            for oi in range(2):
+                wi = ax if oi else 1.0 - ax
+                if wi <= 0.0:
+                    continue
+                i = i1 if oi else i0
+                for oj in range(2):
+                    w = wi * (ay if oj else 1.0 - ay)
+                    if w <= 0.0:
+                        continue
+                    j = j1 if oj else j0
+                    if abs(sample_depth[i, j] - depth) > DEPTH_MATCH * depth:
+                        same_surface = False
+                        break
+                    lr += sample[i, j, 0] * w
+                    lg += sample[i, j, 1] * w
+                    lb += sample[i, j, 2] * w
+                if not same_surface:
+                    break
+            if not same_surface:
+                lr, lg, lb = _pixel_light(x, y, depth, px, py, eye_z, fx, fy, fz, rx, ry, ux, uy, uz, horizon, focal,
+                                          width, lights, vis, occluder)
             shade = _shade(depth, fog_dist)
             fb[x, y, 0] = np.uint8(min(255.0, fb[x, y, 0] * (ambient + lr / shade)))
             fb[x, y, 1] = np.uint8(min(255.0, fb[x, y, 1] * (ambient + lg / shade)))

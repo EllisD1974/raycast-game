@@ -12,7 +12,7 @@ from raylight import apply_lights, sprite_light
 from raypitch import render_scene_pitch
 
 BACKGROUND = np.array((18, 18, 26), np.uint8)       # shown only where the view distance ends
-LEVEL_PITCH = 1e-4                                  # radians: a view this close to level uses the faster column renderer
+SHEAR_PITCH = math.radians(5)                       # a view tilted less than this is drawn by the faster column renderer
 
 
 class Renderer:
@@ -34,24 +34,27 @@ class Renderer:
         (x, y, z, size, tile[, spin[, alpha[, glow[, color]]]]) items drawn as flat pictures that face the player.
         `lighting` (lighting.Lighting, or None for a map with no lights and full ambient) lights the picture.
 
-        A level view is drawn a column at a time (fast). A tilted view is drawn with one real 3D ray
-        per pixel (raypitch.py), so looking up and down is a true rotation, not a shear."""
+        A view within SHEAR_PITCH of level is drawn a column at a time (fast), with the horizon moved up or down
+        the screen: a shear, which near level looks the same as tilting. A view tilted further is drawn with one
+        real 3D ray per pixel (raypitch.py), so looking well up and down is a true rotation."""
         dir_x, dir_y = math.cos(player.angle), math.sin(player.angle)
         scene = (world.floor_plane, world.ceil_plane, world.span_on, world.solid_from, world.pane_tex,
                  world.pane_top, world.wall_tex, world.floor_tex, world.ceil_tex)
-        if abs(player.pitch) < LEVEL_PITCH:
+        if abs(player.pitch) < SHEAR_PITCH:
+            pitch, horizon = 0.0, self.horizon(player)  # (lighting and sprites: a level camera with the horizon moved)
             render_scene_depth(
                 self.framebuffer, self.depth, player.x, player.y, player.eye_z, player.span, dir_x, dir_y,
                 -dir_y * self.half_fov_tan, dir_x * self.half_fov_tan,   # camera plane: right vector
-                HEIGHT / 2, self.focal, *scene, self.textures, MAX_DEPTH, FOG_DIST, BACKGROUND)
+                horizon, self.focal, *scene, self.textures, MAX_DEPTH, FOG_DIST, BACKGROUND)
         else:
+            pitch, horizon = player.pitch, HEIGHT / 2
             render_scene_pitch(
                 self.framebuffer, self.depth, player.x, player.y, player.eye_z, player.span, dir_x, dir_y,
                 player.pitch, self.focal, *scene, self.textures, MAX_DEPTH, FOG_DIST, BACKGROUND)
         ambient = 1.0
         if lighting is not None:
             ambient = lighting.ambient
-            apply_lights(self.framebuffer, self.depth, player.x, player.y, player.eye_z, dir_x, dir_y, player.pitch,
+            apply_lights(self.framebuffer, self.depth, player.x, player.y, player.eye_z, dir_x, dir_y, pitch, horizon,
                          self.focal, lighting.lights, lighting.vis, lighting.occluder, ambient, FOG_DIST)
         if sprites:
             far_first = sorted(sprites, key=lambda s: -((s[0] - player.x) ** 2 + (s[1] - player.y) ** 2))
@@ -62,7 +65,7 @@ class Renderer:
             if lighting is not None:
                 sprite_light(xs, ys, zs, sizes, lighting.lights, lighting.vis, lighting.occluder, lit)
             draw_sprites(self.framebuffer, self.depth, player.x, player.y, player.eye_z, dir_x, dir_y,
-                         player.pitch, self.focal, xs, ys, zs, sizes,
+                         pitch, horizon, self.focal, xs, ys, zs, sizes,
                          np.clip(cols[:, 4], 0, len(self.textures) - 1).astype(np.int64),
                          np.ascontiguousarray(cols[:, 5]), np.ascontiguousarray(cols[:, 6]), lit,
                          np.ascontiguousarray(cols[:, 7]), colors, ambient, self.textures, MAX_DEPTH, FOG_DIST)
