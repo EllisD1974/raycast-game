@@ -19,11 +19,13 @@ def unpack_atlas(source=ATLAS_PATH, tile=TILE):
     """Slice the texture map into individual tile x tile surfaces, row by row, keeping alpha.
 
     `source` is the file's path, or the bytes of the PNG (what a host sends to its joiners).
-    Map id N uses tiles[N - 1]. Needs a display (pygame.display.set_mode) for convert_alpha().
+    Map id N uses tiles[N - 1]. Works with or without a display (the game draws through a GPU renderer and
+    sets no display mode, which convert_alpha() needs).
     """
     if isinstance(source, (bytes, bytearray)):
         source = io.BytesIO(source)
-    atlas = pygame.image.load(source, "textures.png").convert_alpha()
+    atlas = pygame.image.load(source, "textures.png")
+    atlas = atlas.convert_alpha() if pygame.display.get_surface() else atlas.convert(32, pygame.SRCALPHA)
     return [
         atlas.subsurface((x, y, tile, tile)).copy()
         for y in range(0, atlas.get_height(), tile)
