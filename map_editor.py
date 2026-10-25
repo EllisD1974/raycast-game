@@ -54,7 +54,10 @@ T top, B bottom. Cells, the start and the 3D camera stay where they are on the m
 
 Tools: B paint, E erase, F fill, I pick from the map, S set the start (on the floor you are
 editing; click it again to rotate), T stairs (drag a line on the FloorH layer: heights rise by
-the Step each cell, starting at the brush value). Ctrl+Z / Ctrl+Y undo / redo, Ctrl+S save,
+the Step each cell, starting at the brush value), H shapes (drag a line, box or ellipse, outline
+or filled, chosen on the second toolbar row; it paints what the brush paints on the layer you are
+on, right-drag erases the shape, Shift makes a square or circle, Esc cancels).
+Ctrl+Z / Ctrl+Y undo / redo, Ctrl+S save,
 F5 save and play, Home reset view, Tab / Shift+Tab switch floor, F2 rename floor.
 
 New asks for the new map's name and saves a blank map as <name>.json in the folder of the map being
@@ -223,11 +226,13 @@ VALUE_LAYERS = ROOM_HEIGHT_LAYERS + ("wall_h",)             # every layer painte
 LAYER_LABELS = {"walls": "Walls", "floor_tex": "FloorTex", "ceil_tex": "CeilTex",
                 "floor_h": "FloorH", "ceil_h": "CeilH", "ramp": "Ramps", "wall_h": "WallH"}
 LAYER_KEYS = {pygame.K_1 + i: name for i, name in enumerate(EDIT_LAYERS)}
-TOOLS = {"paint": "B", "erase": "E", "fill": "F", "pick": "I", "start": "S", "stairs": "T", "camera": "C",
-         "entity": "N"}
+TOOLS = {"paint": "B", "erase": "E", "fill": "F", "pick": "I", "start": "S", "stairs": "T", "shape": "H",
+         "camera": "C", "entity": "N"}
 TOOL_KEYS = {pygame.K_b: "paint", pygame.K_e: "erase", pygame.K_f: "fill",
-             pygame.K_i: "pick", pygame.K_s: "start", pygame.K_t: "stairs", pygame.K_c: "camera",
-             pygame.K_n: "entity"}
+             pygame.K_i: "pick", pygame.K_s: "start", pygame.K_t: "stairs", pygame.K_h: "shape",
+             pygame.K_c: "camera", pygame.K_n: "entity"}
+SHAPES = {"line": "Line", "box": "Box", "filled_box": "Filled box", "ellipse": "Ellipse",
+          "filled_ellipse": "Filled ellipse"}           # what the Shape tool draws, and its button
 ENTITY_MODE_COLORS = {"once": (255, 255, 255), "respawn": (90, 210, 255), "persistent": (110, 230, 120),
                        "scenery": (200, 150, 255)}
 FX_CELL = 70                                    # pixels a cell is drawn at in an effect's preview
@@ -264,6 +269,41 @@ class PreviewFloor:
 ENTITY_FIRST_TILE = 10                          # the first item sprite in the stock atlas (the gem)
 RAMP_NAMES = {1: "East", 2: "West", 3: "South", 4: "North"}
 RAMP_VECTORS = {1: (1, 0), 2: (-1, 0), 3: (0, 1), 4: (0, -1)}
+
+
+def square_end(a, b):
+    """`b` moved so that the box from `a` to it is square (as big as the longer side), for Shift."""
+    side = max(abs(b[0] - a[0]), abs(b[1] - a[1]))
+    return (a[0] + (side if b[0] >= a[0] else -side), a[1] + (side if b[1] >= a[1] else -side))
+
+
+def shape_cells(kind, a, b):
+    """The grid cells of a shape (one of SHAPES) dragged from cell a to cell b. Boxes and ellipses fill the
+    box with a and b at opposite corners; an ellipse is the cells whose centers are inside it, and its
+    outline the ones of those next to (or diagonal to) the outside. Lines and outlines join cells side to side,
+    never only at a corner, so a wall drawn with them has no diagonal gap for light (or a player) to slip through."""
+    if kind == "line":
+        cells = line_cells(a, b)
+        joined = cells[:1]
+        for (px, py), (x, y) in zip(cells, cells[1:]):
+            if px != x and py != y:
+                joined.append((x, py))                  # a diagonal step: fill the corner
+            joined.append((x, y))
+        return joined
+    x0, x1 = sorted((a[0], b[0]))
+    y0, y1 = sorted((a[1], b[1]))
+    box = [(x, y) for y in range(y0, y1 + 1) for x in range(x0, x1 + 1)]
+    if kind == "filled_box":
+        return box
+    if kind == "box":
+        return [(x, y) for x, y in box if x in (x0, x1) or y in (y0, y1)]
+    rx, ry = (x1 - x0 + 1) / 2, (y1 - y0 + 1) / 2
+    cx, cy = x0 + rx, y0 + ry
+    inside = {(x, y) for x, y in box if ((x + 0.5 - cx) / rx) ** 2 + ((y + 0.5 - cy) / ry) ** 2 <= 1.0}
+    if kind == "filled_ellipse":
+        return [cell for cell in box if cell in inside]
+    return [(x, y) for x, y in box if (x, y) in inside
+            and any((x + dx, y + dy) not in inside for dx in (-1, 0, 1) for dy in (-1, 0, 1))]
 
 
 def line_cells(a, b):
@@ -437,6 +477,8 @@ class Editor:
         self.stair_step = 0.25
         self.atlas_drag = None                  # (start_cell, current_cell) while dragging
         self.stairs_drag = None                 # (start_cell, current_cell) while dragging
+        self.shape = "box"                      # what the Shape tool draws (one of SHAPES)
+        self.shape_drag = None                  # (start_cell, current_cell, erasing) while dragging a shape
         self.stroke = None                      # "paint" / "erase" while drawing on the map
         self.last_cell = None
         self.pan_drag = False
@@ -1446,6 +1488,8 @@ class Editor:
         if self.tool == "stairs":
             row2 += [None, ("btn", "Step-", "step-"), ("btn", "Step+", "step+"),
                      ("txt", f"step {fmt(self.stair_step)}", ACCENT)]
+        if self.tool == "shape":
+            row2 += [None] + [("btn", label, f"shape:{kind}") for kind, label in SHAPES.items()]
         if self.tool == "entity":
             row2 += [None, ("txt", "Pick what to place in the list on the right, click a cell to place it, or click an item to edit it", DIM)]
         row3 = [("btn", f"{name.capitalize()}({key})", f"tool:{name}") for name, key in TOOLS.items()]
@@ -1644,13 +1688,7 @@ class Editor:
         layer, level = self.layer, self.level
         if layer in STAMP_LAYERS:
             for dx, dy, tile_id in self.stamp():
-                x, y = cx + dx, cy + dy
-                if layer == "walls" and level.in_bounds(x, y) and not level.is_solid(x, y, self.floor):
-                    level.set("wall_h", x, y, DEFAULTS["wall_h"])      # a new wall starts full height
-                    level.set("wall_floor", x, y, self.floor)          # ... and on this floor, not the ones below
-                    if self.floor > 0:                                  # its base: this floor's brush height
-                        level.set(self.gname("floor_h"), x, y, self.brush(self.gname("floor_h")))
-                level.set(self.gname(), x, y, tile_id)
+                self.put_tile(cx + dx, cy + dy, tile_id)
         elif layer == "wall_h":
             if level.in_bounds(cx, cy) and level.is_solid(cx, cy, self.floor):   # heights only mean something on walls
                 level.set("wall_h", cx, cy, self.brush_value())
@@ -1665,6 +1703,16 @@ class Editor:
             self.set_height(cx, cy, layer, self.brush_value())
         else:
             level.set(self.gname(), cx, cy, self.brush_value())
+
+    def put_tile(self, x, y, tile_id):
+        """Set one cell of a tile layer (walls, floor or ceiling texture) to `tile_id`."""
+        level = self.level
+        if self.layer == "walls" and level.in_bounds(x, y) and not level.is_solid(x, y, self.floor):
+            level.set("wall_h", x, y, DEFAULTS["wall_h"])      # a new wall starts full height
+            level.set("wall_floor", x, y, self.floor)          # ... and on this floor, not the ones below
+            if self.floor > 0:                                  # its base: this floor's brush height
+                level.set(self.gname("floor_h"), x, y, self.brush(self.gname("floor_h")))
+        level.set(self.gname(), x, y, tile_id)
 
     def edits_upper_wall(self, cx, cy):
         """True when the FloorH / CeilH layers here set the base / top of a wall that starts on the
@@ -1730,6 +1778,9 @@ class Editor:
         """Start of a click on the map: left uses the active tool, right always erases."""
         if button == 3 and self.tool == "entity":
             self.remove_entities(cell)
+            return
+        if self.tool == "shape":
+            self.shape_drag = (cell, cell, button == 3)
             return
         if button == 3:
             self.begin_edit()
@@ -1855,6 +1906,40 @@ class Editor:
             self.set_height(x, y, "floor_h", height)
         self.say(f"Stairs: {len(steps)} cells, {fmt(steps[0][1])} to {fmt(steps[-1][1])}")
 
+    def shape_drag_cells(self):
+        """The cells the shape being dragged covers now (Shift: a square box or a circle)."""
+        start, end, _erasing = self.shape_drag
+        if self.shape != "line" and self.mods() & pygame.KMOD_SHIFT:
+            end = square_end(start, end)
+        return [cell for cell in shape_cells(self.shape, start, end) if self.level.in_bounds(*cell)]
+
+    def shape_tile(self, cell):
+        """The tile a shape puts in `cell` on a tile layer: one per cell, the selected tiles repeating as a
+        pattern from where the drag started (a single tile just fills the shape)."""
+        stamp = self.stamp()
+        width, height = max(t[0] for t in stamp) + 1, max(t[1] for t in stamp) + 1
+        pattern = {(dx, dy): tile_id for dx, dy, tile_id in stamp}
+        start = self.shape_drag[0]
+        return pattern.get(((cell[0] - start[0]) % width, (cell[1] - start[1]) % height), stamp[0][2])
+
+    def finish_shape(self):
+        """Paint (or erase) every cell of the dragged shape, as the brush would, as one undo step."""
+        cells, erasing = self.shape_drag_cells(), self.shape_drag[2]
+        tiles = {cell: self.shape_tile(cell) for cell in cells} \
+            if not erasing and self.layer in STAMP_LAYERS and self.stamp() else None
+        self.shape_drag = None
+        if not cells:
+            return
+        self.begin_edit()
+        for cell in cells:
+            if erasing:
+                self.erase_at(*cell)
+            elif tiles is not None:
+                self.put_tile(*cell, tiles[cell])
+            else:
+                self.paint_at(*cell)
+        self.say(f"{'Erased' if erasing else 'Drew'} {SHAPES[self.shape].lower()}: {len(cells)} cells")
+
     def finish_atlas_drag(self):
         picked, ctrl = self.drag_indices(), bool(self.mods() & pygame.KMOD_CTRL)
         single = self.atlas_drag[0] == self.atlas_drag[1]
@@ -1917,7 +2002,7 @@ class Editor:
 
     def select_floor(self, floor):
         self.floor = max(0, min(floor, self.level.floor_count - 1))
-        self.stairs_drag = None
+        self.stairs_drag = self.shape_drag = None
         e = self.selected_entity()
         if e is not None and e.span != self.floor:
             self.deselect()                             # the item is on another floor
@@ -2003,8 +2088,12 @@ class Editor:
             self.deselect()
             self.say("Prefabs: add one, set its icon and settings, then place it with the Entity tool"
                      if self.prefabs_mode else "Back to the map")
+        elif action.startswith("shape:"):
+            self.shape = action[6:]
+            self.say(f"Shape: {SHAPES[self.shape]} (drag on the map; right-drag erases, Shift: square / circle)")
         elif action.startswith("tool:"):
             self.tool = action[5:]
+            self.shape_drag = None
             self.guns_mode = self.prefabs_mode = self.effects_mode = self.lights_mode = False
             if self.tool != "entity":
                 self.deselect()
@@ -2396,7 +2485,10 @@ class Editor:
             return
         ctrl = bool(e.mod & pygame.KMOD_CTRL)
         if e.key == pygame.K_ESCAPE:
-            if self.dropdown_open:
+            if self.shape_drag:
+                self.shape_drag = None
+                self.say("Shape cancelled")
+            elif self.dropdown_open:
                 self.dropdown_open = False
             elif self.menu_open is not None:
                 self.menu_open = None
@@ -2529,6 +2621,8 @@ class Editor:
             self.finish_atlas_drag()
         if e.button == 1 and self.stairs_drag:
             self.finish_stairs()
+        if self.shape_drag and e.button == (3 if self.shape_drag[2] else 1):
+            self.finish_shape()
         if e.button in (1, 3):
             self.stroke = self.last_cell = None
         if e.button == 1:
@@ -2553,6 +2647,8 @@ class Editor:
             self.atlas_drag = (self.atlas_drag[0], ((x - rect.x) // TILE, (y - rect.y) // TILE))
         elif self.stairs_drag:
             self.stairs_drag = (self.stairs_drag[0], self.cell_at(e.pos))
+        elif self.shape_drag:
+            self.shape_drag = (self.shape_drag[0], self.cell_at(e.pos), self.shape_drag[2])
         elif self.pan_drag:
             self.pan[0] += e.rel[0]
             self.pan[1] += e.rel[1]
@@ -3877,6 +3973,17 @@ class Editor:
             screen.set_clip(None)
 
     def draw_cursor(self, screen, area):
+        if self.shape_drag:
+            erasing = self.shape_drag[2]
+            tiles = not erasing and self.layer in STAMP_LAYERS and self.stamp()
+            for cell in self.shape_drag_cells():
+                rect = self.cell_rect(*cell)
+                if tiles:
+                    ghost = self.tile_surface(self.shape_tile(cell) - 1).copy()
+                    ghost.set_alpha(150)
+                    screen.blit(ghost, rect)
+                pygame.draw.rect(screen, WARN if erasing else ACCENT, rect, 1 if tiles else 2)
+            return
         if self.stairs_drag:
             for cell, height in self.stairs_heights():
                 rect = self.cell_rect(*cell)
@@ -3901,7 +4008,7 @@ class Editor:
             self.draw_arrow(screen, rect, self.ramp_dir, TEXT)
         else:
             color = {"erase": WARN, "fill": (120, 200, 255), "pick": (200, 120, 255),
-                      "start": (60, 220, 110), "stairs": (120, 200, 255)}.get(self.tool, ACCENT)
+                      "start": (60, 220, 110), "stairs": (120, 200, 255), "shape": ACCENT}.get(self.tool, ACCENT)
             pygame.draw.rect(screen, color, self.cell_rect(*cell), 2)
 
     def draw_panel(self, screen):
@@ -3934,7 +4041,7 @@ class Editor:
             screen.blit(small, (ATLAS_X + dx * cell, y + 22 + dy * cell))
         hints = ("Atlas: click / drag = select, Ctrl = add/remove",
                  "Map: L-drag paint, R-drag erase, wheel zoom, Space+drag pan",
-                 "Tab floor, layers 1-7, tools B E F I S T C, [ ] value, R ramp, K key")
+                 "Tab floor, layers 1-7, tools B E F I S T H C N, [ ] value, R ramp, K key")
         for i, text in enumerate(hints):
             screen.blit(self.small.render(text, True, DIM), (ATLAS_X, hints_y + i * 16))
 
@@ -3964,7 +4071,7 @@ class Editor:
             if action == "dropdown":
                 self.draw_dropdown_button(screen, rect, label)
                 continue
-            active = action in (f"tool:{self.tool}", f"layer:{self.layer}") \
+            active = action in (f"tool:{self.tool}", f"layer:{self.layer}", f"shape:{self.shape}") \
                 or (action == "legend" and self.show_legend) or (action == "guns" and self.guns_mode) \
                 or (action == "prefabs" and self.prefabs_mode) or (action == "effects" and self.effects_mode) or (action == "lights" and self.lights_mode)
             color = BUTTON_ON if active else (BUTTON_HOT if rect.collidepoint(self.mouse) else BUTTON)

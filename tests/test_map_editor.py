@@ -603,3 +603,116 @@ def test_started_without_a_map_the_editor_opens_the_one_edited_last(tmp_path):
     assert map_editor.starting_map([str(tmp_path / "other.json")], settings) == str(tmp_path / "other.json")
     remembered.unlink()
     assert map_editor.starting_map([], settings) == map_editor.MAP_PATH          # gone: back to the default
+
+
+# ---------------------------------------------------------------- the Shape tool
+
+def no_corner_gaps(cells):
+    """True if no two cells of `cells` touch only at a corner (with both cells beside them missing)."""
+    cells = set(cells)
+    return all((x + 1, y) in cells or (x, y + d) in cells
+               for x, y in cells for d in (-1, 1) if (x + 1, y + d) in cells)
+
+
+def test_boxes_are_their_outline_or_all_of_them_whichever_corner_the_drag_starts_from():
+    for a, b in (((1, 1), (5, 4)), ((5, 4), (1, 1)), ((5, 1), (1, 4))):
+        box = set(map_editor.shape_cells("box", a, b))
+        assert len(box) == 2 * 5 + 2 * 2 and (1, 1) in box and (5, 4) in box and (3, 2) not in box
+        assert len(set(map_editor.shape_cells("filled_box", a, b))) == 5 * 4
+
+
+def test_ellipses_fit_their_box_and_their_outline_is_sealed():
+    for size in ((9, 7), (13, 13), (4, 9), (1, 1), (2, 2)):
+        b = (size[0] - 1, size[1] - 1)
+        filled = set(map_editor.shape_cells("filled_ellipse", (0, 0), b))
+        ring = set(map_editor.shape_cells("ellipse", (0, 0), b))
+        assert ring <= filled and filled
+        xs, ys = [c[0] for c in filled], [c[1] for c in filled]
+        assert (min(xs), max(xs), min(ys), max(ys)) == (0, b[0], 0, b[1])        # touches all four sides
+        assert no_corner_gaps(ring)
+        inside = filled - ring
+        assert all(n in filled for x, y in inside for n in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)))
+
+
+def test_a_line_runs_from_end_to_end_with_no_corner_gaps():
+    for b in ((8, 6), (0, 5), (7, 0), (-6, 3), (3, -3)):
+        cells = map_editor.shape_cells("line", (0, 0), b)
+        assert cells[0] == (0, 0) and cells[-1] == b and no_corner_gaps(cells)
+
+
+def drag(ed, a, b, button=1):
+    mouse(ed, pygame.MOUSEBUTTONDOWN, cell_pos(ed, *a), button=button)
+    mouse(ed, pygame.MOUSEMOTION, cell_pos(ed, *b))
+    ed.draw(pygame.display.get_surface())                           # the shape is previewed while dragging
+    mouse(ed, pygame.MOUSEBUTTONUP, cell_pos(ed, *b), button=button)
+
+
+def walls(ed):
+    """The wall cells inside the map's border wall."""
+    return {(x, y) for y in range(1, ed.level.height - 1) for x in range(1, ed.level.width - 1) if ed.level.walls[y][x]}
+
+
+def test_dragging_a_box_draws_its_walls_in_one_undo_step(ed):
+    select(ed, (0, 0))
+    key(ed, pygame.K_h)
+    assert ed.tool == "shape" and ed.shape == "box"
+    drag(ed, (2, 2), (6, 5))
+    assert walls(ed) == set(map_editor.shape_cells("box", (2, 2), (6, 5)))
+    assert all(ed.level.walls[y][x] == 1 for x, y in walls(ed))
+    assert all(ed.level.get("wall_h", x, y) == map_editor.DEFAULTS["wall_h"] for x, y in walls(ed))
+    key(ed, pygame.K_z, pygame.KMOD_CTRL)
+    assert not walls(ed)
+
+
+def test_right_dragging_a_shape_erases_it(ed):
+    select(ed, (0, 0))
+    ed.do("tool:shape")
+    ed.do("shape:filled_box")
+    drag(ed, (1, 1), (8, 8))
+    ed.do("shape:box")
+    drag(ed, (3, 3), (6, 6), button=3)
+    assert walls(ed) == set(map_editor.shape_cells("filled_box", (1, 1), (8, 8))) \
+        - set(map_editor.shape_cells("box", (3, 3), (6, 6)))
+
+
+def test_shift_makes_a_square_or_a_circle_and_escape_cancels(ed):
+    select(ed, (0, 0))
+    ed.do("tool:shape")
+    ed.mods = lambda: pygame.KMOD_SHIFT
+    drag(ed, (1, 1), (7, 4))
+    assert walls(ed) == set(map_editor.shape_cells("box", (1, 1), (7, 7)))
+    ed.mods = lambda: 0
+    mouse(ed, pygame.MOUSEBUTTONDOWN, cell_pos(ed, 2, 2))
+    mouse(ed, pygame.MOUSEMOTION, cell_pos(ed, 5, 5))
+    key(ed, pygame.K_ESCAPE)
+    mouse(ed, pygame.MOUSEBUTTONUP, cell_pos(ed, 5, 5))
+    assert ed.shape_drag is None and walls(ed) == set(map_editor.shape_cells("box", (1, 1), (7, 7)))
+
+
+def test_a_shape_with_several_tiles_selected_repeats_them_as_a_pattern(ed):
+    select(ed, (0, 0), (1, 0))                                       # tiles 1 and 2 side by side
+    ed.do("tool:shape")
+    ed.do("shape:line")
+    drag(ed, (1, 4), (6, 4))
+    assert [ed.level.walls[4][x] for x in range(1, 7)] == [1, 2, 1, 2, 1, 2]
+    assert ed.level.walls[5][1] == 0                                 # one tile per cell, not the whole stamp
+
+
+def test_shapes_paint_other_layers_too(ed):
+    ed.do("layer:floor_h")
+    ed.value[ed.gname()] = 0.5
+    ed.do("tool:shape")
+    ed.do("shape:filled_ellipse")
+    drag(ed, (2, 2), (6, 6))
+    for x, y in map_editor.shape_cells("filled_ellipse", (2, 2), (6, 6)):
+        assert ed.level.get("floor_h", x, y) == 0.5
+    assert ed.level.get("floor_h", 2, 2) != 0.5                      # outside the ellipse, in its box
+
+
+def test_the_shape_buttons_choose_the_shape_and_show_it(ed):
+    ed.do("tool:shape")
+    actions = [action for _rect, _label, action in ed.layout()]
+    assert [a for a in actions if a.startswith("shape:")] == [f"shape:{k}" for k in map_editor.SHAPES]
+    ed.do("shape:ellipse")
+    assert ed.shape == "ellipse"
+    ed.draw(pygame.display.get_surface())
