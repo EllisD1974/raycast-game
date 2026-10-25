@@ -39,9 +39,28 @@ def _wall_ty(z, tsize):
     return int(math.floor(-z * tsize)) & (tsize - 1)
 
 
+@njit(cache=True)
+def _fetch_over(textures, tex, own, tx, ty, shade):
+    """Color of a texel of tile `tex`, with tile `own` laid over it (-1: none) by its alpha, fog shading applied."""
+    if own < 0:
+        return _fetch(textures, tex, tx, ty, shade)
+    a = textures[own, ty, tx, 3] / 255.0
+    return ((textures[own, ty, tx, 0] * a + textures[tex, ty, tx, 0] * (1.0 - a)) * shade,
+            (textures[own, ty, tx, 1] * a + textures[tex, ty, tx, 1] * (1.0 - a)) * shade,
+            (textures[own, ty, tx, 2] * a + textures[tex, ty, tx, 2] * (1.0 - a)) * shade)
+
+
+@njit(cache=True)
+def _own_tile(wall_sides, x, y, face, z):
+    """The tile side `face` of the wall at (x, y) shows of its own at height z, or -1 for none there."""
+    if wall_sides[y, x, face, 0] >= 0 and wall_sides[y, x, face, 1] <= z < wall_sides[y, x, face, 2]:
+        return int(wall_sides[y, x, face, 0])
+    return -1
+
+
 @njit(cache=True, inline="always")
 def _trace_pixel(fb, zb, x, y, px, py, eye_z, eye_span, dx, dy, dz,
-                 floor_plane, ceil_plane, span_on, solid_from, pane_tex, pane_top, wall_tex, side_tex, floor_tex, ceil_tex,
+                 floor_plane, ceil_plane, span_on, solid_from, pane_tex, pane_top, wall_tex, wall_sides, floor_tex, ceil_tex,
                  textures, max_dist, fog_dist, bg, pane_t, pane_tx, pane_ty, pane_id, pane_shade):
     nspans = span_on.shape[0]
     mh, mw = solid_from.shape
@@ -126,10 +145,10 @@ def _trace_pixel(fb, zb, x, y, px, py, eye_z, eye_span, dx, dy, dz,
         wtx = int(wallx * tsize) & tmask
         shade = _shade(t1, fog_dist) * (1.0 if side == 0 else SIDE_SHADE)
         inside = 0 <= nx < mw and 0 <= ny < mh
-        own = side_tex[ny, nx, side_of(side, step_x, step_y)] if inside else -1   # this wall side's own tile
+        own = _own_tile(wall_sides, nx, ny, side_of(side, step_x, step_y), z1) if inside else -1
         if (not inside) or s >= solid_from[ny, nx]:
-            tex = (wall_tex[ny, nx] if own < 0 else own) if inside else 0
-            red, green, blue = _fetch(textures, tex, wtx, _wall_ty(z1, tsize), shade)
+            tex = wall_tex[ny, nx] if inside else 0
+            red, green, blue = _fetch_over(textures, tex, own, wtx, _wall_ty(z1, tsize), shade)
             depth = t1
             break
 
@@ -159,9 +178,7 @@ def _trace_pixel(fb, zb, x, y, px, py, eye_z, eye_span, dx, dy, dz,
                     break
             if (not below_a_floor) and solid_from[ny, nx] < nspans:
                 tex = wall_tex[ny, nx]                              # a wall hanging above the room below
-            if own >= 0:
-                tex = own
-            red, green, blue = _fetch(textures, tex, wtx, _wall_ty(z1, tsize), shade)
+            red, green, blue = _fetch_over(textures, tex, own, wtx, _wall_ty(z1, tsize), shade)
             depth = t1
             break
         if found == 0 and pane_tex[ny, nx] >= 0 and z1 < pane_top[ny, nx] and n_panes < MAX_PANES:
@@ -187,7 +204,7 @@ def _trace_pixel(fb, zb, x, y, px, py, eye_z, eye_span, dx, dy, dz,
 
 @njit(cache=True, parallel=True)
 def render_scene_pitch(fb, zb, px, py, eye_z, eye_span, dir_x, dir_y, pitch, focal,
-                       floor_plane, ceil_plane, span_on, solid_from, pane_tex, pane_top, wall_tex, side_tex, floor_tex,
+                       floor_plane, ceil_plane, span_on, solid_from, pane_tex, pane_top, wall_tex, wall_sides, floor_tex,
                        ceil_tex, textures, max_dist, fog_dist, bg):
     """Fill `fb` (W, H, 3) and `zb` (W, H) for a camera looking along (dir_x, dir_y) tilted up by `pitch`
     radians (negative looks down), with `focal` the focal length in pixels."""
@@ -207,5 +224,5 @@ def render_scene_pitch(fb, zb, px, py, eye_z, eye_span, dir_x, dir_y, pitch, foc
             v = (height * 0.5 - (y + 0.5)) / focal
             _trace_pixel(fb, zb, x, y, px, py, eye_z, eye_span,
                          fx + u * rx + v * ux, fy + u * ry + v * uy, fz + v * uz,
-                         floor_plane, ceil_plane, span_on, solid_from, pane_tex, pane_top, wall_tex, side_tex, floor_tex,
+                         floor_plane, ceil_plane, span_on, solid_from, pane_tex, pane_top, wall_tex, wall_sides, floor_tex,
                          ceil_tex, textures, max_dist, fog_dist, bg, pane_t, pane_tx, pane_ty, pane_id, pane_shade)

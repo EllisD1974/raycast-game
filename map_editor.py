@@ -23,6 +23,9 @@ A map has several layers; you edit one at a time (keys 1-7 or the Layer buttons)
   8 WallSide   the texture on one side of a wall: the side nearest the mouse in a wall cell is the one
                painted (Paint, or a Shape: the side picked where the drag starts), right-click / Erase
                puts the wall's own tile back on it, Fill does that side of the whole wall, Pick takes it.
+               From / To (second toolbar row) limit it to a band of heights above the wall's foot, with
+               the wall's own tile above and below: From 0 starts at the foot, To "top" ends at the top
+               ("Full height" sets both back).
 
 A higher floor starts empty. Painting FloorH or CeilH on it creates the room in that cell, using
 the other brush value for the missing height, and lowers the ceiling of the floor below there to
@@ -51,6 +54,10 @@ middle-drag or Space+drag pans.
 Textures: edit textures.png in any image editor and the editor picks the change up by itself
 within a moment (the atlas, the map and the 3D view all update); F6 or the "Reload tex" button
 does it on demand. A file that can't be read leaves the old textures in place.
+
+Rulers along the top and left of the map count the cells (a tick on every grid line, numbers as often as
+they fit), light up the cell under the mouse, and mark the middle of the map on each axis with a triangle,
+as do small triangles on the map's border.
 
 Map size: the Edge buttons add (+) or remove (-) a column or row on one side: L left, R right,
 T top, B bottom. Cells, the start and the 3D camera stay where they are on the map.
@@ -235,6 +242,11 @@ LAYER_LABELS = {"walls": "Walls", "floor_tex": "FloorTex", "ceil_tex": "CeilTex"
 EDITOR_LAYERS = EDIT_LAYERS + ("sides",)                    # the stored layers, and the sides of walls
 TILE_LAYERS = STAMP_LAYERS + ("sides",)                     # layers painted with atlas tiles
 LAYER_KEYS = {pygame.K_1 + i: name for i, name in enumerate(EDITOR_LAYERS)}
+SIDE_STEP = 0.1                                 # From- / From+ / To- / To+ change a wall side's band by this
+MAX_SIDE_BAND = 8.0
+PARTIAL_SIDE = (90, 220, 230)                   # outline of a wall side whose own tile covers only a band of it
+RULER = 22                                      # width of the rulers along the map's top and left, in pixels
+RULER_LABEL_STEPS = (1, 2, 5, 10, 20, 50, 100)   # cells between ruler numbers: the first that leaves room
 MOUNT_ZONE = 0.3                                # an item clicked this close (in cells) to a walled side hangs on it
 TOOLS = {"paint": "B", "erase": "E", "fill": "F", "pick": "I", "start": "S", "stairs": "T", "shape": "H",
          "camera": "C", "entity": "N"}
@@ -491,6 +503,8 @@ class Editor:
         self.shape_drag = None                  # (start_cell, current_cell, erasing) while dragging a shape
         self.shape_side = None                  # the wall side under the mouse where that drag started
         self.side_lock = None                   # the wall side a whole shape paints (None: the one at the mouse)
+        self.side_from = 0.0                    # the band a wall side's own tile covers, above the wall's foot
+        self.side_to = 0.0                      # (0: up to the top)
         self.stroke = None                      # "paint" / "erase" while drawing on the map
         self.last_cell = None
         self.pan_drag = False
@@ -1504,6 +1518,12 @@ class Editor:
                      ("txt", f"value {fmt(self.brush(self.gname()))}", ACCENT)]
         elif self.layer == "ramp":
             row2 += [("btn", "Rotate(R)", "dir"), ("txt", f"rises {RAMP_NAMES[self.ramp_dir]}", ACCENT)]
+        elif self.layer == "sides":
+            row2 += [("btn", "From-", "side_from-"), ("btn", "From+", "side_from+"),
+                     ("txt", f"from {fmt(self.side_from)}", ACCENT),
+                     ("btn", "To-", "side_to-"), ("btn", "To+", "side_to+"),
+                     ("txt", f"to {fmt(self.side_to) if self.side_to else 'top'}", ACCENT),
+                     ("btn", "Full height", "side_full")]
         if self.tool == "stairs":
             row2 += [None, ("btn", "Step-", "step-"), ("btn", "Step+", "step+"),
                      ("txt", f"step {fmt(self.stair_step)}", ACCENT)]
@@ -1573,10 +1593,12 @@ class Editor:
     # ---------------------------------------------------------------- view
 
     def fit_view(self):
+        """Zoom and center the map in the map area, clear of the rulers."""
         area = self.map_area()
-        self.zoom = max(8, min(64, area.w // (self.level.width + 1), area.h // (self.level.height + 1)))
-        self.pan = [(area.w - self.level.width * self.zoom) // 2,
-                    (area.h - self.level.height * self.zoom) // 2]
+        room_w, room_h = area.w - RULER, area.h - RULER
+        self.zoom = max(8, min(64, room_w // (self.level.width + 1), room_h // (self.level.height + 1)))
+        self.pan = [RULER + (room_w - self.level.width * self.zoom) // 2,
+                    RULER + (room_h - self.level.height * self.zoom) // 2]
 
     def cell_at(self, pos):
         area = self.map_area()
@@ -1718,10 +1740,28 @@ class Editor:
         or the one nearest the mouse."""
         return self.side_lock or self.side_at(self.mouse)
 
+    def step_side_band(self, end, direction):
+        """From- / From+ / To- / To+: move one end of the band a wall side's own tile is painted over. To "top"
+        (0) steps down to just under a standard wall's height; the band never ends where it starts."""
+        if end == "from":
+            self.side_from = round(max(0.0, min(MAX_SIDE_BAND - SIDE_STEP, self.side_from + direction * SIDE_STEP)), 4)
+            if self.side_to and self.side_to <= self.side_from:
+                self.side_to = round(self.side_from + SIDE_STEP, 4)
+        else:
+            to = self.side_to or (1.0 if direction < 0 else 0.0)
+            to = round(to + direction * SIDE_STEP, 4) if to else 0.0
+            if to and to <= self.side_from:
+                to = round(self.side_from + SIDE_STEP, 4)
+            self.side_to = min(MAX_SIDE_BAND, to)
+        self.say(f"Wall side band: from {fmt(self.side_from)} to {fmt(self.side_to) if self.side_to else 'the top'}")
+
     def set_side(self, cx, cy, side, tile_id):
-        """Give the wall in (cx, cy) tile `tile_id` on one side (0: the wall's own tile). Open cells are left alone."""
+        """Give the wall in (cx, cy) tile `tile_id` on one side (0: the wall's own tile), over the band set with
+        From / To. Open cells are left alone."""
         if self.level.in_bounds(cx, cy) and self.level.walls[cy][cx]:
             self.level.set(f"side_{side}", cx, cy, tile_id)
+            self.level.set(f"side_{side}_from", cx, cy, self.side_from if tile_id else 0.0)
+            self.level.set(f"side_{side}_to", cx, cy, self.side_to if tile_id else 0.0)
 
     def side_tile(self, cx, cy, side):
         """The map id a wall shows on one side: its own for that side, else the wall's."""
@@ -1754,7 +1794,8 @@ class Editor:
         level = self.level
         if self.layer == "walls" and level.in_bounds(x, y) and not level.walls[y][x]:
             for side in SIDES:                                  # a new wall shows its own tile on every side
-                level.set(f"side_{side}", x, y, 0)
+                for name in (f"side_{side}", f"side_{side}_from", f"side_{side}_to"):
+                    level.set(name, x, y, DEFAULTS[name])
         if self.layer == "walls" and level.in_bounds(x, y) and not level.is_solid(x, y, self.floor):
             level.set("wall_h", x, y, DEFAULTS["wall_h"])      # a new wall starts full height
             level.set("wall_floor", x, y, self.floor)          # ... and on this floor, not the ones below
@@ -1788,7 +1829,8 @@ class Editor:
             self.set_side(cx, cy, self.painted_side(), 0)
         elif self.layer == "walls":
             for side in SIDES:                                          # ... and its sides' own tiles
-                self.level.set(f"side_{side}", cx, cy, 0)
+                for name in (f"side_{side}", f"side_{side}_from", f"side_{side}_to"):
+                    self.level.set(name, cx, cy, DEFAULTS[name])
             self.level.set("wall_h", cx, cy, DEFAULTS["wall_h"])       # an erased wall forgets its height
             self.level.set("wall_ceil", cx, cy, DEFAULTS["wall_ceil"])  # ... and its ceiling
             self.level.set("wall_floor", cx, cy, DEFAULTS["wall_floor"])
@@ -1967,7 +2009,11 @@ class Editor:
             return
         if self.layer == "sides":
             if self.level.walls[cell[1]][cell[0]]:
-                self.selection = {self.side_tile(*cell, self.side_at(self.mouse)) - 1}
+                side = self.side_at(self.mouse)
+                self.selection = {self.side_tile(*cell, side) - 1}
+                if self.level.get(f"side_{side}", *cell):           # ... and the band it covers
+                    self.side_from = self.level.get(f"side_{side}_from", *cell)
+                    self.side_to = self.level.get(f"side_{side}_to", *cell)
                 self.tool = "paint"
                 self.say(f"Picked tile #{min(self.selection) + 1}")
             return
@@ -2223,6 +2269,11 @@ class Editor:
             self.adjust_value(-VALUE_STEP if action == "val-" else VALUE_STEP)
         elif action == "dir":
             self.ramp_dir = self.ramp_dir % 4 + 1
+        elif action == "side_full":
+            self.side_from = self.side_to = 0.0
+            self.say("Wall side band: the whole height of the side")
+        elif action.startswith("side_"):
+            self.step_side_band(action[5:-1], 1 if action.endswith("+") else -1)
         elif action in ("step-", "step+"):
             delta = -VALUE_STEP if action == "step-" else VALUE_STEP
             self.stair_step = max(-1.0, min(1.0, round(self.stair_step + delta, 4)))
@@ -2708,7 +2759,7 @@ class Editor:
             elif self.lights_mode:
                 if e.button == 1:
                     self.lights_click(e.pos)
-            elif e.button in (1, 3):
+            elif e.button in (1, 3) and not self.over_ruler(e.pos):
                 self.confirm = None
                 self.map_click(self.cell_at(e.pos), e.button)
 
@@ -2840,7 +2891,9 @@ class Editor:
             if layer == "sides":
                 for side in SIDES:
                     if level.get(f"side_{side}", x, y):
-                        self.draw_side(screen, rect, side, level.get(f"side_{side}", x, y))
+                        partial = level.get(f"side_{side}_from", x, y) or level.get(f"side_{side}_to", x, y)
+                        self.draw_side(screen, rect, side, level.get(f"side_{side}", x, y),
+                                       outline=PARTIAL_SIDE if partial else ACCENT)
             return
         if layer == "wall_h":                           # heights live on walls: open cells are just context
             pygame.draw.rect(screen, EMPTY_CELL, rect)
@@ -2878,13 +2931,14 @@ class Editor:
         return {"n": pygame.Rect(rect.x, rect.y, rect.w, depth), "s": pygame.Rect(rect.x, rect.bottom - depth, rect.w, depth),
                 "w": pygame.Rect(rect.x, rect.y, depth, rect.h), "e": pygame.Rect(rect.right - depth, rect.y, depth, rect.h)}[side]
 
-    def draw_side(self, screen, rect, side, tile_id, alpha=255):
-        """A wall side's own tile, as a strip along that side of the wall's cell."""
+    def draw_side(self, screen, rect, side, tile_id, alpha=255, outline=ACCENT):
+        """A wall side's own tile, as a strip along that side of the wall's cell (outlined in PARTIAL_SIDE when
+        it covers only a band of the side)."""
         strip = self.side_rect(rect, side)
         picture = pygame.transform.scale(self.tile_surface(tile_id - 1), strip.size)
         picture.set_alpha(alpha)
         screen.blit(picture, strip)
-        pygame.draw.rect(screen, ACCENT, strip, 1)
+        pygame.draw.rect(screen, outline, strip, 1)
 
     def draw_wall_ceiling(self, screen, x, y, rect):
         """A wall on the CeilH layer where the ceiling over it matters: colored like a ceiling, with
@@ -2947,7 +3001,74 @@ class Editor:
         self.draw_start(screen)
         self.draw_camera(screen)
         self.draw_cursor(screen, area)
+        self.draw_center_marks(screen)
+        self.draw_rulers(screen, area)
         screen.set_clip(None)
+
+    def ruler_label_step(self):
+        """Cells between the numbers on the rulers: the smallest step that leaves room for the widest number."""
+        room = self.small.size(str(max(self.level.width, self.level.height)))[0] + 10
+        return next((step for step in RULER_LABEL_STEPS if step * self.zoom >= room), RULER_LABEL_STEPS[-1])
+
+    def map_center(self):
+        """The middle of the map on the screen (x, y), in pixels."""
+        origin = self.cell_rect(0, 0)
+        return origin.x + self.level.width * self.zoom / 2, origin.y + self.level.height * self.zoom / 2
+
+    def draw_center_marks(self, screen):
+        """Small triangles on the map's border at the middle of each axis, pointing in (the rulers mark it too)."""
+        origin, z = self.cell_rect(0, 0), self.zoom
+        mx, my = self.map_center()
+        right, bottom = origin.x + self.level.width * z, origin.y + self.level.height * z
+        size = max(4, min(8, z // 3))
+        for edge, inward in ((origin.y - 1, 1), (bottom + 1, -1)):            # top and bottom: the middle column
+            pygame.draw.polygon(screen, ACCENT, [(mx - size, edge - inward * size), (mx + size, edge - inward * size),
+                                                 (mx, edge)])
+        for edge, inward in ((origin.x - 1, 1), (right + 1, -1)):             # left and right: the middle row
+            pygame.draw.polygon(screen, ACCENT, [(edge - inward * size, my - size), (edge - inward * size, my + size),
+                                                 (edge, my)])
+
+    def draw_rulers(self, screen, area):
+        """The rulers along the top and left of the map area: a tick on every grid line, a number every
+        ruler_label_step() cells, the cell under the mouse lit up, and a triangle at the middle of each axis."""
+        z, level = self.zoom, self.level
+        origin = self.cell_rect(0, 0)
+        top = pygame.Rect(area.x, area.y, area.w, RULER)
+        left = pygame.Rect(area.x, area.y, RULER, area.h)
+        pygame.draw.rect(screen, PANEL_BG, top)
+        pygame.draw.rect(screen, PANEL_BG, left)
+        hover = self.cell_at(self.mouse) if area.collidepoint(self.mouse) else None
+        if hover is not None and level.in_bounds(*hover):           # where the mouse is, on both rulers
+            pygame.draw.rect(screen, BUTTON_HOT, (origin.x + hover[0] * z, top.y, z, RULER))
+            pygame.draw.rect(screen, BUTTON_HOT, (left.x, origin.y + hover[1] * z, RULER, z))
+        step = self.ruler_label_step()
+        for x in range(level.width + 1):
+            px = origin.x + x * z
+            if area.x + RULER <= px <= area.right:
+                long = x % step == 0
+                pygame.draw.line(screen, TEXT if long else DIM, (px, top.bottom - (10 if long else 4)), (px, top.bottom - 1))
+                if long:
+                    screen.blit(self.small.render(str(x), True, TEXT), (px + 2, top.y + 1))
+        for y in range(level.height + 1):
+            py = origin.y + y * z
+            if area.y + RULER <= py <= area.bottom:
+                long = y % step == 0
+                pygame.draw.line(screen, TEXT if long else DIM, (left.right - (10 if long else 4), py), (left.right - 1, py))
+                if long:
+                    screen.blit(self.small.render(str(y), True, TEXT), (left.x + 2, py + 1))
+        mx, my = self.map_center()
+        if area.x + RULER <= mx <= area.right:                      # the middle of each axis
+            pygame.draw.polygon(screen, ACCENT, [(mx - 5, top.bottom - 9), (mx + 5, top.bottom - 9), (mx, top.bottom - 1)])
+        if area.y + RULER <= my <= area.bottom:
+            pygame.draw.polygon(screen, ACCENT, [(left.right - 9, my - 5), (left.right - 9, my + 5), (left.right - 1, my)])
+        pygame.draw.line(screen, GRID, (top.x, top.bottom - 1), (top.right, top.bottom - 1))
+        pygame.draw.line(screen, GRID, (left.right - 1, left.y), (left.right - 1, left.bottom))
+        pygame.draw.rect(screen, PANEL_BG, (area.x, area.y, RULER - 1, RULER - 1))   # the corner where they meet
+
+    def over_ruler(self, pos):
+        """True if `pos` is on one of the rulers (clicks there do not paint the map under them)."""
+        area = self.map_area()
+        return area.collidepoint(pos) and (pos[0] < area.x + RULER or pos[1] < area.y + RULER)
 
     # ---------------------------------------------------------------- the Guns section
 
@@ -4380,6 +4501,9 @@ class Editor:
                         side = self.side_at(self.mouse)
                         own = g[f"side_{side}"][y][x]
                         how += f"   {WALL_LABELS[side].split()[0]} side: " + (f"tile #{own}" if own else "the wall's own")
+                        low, high = g[f"side_{side}_from"][y][x], g[f"side_{side}_to"][y][x]
+                        if own and (low or high):
+                            how += f" from {fmt(low)} to {fmt(high) if high else 'the top'}"
                     return f"Cell ({x}, {y}): wall id {g['walls'][y][x]}{how}"
                 parts = [f"Cell ({x}, {y})"]
                 for s in self.level.rooms_at(x, y):

@@ -52,7 +52,9 @@ MIN_WALL_GAP = 0.05             # a wall this close to the ceiling is just a ful
 SPAN_LAYERS = ("floor_tex", "ceil_tex", "floor_h", "ceil_h", "ramp")
 SIDES = "nesw"                                                  # the four sides of a cell: north, east, south, west
 SIDE_LAYERS = tuple(f"side_{side}" for side in SIDES)           # a wall's own texture on one side (0: the wall's tile)
-SHARED_LAYERS = ("walls", "wall_h", "wall_ceil", "wall_floor") + SIDE_LAYERS   # one grid for all floors
+# The heights above the wall's base that a side's own texture covers, from and to (to 0: up to the top).
+SIDE_BAND_LAYERS = tuple(f"side_{side}_{end}" for side in SIDES for end in ("from", "to"))
+SHARED_LAYERS = ("walls", "wall_h", "wall_ceil", "wall_floor") + SIDE_LAYERS + SIDE_BAND_LAYERS  # one grid for all floors
 SIDE_VECTORS = {"n": (0, -1), "e": (1, 0), "s": (0, 1), "w": (-1, 0)}  # which way each side faces on the map
 WALL_LABELS = {"": "Free standing", "n": "North wall", "e": "East wall", "s": "South wall", "w": "West wall"}
 WALL_GAP = 0.04                 # how far in front of a wall's face an item hung on it is, in cells
@@ -61,7 +63,8 @@ RAMP_DIRS = {1: (1, 0), 2: (-1, 0), 3: (0, 1), 4: (0, -1)}      # id -> (dx, dy)
 SOLID_OUTSIDE = 1       # walls value reported outside the grid: a wall
 
 _GROUND_DEFAULTS = {"walls": 0, "wall_h": 0.0, "wall_ceil": 0.0, "wall_floor": 0, "floor_tex": 5, "ceil_tex": 6,
-                    "floor_h": 0.0, "ceil_h": 1.0, "ramp": 0, **{name: 0 for name in SIDE_LAYERS}}
+                    "floor_h": 0.0, "ceil_h": 1.0, "ramp": 0, **{name: 0 for name in SIDE_LAYERS},
+                    **{name: 0.0 for name in SIDE_BAND_LAYERS}}
 _UPPER_DEFAULTS = {"floor_tex": 3, "ceil_tex": 6, "floor_h": 0.0, "ceil_h": 0.0, "ramp": 0}
 
 
@@ -548,6 +551,15 @@ def wall_facing(wall):
     """The map angle an item hung on side `wall` of its cell faces: away from the wall, into the cell."""
     dx, dy = SIDE_VECTORS[wall]
     return math.atan2(-dy, -dx)
+
+
+def side_band(level, x, y, side):
+    """(from, to): the world heights the own texture on side `side` of the wall at (x, y) covers. A band that
+    starts at 0 reaches down to the wall's foot, and one that ends at 0 up to its top, whatever those are."""
+    low, high = level.get(f"side_{side}_from", x, y), level.get(f"side_{side}_to", x, y)
+    floor = level.wall_floor(x, y)
+    base = level.wall_base(x, y) if floor == 0 else level.get(grid_name("floor_h", floor), x, y)
+    return (base + low if low > 0 else -1e9), (base + high if high > 0 else 1e9)
 
 
 def grid_name(layer, floor):
@@ -1186,7 +1198,7 @@ def level_text(level):
     """The map file's JSON as text, with one grid row per line so it is easy to read and diff."""
     blocks = []
     for name in level.grid_names():
-        if name in SIDE_LAYERS and not any(any(row) for row in level.grids[name]):
+        if name in SIDE_LAYERS + SIDE_BAND_LAYERS and not any(any(row) for row in level.grids[name]):
             continue                                # (no wall has a texture of its own on that side)
         rows = ",\n".join("      " + json.dumps(row) for row in level.grids[name])
         blocks.append(f'    "{name}": [\n{rows}\n    ]')

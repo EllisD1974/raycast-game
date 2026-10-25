@@ -19,13 +19,14 @@ from renderer import Renderer
 from world import World
 
 RED, GREEN, BLUE, YELLOW, MAGENTA = (255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0), (255, 0, 255)
+HEIGHT_MIDDLE, WIDTH_MIDDLE = 180, 320              # the middle of the 640 x 360 picture
 SIDE_TILE, ITEM_TILE = 8, 9                     # map id 8 (atlas index 7) is yellow; atlas index 9 is the item
 
 
 @pytest.fixture(scope="module", autouse=True)
 def display():
     pygame.init()
-    pygame.display.set_mode((1280, 800), pygame.RESIZABLE)
+    pygame.display.set_mode((1920, 1009), pygame.RESIZABLE)        # (room for the map beside the item list)
     yield
     pygame.quit()
 
@@ -108,7 +109,7 @@ def test_side_tiles_are_saved_only_when_some_wall_has_one():
 def test_a_side_tile_on_an_open_cell_means_nothing():
     level = room()
     level.grids["side_s"][3][3] = SIDE_TILE                       # (3, 3) is open
-    assert (World(level, 16).side_tex[3, 3] == -1).all()
+    assert (World(level, 16).wall_sides[3, 3, :, 0] == -1).all()
 
 
 # ------------------------------------------------------------------ items hung on a wall
@@ -267,6 +268,7 @@ def test_a_new_or_erased_wall_has_no_side_tiles(ed):
 def test_an_item_added_near_a_walled_side_hangs_on_that_wall(ed):
     ed.do("tool:entity")
     ed.draw(pygame.display.get_surface())
+    ed.fit_view()
     press(ed, near(ed, (5, 6), "n"))                                 # (5, 5) above it is a wall
     item = ed.level.entities[-1]
     assert item.wall == "n" and (item.x, item.y) == mounted_position(5, 6, "n")
@@ -281,6 +283,7 @@ def test_an_item_added_near_a_walled_side_hangs_on_that_wall(ed):
 def test_the_on_wall_setting_moves_an_item_between_its_walls(ed):
     ed.level.walls[6][4] = 1                                         # (5, 6) has walls north and west
     ed.do("tool:entity")
+    ed.fit_view()
     press(ed, ed.cell_rect(5, 6).center)
     item = ed.level.entities[-1]
     field = next(r.field for r in ed.details_rows() if r.field.key == "wall")
@@ -290,3 +293,110 @@ def test_the_on_wall_setting_moves_an_item_between_its_walls(ed):
     field.set("")
     assert item.wall == "" and (item.x, item.y) == (5.5, 6.5)
     ed.draw(pygame.display.get_surface())
+
+
+# ------------------------------------------------------------------ a side's tile over only part of its height
+
+def column_colors(fb):
+    """The middle column of the picture as a list of YELLOW / RED / None per row."""
+    out = []
+    for r, g, b in fb[fb.shape[0] // 2]:
+        out.append(YELLOW if r > 100 and g > 100 and b < 60 else RED if r > 100 and g < 60 and b < 60 else None)
+    return out
+
+
+@pytest.mark.parametrize("pitch", [0.0, math.radians(3), -0.15])
+def test_a_side_tile_with_a_band_covers_only_those_heights(pitch):
+    level = room()
+    level.grids["side_s"][5][5] = SIDE_TILE
+    level.grids["side_s_to"][5][5] = 0.4                            # the bottom 0.4 of a 1.0 tall wall
+    rows = column_colors(look(level, 5.5, 8.0, -math.pi / 2, pitch))
+    wall = [c for c in rows if c is not None]
+    assert wall[0] == RED and wall[-1] == YELLOW                     # wall's tile at the top, the band at the foot
+    first_yellow = wall.index(YELLOW)
+    assert all(c == RED for c in wall[:first_yellow]) and all(c == YELLOW for c in wall[first_yellow:])
+    assert 0.5 < first_yellow / len(wall) < 0.7                      # the band is the bottom 40 percent
+    level.grids["side_s_from"][5][5] = 0.2                           # from 0.2 to 0.4: wall tile below it too
+    wall = [c for c in column_colors(look(level, 5.5, 8.0, -math.pi / 2, pitch)) if c is not None]
+    assert wall[0] == RED and wall[-1] == RED and YELLOW in wall
+
+
+def test_the_band_is_measured_from_the_foot_of_the_wall():
+    level = room()
+    for x in range(1, 9):
+        for y in range(6, 9):
+            level.grids["floor_h"][y][x] = 0.5                       # the room in front of the wall is raised
+    level.grids["side_s"][5][5] = SIDE_TILE
+    level.grids["side_s_to"][5][5] = 0.4
+    world = World(level, 16)
+    assert world.wall_sides[5, 5, 2, 0] == SIDE_TILE - 1
+    low, high = world.wall_sides[5, 5, 2, 1:]
+    assert low < -1e8 and high == pytest.approx(level.wall_base(5, 5) + 0.4)
+
+
+def test_the_band_is_saved_with_the_map():
+    level = room()
+    level.grids["side_s"][5][5] = SIDE_TILE
+    level.grids["side_s_from"][5][5], level.grids["side_s_to"][5][5] = 0.2, 0.6
+    again = parse_level(json.loads(level_text(level)))
+    assert (again.grids["side_s_from"][5][5], again.grids["side_s_to"][5][5]) == (0.2, 0.6)
+    assert '"side_n_from"' not in level_text(level)
+
+
+def test_from_and_to_set_the_band_that_painting_a_side_gives_it(ed):
+    ed.selection = {SIDE_TILE - 1}
+    ed.do("layer:sides")
+    actions = [action for _rect, _label, action in ed.layout()]
+    assert {"side_from-", "side_from+", "side_to-", "side_to+", "side_full"} <= set(actions)
+    ed.do("side_to-")
+    assert ed.side_to == 0.9                                         # from the top: just under a standard wall
+    for _ in range(5):
+        ed.do("side_to-")
+    ed.do("side_from+")
+    ed.do("side_from+")
+    assert (ed.side_from, ed.side_to) == (0.2, 0.4)
+    press(ed, near(ed, (5, 5), "s"))
+    assert (ed.level.grids["side_s_from"][5][5], ed.level.grids["side_s_to"][5][5]) == (0.2, 0.4)
+    for _ in range(3):
+        ed.do("side_from+")                                          # the band never ends where it starts
+    assert ed.side_from == 0.5 and ed.side_to == 0.6
+    ed.do("side_full")
+    assert (ed.side_from, ed.side_to) == (0.0, 0.0)
+    ed.do("tool:pick")
+    press(ed, near(ed, (5, 5), "s"))                                 # Pick takes the band too
+    assert (ed.side_from, ed.side_to) == (0.2, 0.4)
+    press(ed, near(ed, (5, 5), "s"), button=3)                       # (right-click erases)
+    assert ed.level.grids["side_s"][5][5] == 0 and ed.level.grids["side_s_to"][5][5] == 0.0
+    ed.draw(pygame.display.get_surface())
+
+
+# ------------------------------------------------------------------ a side tile with transparent pixels
+
+def look_with(textures, level, x, y, angle, pitch):
+    renderer = Renderer(textures)
+    renderer.draw(World(level, 16), physics.Player(x, y, 0.0, angle, pitch=pitch))
+    return np.array(renderer.framebuffer).astype(int)
+
+
+@pytest.mark.parametrize("pitch", [0.0, math.radians(3), -0.15])
+def test_the_wall_shows_through_the_transparent_part_of_a_side_tile(pitch):
+    textures = flat_textures()
+    textures[SIDE_TILE - 1, :, :16, :3] = MAGENTA                    # (what a transparent pixel holds: never shown)
+    textures[SIDE_TILE - 1, :, :16, 3] = 0                           # half of the tile is see-through
+    level = room()
+    level.grids["side_s"][5][5] = SIDE_TILE
+    row = look_with(textures, level, 5.5, 7.0, -math.pi / 2, pitch)[:, HEIGHT_MIDDLE]
+    yellow = (row[:, 0] > 100) & (row[:, 1] > 100) & (row[:, 2] < 60)
+    red = (row[:, 0] > 100) & (row[:, 1] < 60) & (row[:, 2] < 60)
+    leaked = (row[:, 0] > 100) & (row[:, 2] > 100) & (row[:, 1] < 60)
+    assert yellow.sum() > 20 and red.sum() > 20 and not leaked.any()
+
+
+def test_a_partly_transparent_side_tile_mixes_with_the_wall():
+    textures = flat_textures()
+    textures[SIDE_TILE - 1, ..., 3] = 128                            # yellow at half strength over red
+    level = room()
+    level.grids["side_s"][5][5] = SIDE_TILE
+    for pitch in (0.0, -0.15):
+        r, g, b = look_with(textures, level, 5.5, 7.0, -math.pi / 2, pitch)[WIDTH_MIDDLE, HEIGHT_MIDDLE]
+        assert g > 20 and abs(r - 2 * g) <= 3 and b < 20             # half yellow, half red: green at half the red

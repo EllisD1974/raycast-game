@@ -716,3 +716,47 @@ def test_the_shape_buttons_choose_the_shape_and_show_it(ed):
     ed.do("shape:ellipse")
     assert ed.shape == "ellipse"
     ed.draw(pygame.display.get_surface())
+
+
+# ---------------------------------------------------------------- the rulers
+
+def test_fit_view_keeps_the_map_clear_of_the_rulers(ed):
+    ed.fit_view()
+    area, origin = ed.map_area(), ed.cell_rect(0, 0)
+    assert origin.x >= area.x + map_editor.RULER and origin.y >= area.y + map_editor.RULER
+    far = ed.cell_rect(ed.level.width - 1, ed.level.height - 1)
+    assert far.right <= area.right and far.bottom <= area.bottom
+
+
+def test_ruler_numbers_are_spaced_to_fit_the_zoom(ed):
+    ed.zoom = 64
+    assert ed.ruler_label_step() == 1
+    ed.zoom = 8
+    assert ed.ruler_label_step() in (5, 10)
+    assert all(step * 8 >= ed.small.size("10")[0] + 10 for step in [ed.ruler_label_step()])
+
+
+def test_the_rulers_mark_the_middle_of_each_axis(ed):
+    ed.fit_view()
+    surface = pygame.display.get_surface()
+    ed.draw(surface)
+    area = ed.map_area()
+    mx, my = (round(v) for v in ed.map_center())
+    assert mx == ed.cell_rect(5, 0).x and my == ed.cell_rect(0, 5).y            # a 10 x 10 map: between cells 4 and 5
+    assert tuple(surface.get_at((mx, area.y + map_editor.RULER - 4)))[:3] == map_editor.ACCENT
+    assert tuple(surface.get_at((area.x + map_editor.RULER - 4, my)))[:3] == map_editor.ACCENT
+    origin = ed.cell_rect(0, 0)
+    assert tuple(surface.get_at((mx, origin.y - 3)))[:3] == map_editor.ACCENT    # and on the map's border
+
+
+def test_clicking_a_ruler_does_not_paint_the_map_under_it(ed):
+    ed.fit_view()
+    ed.pan[1] -= ed.zoom * 2                                         # scroll so row 1 is under the top ruler
+    area = ed.map_area()
+    pos = (ed.cell_rect(3, 1).centerx, area.y + map_editor.RULER // 2)
+    assert ed.over_ruler(pos) and ed.cell_at(pos)[1] >= 0
+    select(ed, (0, 0))
+    before = [row[:] for row in ed.level.walls]
+    mouse(ed, pygame.MOUSEBUTTONDOWN, pos)
+    mouse(ed, pygame.MOUSEBUTTONUP, pos)
+    assert ed.level.walls == before
