@@ -10,8 +10,14 @@ Requires [uv](https://docs.astral.sh/uv/). It installs Python 3.13 and the depen
 
 ## Run
 
-    uv run python main.py            # play (uses maps/map.json)
+    uv run python main.py            # the home screen: host or join a game, or change the settings
+    uv run python main.py --map maps/map.json    # straight into a map, as the editor's Play does
     uv run python map_editor.py      # edit a map (F5 saves and plays)
+
+The home screen's **Host game** picks a map from the `maps` folder, a password (needed) and the most players
+to let in (2 to 16, the host included); **Join game** takes the host's IP address, its port (7777, unless the
+host uses another) and its password. The map and the most players are remembered for next time (passwords
+are not). Leaving a game from its menu, or the host ending it, goes back to the home screen.
 
 ## Particle effects
 
@@ -76,8 +82,11 @@ Change map** lists the maps in the current map's folder. Everyone switches over 
 rejoining, and the host's live reload then follows the new map.
 
 In the game, Esc opens a menu: **Resume**, **Settings** (mouse sensitivity and fullscreen, kept between runs),
-**Host settings** (for the host) and **Exit game**. Playing alone, the menu pauses the game; in a hosted game
+**Host settings** (for the host) and **Leave game** (back to the home screen; **Exit game** when the game was
+started straight into a map). Playing alone, the menu pauses the game; in a hosted game
 it carries on for everyone else.
+
+From the command line, without the home screen:
 
     uv run python main.py --host SECRET                      # host (listens on 0.0.0.0:7777)
     uv run python main.py --join 127.0.0.1 SECRET            # join (use the host's address)

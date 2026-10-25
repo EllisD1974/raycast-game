@@ -1,14 +1,15 @@
 """A simple raycaster with textured walls, floors, ceilings, stairs, ramps and variable heights.
 
 Run:  python make_atlas.py   (once: creates assets/textures.png, the 32x32 texture map)
-      python main.py         controls:
+      python main.py         the home screen: host a game (pick a map, a password and the most players), join one
+                             (the host's IP address, port and password), or change the settings; then, in the game:
           mouse            look around (left/right turns, up/down tilts the view, up to 45 degrees)
           WASD / arrows    move (the left/right arrows turn too); hold SHIFT to sprint
           SPACE jump, TAB let go of / take back the mouse, F11 fullscreen
           ESC the menu: resume, settings (mouse sensitivity, fullscreen), host settings (the host can
                         move everyone to another map) and exit
       The game opens maximized and can be resized; the picture keeps its aspect ratio.
-      python main.py --map other.json   (play a different map)
+      python main.py --map other.json   (play that map straight away, as the map editor's Play does)
 Multiplayer (one player hosts, the others join with the password):
       python main.py --host PASSWORD [--port 7777] [--bind 0.0.0.0]
       python main.py --join ADDRESS PASSWORD [--port 7777]
@@ -33,6 +34,7 @@ from character import character_tiles
 from constants import FPS_CAP, HEIGHT, MOUSE_SENSITIVITY, TURN_SPEED, WIDTH
 from game import Events, Game, Inputs
 from hud import draw_hud
+from home import Home
 from mapfile import MAP_PATH, load_or_default
 from menu import GameSettings, Menu
 from physics import look
@@ -43,6 +45,7 @@ from window import maximize
 from world import World
 
 JOIN_TIMEOUT = 15.0                            # seconds to wait for the host's map after joining
+HOME_BACKDROP = (18, 20, 28)                   # behind the home screen
 CROSSHAIR = (255, 255, 255)
 CROSSHAIR_OUTLINE = (0, 0, 0)
 
@@ -240,9 +243,10 @@ class Graphics:
         return World(level, len(self.tiles), self.see_through)
 
 
-def join(address, password, port, graphics):
-    """Connect to a host and wait for its map, textures and first snapshot; exits with a message if that fails.
-    The host's textures replace whatever `graphics` had loaded, so the joiner needs no map or textures of its own."""
+def client_session(address, port, password, graphics):
+    """A session joining the host at address:port. It is ready once the host has sent its map, textures and first
+    snapshot: step it until session.ready (or session.ended, with the reason it failed). The host's textures
+    replace whatever `graphics` had loaded, so the joiner needs no map or textures of its own."""
     def use_atlas(png):
         try:
             graphics.load(png)
@@ -250,7 +254,12 @@ def join(address, password, port, graphics):
             raise ValueError(f"textures: {e}")
         return graphics.character_tile
 
-    session = ClientSession(net.Client(address, port, password), graphics.make_world, graphics.character_tile, use_atlas)
+    return ClientSession(net.Client(address, port, password), graphics.make_world, graphics.character_tile, use_atlas)
+
+
+def join(address, password, port, graphics):
+    """--join: connect to a host and wait for the game; exits with a message if that fails."""
+    session = client_session(address, port, password, graphics)
     print(f"Joining {address}:{port}...")
     give_up = time.monotonic() + JOIN_TIMEOUT
     while not session.ready and not session.ended:
@@ -265,6 +274,17 @@ def join(address, password, port, graphics):
     return session
 
 
+def start_host(graphics, map_path, password, port=net.DEFAULT_PORT, bind="0.0.0.0", max_players=8):
+    """A HostSession playing the map at `map_path`, letting in up to max_players - 1 others who know `password`.
+    Raises if the map or the textures cannot be read, or nothing can listen on the port."""
+    graphics.load(ATLAS_PATH)                           # (back to our own textures after having joined someone)
+    level = load_or_default(map_path)
+    game = Game(level, graphics.make_world(level), character_tile=graphics.character_tile)
+    host = net.Host(password, port, bind, max_clients=max(1, max_players - 1))
+    with open(ATLAS_PATH, "rb") as f:                   # joiners draw with the host's textures
+        return HostSession(game, host, f.read())
+
+
 def reload_game(session, graphics, map_path):
     """Read the map and textures again and carry on in them (a host tells its joiners). With another map's path,
     that changes the map for everyone (the host's Change map). Raises if either cannot be read, leaving the game
@@ -276,88 +296,102 @@ def reload_game(session, graphics, map_path):
     session.reload(level, graphics.make_world(level), graphics.character_tile, png)
 
 
-def apply_settings(settings, screen, mouse):
-    """Use the player's settings (changed in the menu) and keep them for next time."""
-    mouse.sensitivity = MOUSE_SENSITIVITY * settings.sensitivity
+def apply_settings(settings, screen, mouse=None):
+    """Use the player's settings (changed in a menu) and keep them for next time."""
+    if mouse is not None:
+        mouse.sensitivity = MOUSE_SENSITIVITY * settings.sensitivity
     if settings.fullscreen != screen.fullscreen:
         screen.toggle_fullscreen()
     settings.save()
 
 
-def main():
-    pygame.init()
-    # A normal resizable window: the picture is scaled onto it by Screen (on the graphics card), not by
-    # pygame.display, so mouse movement arrives in plain screen pixels.
-    screen = Screen("simple raycaster", (WIDTH * 2, HEIGHT * 2))
-    clock = pygame.time.Clock()
-    graphics = Graphics()
-    joining = bool(arg_values("--join", 2))
-    if os.path.exists(ATLAS_PATH):
-        graphics.load(ATLAS_PATH)
-    elif not joining:                                       # a joiner is sent the host's textures
-        sys.exit("textures.png not found - run `python make_atlas.py` first")
-    port = int((arg_values("--port", 1) or [net.DEFAULT_PORT])[0])
-    watcher = None                                          # a joiner is sent new maps by its host instead
-    map_path = None
-    if joining:
-        address, password = arg_values("--join", 2)
-        session = join(address, password, port, graphics)
-    else:
-        map_path = (arg_values("--map", 1) or [MAP_PATH])[0]
-        if "--map" in sys.argv and not os.path.exists(map_path):
-            sys.exit(f"map file not found: {map_path}")      # don't silently play another map
-        level = load_or_default(map_path)
-        game = Game(level, graphics.make_world(level), character_tile=graphics.character_tile)
-        if arg_values("--host", 1):
-            bind = (arg_values("--bind", 1) or ["0.0.0.0"])[0]
-            try:
-                host = net.Host(arg_values("--host", 1)[0], port, bind)
-            except OSError as e:
-                sys.exit(f"cannot host on {bind}:{port}: {e}")
-            with open(ATLAS_PATH, "rb") as f:               # joiners draw with the host's textures
-                session = HostSession(game, host, f.read())
-            print(f"Hosting on {bind}:{host.port}; others join with --join <your address> <password>")
-        else:
-            session = LocalSession(game)
-        watcher = FileWatcher([map_path, ATLAS_PATH])       # a saved map or texture change is picked up live
+def home_screen(screen, clock, graphics, settings, note="", events=None):
+    """Show the home screen until the player starts a game. Returns (session, map path) - the path is None for a
+    joiner - or None to quit. `note` is shown first (why the last game ended)."""
+    home = Home(settings, os.path.dirname(MAP_PATH))
+    if note:
+        home.say(note[:60], warn=True)
+    backdrop = pygame.Surface((WIDTH, HEIGHT))
+    backdrop.fill(HOME_BACKDROP)
+    joining, give_up = None, 0.0
+    screen.title = "simple raycaster"
+    events = events or pygame.event.get                 # (tests hand in their own)
+    while True:
+        clock.tick(60)
+        for event in events():
+            if event.type in (pygame.QUIT, pygame.WINDOWCLOSE):
+                if joining:
+                    joining.close()
+                return None
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_F11:
+                screen.toggle_fullscreen()
+                settings.fullscreen = screen.fullscreen
+                settings.save()
+                continue
+            action = home.handle(event, screen.window.size)
+            if action == "exit":
+                return None
+            if action == "settings":
+                apply_settings(settings, screen)
+            elif action == "host":
+                settings.save()
+                try:
+                    session = start_host(graphics, home.map_path(), home.host_password, max_players=settings.max_players)
+                except (OSError, ValueError, KeyError, TypeError, pygame.error) as e:
+                    home.say(f"Could not host: {e}"[:60], warn=True)
+                else:
+                    print(f"Hosting {os.path.basename(home.map_path())} on port {session.host.port} "
+                          f"for up to {settings.max_players} players")
+                    return session, home.map_path()
+            elif action == "join":
+                joining = client_session(home.join_address, home.port(), home.join_password, graphics)
+                give_up = time.monotonic() + JOIN_TIMEOUT
+                home.go("connecting")
+            elif action == "cancel":
+                if joining:
+                    joining.close()
+                joining = None
+                home.go("join")
+        if joining:
+            joining.step(Inputs(), 0.0)
+            if joining.ready:
+                return joining, None
+            if joining.ended or time.monotonic() > give_up:
+                reason = joining.ended or "the host did not send the game"
+                joining.close()
+                joining = None
+                home.go("join")
+                home.say(f"Could not join: {reason}"[:60], warn=True)
+        overlay = pygame.Surface(screen.window.size, pygame.SRCALPHA)
+        overlay.fill(HOME_BACKDROP)                     # (the whole window, not just the picture's 16:9 part)
+        home.draw(overlay, pygame.mouse.get_pos(), shade=False)
+        screen.show(backdrop, overlay)
+
+
+def play(screen, clock, graphics, settings, session, map_path, from_home=False):
+    """Play `session` until it ends. Returns (quit, why): quit is True when the whole program should close (the
+    window was closed, or Exit was picked in a game not started from the home screen); why says why the game
+    ended, if not by the player's choice (the host left, the connection dropped)."""
+    watcher = FileWatcher([map_path, ATLAS_PATH]) if map_path else None    # a joiner is sent new maps instead
     kick = 0.0                                   # 1 right after a shot, fading to 0 (the gun's recoil)
     font = pygame.font.Font(None, 22)
     message, message_left = "", 0.0
-
-    # `--snapshot out.png` renders one frame and exits (for checking).
-    if "--snapshot" in sys.argv:
-        player, world = session.me.body, session.game.world
-        at = arg_values("--at", 3)
-        if at:
-            player.x, player.y, player.angle = (float(v) for v in at)
-            floor = int((arg_values("--span", 1) or ["0"])[0])      # index of the floor to stand on
-            player.span = floor
-            player.z = world.floor_of(floor, player.x, player.y)
-        pitch = arg_values("--pitch", 1)
-        if pitch:
-            look(player, math.radians(float(pitch[0])))
-        pygame.image.save(graphics.renderer.draw(world, player, session.game.items.sprites(), session.lighting()), arg_values("--snapshot", 1)[0])
-        return
-
-    maximize(screen.window)          # the game opens maximized; the picture scales to fit
-    settings = GameSettings.load()
     mouse = MouseLook(screen.window, MOUSE_SENSITIVITY * settings.sensitivity)
-    if settings.fullscreen:
-        screen.toggle_fullscreen()
     menu = Menu(settings, is_host=isinstance(session, HostSession), map_path=map_path,
-                players=lambda: len(session.game.players) if hasattr(session, "game") else 1)
+                players=lambda: len(session.game.players) if hasattr(session, "game") else 1,
+                leave_label="Leave game" if from_home else "Exit game")
     mouse.set_captured(True)
     print("Compiling the renderer (first run only; later runs use the cache)...")
     jump_pressed = reload_pressed = False
     equips, cycle = [], 0
     loads = getattr(session, "loads", 0)
-    running = True
+    running, quit_all, why = True, False, None
     while running:
         elapsed = clock.tick(FPS_CAP) / 1000
         dt = min(elapsed, 0.05)
         for event in pygame.event.get():
             if event.type in (pygame.QUIT, pygame.WINDOWCLOSE):
-                running = False
+                running, quit_all = False, True
             elif event.type == pygame.KEYDOWN and event.key == pygame.K_F11:
                 screen.toggle_fullscreen()
                 settings.fullscreen = screen.fullscreen
@@ -368,7 +402,7 @@ def main():
                     menu.hide()
                     mouse.set_captured(True)
                 elif action == "exit":
-                    running = False
+                    running, quit_all = False, not from_home    # (from the home screen: back to it)
                 elif action == "settings":
                     apply_settings(settings, screen, mouse)
                 elif action and action.startswith("map:"):
@@ -419,7 +453,8 @@ def main():
             loads, message, message_left = session.loads, "The host loaded a new map", 2.0
         if session.ended:
             print(f"Game over: {session.ended}")
-            running = False
+            running, why = False, f"Game over: {session.ended}"
+            quit_all = quit_all or not from_home
         if happened.fired:
             kick = 1.0
         kick = max(0.0, kick - dt * 8.0)
@@ -438,6 +473,78 @@ def main():
         screen.title = f"simple raycaster - {clock.get_fps():.0f} fps{session.status()}"
     mouse.set_captured(False)
     session.close()
+    return quit_all, why
+
+
+def main():
+    pygame.init()
+    # A normal resizable window: the picture is scaled onto it by Screen (on the graphics card), not by
+    # pygame.display, so mouse movement arrives in plain screen pixels.
+    screen = Screen("simple raycaster", (WIDTH * 2, HEIGHT * 2))
+    clock = pygame.time.Clock()
+    graphics = Graphics()
+    settings = GameSettings.load()
+    if os.path.exists(ATLAS_PATH):
+        graphics.load(ATLAS_PATH)
+    # Started with --map (the map editor's Play), --host, --join or --snapshot: straight into that game.
+    # Otherwise the home screen, which comes back after each game.
+    if not any(flag in sys.argv for flag in ("--map", "--host", "--join", "--snapshot")):
+        maximize(screen.window)      # the game opens maximized; the picture scales to fit
+        if settings.fullscreen:
+            screen.toggle_fullscreen()
+        why = ""
+        while True:
+            started = home_screen(screen, clock, graphics, settings, why)
+            if started is None:
+                break
+            quit_all, why = play(screen, clock, graphics, settings, *started, from_home=True)
+            if quit_all:
+                break
+        pygame.quit()
+        return
+
+    joining = bool(arg_values("--join", 2))
+    if graphics.renderer is None and not joining:           # a joiner is sent the host's textures
+        sys.exit("textures.png not found - run `python make_atlas.py` first")
+    port = int((arg_values("--port", 1) or [net.DEFAULT_PORT])[0])
+    map_path = None
+    if joining:
+        address, password = arg_values("--join", 2)
+        session = join(address, password, port, graphics)
+    else:
+        map_path = (arg_values("--map", 1) or [MAP_PATH])[0]
+        if "--map" in sys.argv and not os.path.exists(map_path):
+            sys.exit(f"map file not found: {map_path}")      # don't silently play another map
+        if arg_values("--host", 1):
+            bind = (arg_values("--bind", 1) or ["0.0.0.0"])[0]
+            try:
+                session = start_host(graphics, map_path, arg_values("--host", 1)[0], port, bind)
+            except OSError as e:
+                sys.exit(f"cannot host on {bind}:{port}: {e}")
+            print(f"Hosting on {bind}:{session.host.port}; others join with --join <your address> <password>")
+        else:
+            level = load_or_default(map_path)
+            session = LocalSession(Game(level, graphics.make_world(level), character_tile=graphics.character_tile))
+
+    # `--snapshot out.png` renders one frame and exits (for checking).
+    if "--snapshot" in sys.argv:
+        player, world = session.me.body, session.game.world
+        at = arg_values("--at", 3)
+        if at:
+            player.x, player.y, player.angle = (float(v) for v in at)
+            floor = int((arg_values("--span", 1) or ["0"])[0])      # index of the floor to stand on
+            player.span = floor
+            player.z = world.floor_of(floor, player.x, player.y)
+        pitch = arg_values("--pitch", 1)
+        if pitch:
+            look(player, math.radians(float(pitch[0])))
+        pygame.image.save(graphics.renderer.draw(world, player, session.game.items.sprites(), session.lighting()), arg_values("--snapshot", 1)[0])
+        return
+
+    maximize(screen.window)          # the game opens maximized; the picture scales to fit
+    if settings.fullscreen:
+        screen.toggle_fullscreen()
+    play(screen, clock, graphics, settings, session, map_path)
     pygame.quit()
 
 
