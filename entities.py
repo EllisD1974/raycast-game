@@ -59,9 +59,9 @@ class Entities:
                 continue
             wall_top = level.wall_top_at(cx, cy, e.span)
             if wall_top is not None:                    # standing on top of a wall
-                self.items.append(Item(e, wall_top + e.lift))
+                self.items.append(Item(e, wall_top + e.lift + e.elevation))
             elif world.span_on[e.span, cy, cx]:
-                self.items.append(Item(e, world.floor_of(e.span, e.x, e.y) + e.lift))
+                self.items.append(Item(e, world.floor_of(e.span, e.x, e.y) + e.lift + e.elevation))
 
     def sprites(self):
         """(x, y, z, size, tile, spin, alpha, glow) of every item that is there, for the renderer. Animations are

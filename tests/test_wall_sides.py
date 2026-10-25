@@ -400,3 +400,61 @@ def test_a_partly_transparent_side_tile_mixes_with_the_wall():
     for pitch in (0.0, -0.15):
         r, g, b = look_with(textures, level, 5.5, 7.0, -math.pi / 2, pitch)[WIDTH_MIDDLE, HEIGHT_MIDDLE]
         assert g > 20 and abs(r - 2 * g) <= 3 and b < 20             # half yellow, half red: green at half the red
+
+
+# ------------------------------------------------------------------ each placed copy's own elevation
+
+def test_elevation_raises_one_placed_item_and_is_kept_with_the_map():
+    level = room()
+    item = hung_item(level, lift=0.25)
+    level.entities.append(Entity(2.5, 2.5, lift=0.25))
+    item.elevation = 0.3
+    zs = [i.z for i in Entities(level, World(level, 16)).items]
+    assert zs == [pytest.approx(0.55), pytest.approx(0.25)]
+    again = parse_level(json.loads(level_text(level)))
+    assert [e.elevation for e in again.entities] == [0.3, 0.0]
+
+
+def test_a_prefab_never_sets_the_elevation_of_its_copies():
+    level = room()
+    level.prefabs.append(Entity(0.0, 0.0, name="torch", tile=ITEM_TILE, lift=0.2, elevation=0.0))
+    a, b = hung_item(level), hung_item(level, cell=(3, 1))
+    a.prefab = b.prefab = "torch"
+    a.elevation = 0.5
+    level.prefabs[0].lift = 0.4
+    level.apply_prefabs()
+    assert (a.lift, b.lift) == (0.4, 0.4) and (a.elevation, b.elevation) == (0.5, 0.0)
+
+
+def test_raising_a_hung_item_moves_it_up_the_wall_in_the_3d_view():
+    level = room()
+    item = hung_item(level)
+    top = lambda: np.nonzero(magenta(look(level, 5.5, 9.0, -math.pi / 2))[WIDTH_MIDDLE])[0].min()
+    low = top()
+    item.elevation = 0.2
+    assert top() < low - 10                                          # higher on the wall: nearer the top of the picture
+
+
+def test_the_elevation_row_and_brackets_move_only_the_selected_copy(ed):
+    ed.level.prefabs.append(Entity(0.0, 0.0, name="torch", tile=ITEM_TILE, lift=0.2))
+    ed.place_prefab = "torch"
+    ed.do("tool:entity")
+    ed.fit_view()
+    press(ed, near(ed, (5, 6), "n"))
+    first = ed.level.entities[-1]
+    ed.deselect()
+    press(ed, near(ed, (3, 6), "s"))                                 # a second copy, standing
+    second = ed.level.entities[-1]
+    keys = [r.field.key for r in ed.details_rows()]
+    assert keys[:5] == ["prefab", "edit_prefab", "detach", "this_copy", "elevation"]
+    field = next(r.field for r in ed.details_rows() if r.field.key == "elevation")
+    field.set(0.35)
+    assert second.elevation == 0.35 and first.elevation == 0.0 and ed.level.prefabs[0].elevation == 0.0
+    assert second.lift == first.lift == 0.2                          # the prefab's settings are untouched
+    ed.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RIGHTBRACKET, mod=0, unicode="]"))
+    assert second.elevation == pytest.approx(0.4)
+    ed.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_LEFTBRACKET, mod=pygame.KMOD_SHIFT, unicode="["))
+    assert second.elevation == pytest.approx(0.15) and first.elevation == 0.0
+    ed.draw(pygame.display.get_surface())                            # (the map shows +0.15 beside it)
+    ed.do("undo")                                                    # (undo puts back a copy of the level)
+    assert [e.elevation for e in ed.level.entities] == [0.0, pytest.approx(0.4)]

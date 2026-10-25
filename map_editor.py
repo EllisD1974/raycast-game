@@ -79,6 +79,10 @@ Items hang on a wall when added with a click near the side of the cell that has 
 up): they are then a flat picture against the wall, facing into the cell, at their Lift above the floor.
 The item's "On wall" setting moves it onto another wall of its cell, or off the wall.
 
+Each placed item has an Elevation of its own ("This copy only" in its pane, or [ and ] with the item
+selected; Shift for bigger steps): how much higher or lower than its settings put it this one copy sits, on
+a wall or not. A prefab never changes it, and changing it moves no other copy.
+
 Items (the Entity tool, N): click an empty cell to add an item there (in the middle of the cell, on
 the floor you are editing), or click an existing item to select it. A selected item opens the
 Details pane, docked beside the map, where you change it in place: Sprite (or click a tile in the
@@ -170,7 +174,7 @@ from constants import FOV_DEG, HEIGHT, MOUSE_SENSITIVITY, PLAYER_HEIGHT, TILE, W
 from mapfile import (ANIMATION_KINDS, ANIMATION_LABELS, DEFAULTS, EDIT_LAYERS, EFFECT_LABELS, ENTITY_EFFECTS,
                      ENTITY_MODES, GUN_MODE_LABELS, GUN_MODES, MAP_PATH, MAX_HIT_NAMES, MAX_NAME, MAX_NAME_LENGTH, MIN_WALL_GAP,
                      EFFECT_AIM_LABELS, EFFECT_AIMS, EFFECT_COLOR_LABELS, EFFECT_COLORS, EFFECT_KIND_LABELS, EFFECT_KINDS, MIN_AMBIENT, MODE_LABELS, SHOT_LABELS, SHOT_TYPES, Animation, AmmoType, Effect,
-                     Entity, Gun, Level, Light, SIDE_VECTORS, SIDES, WALL_LABELS, default_level, mounted_position,
+                     Entity, Gun, Level, Light, MAX_ELEVATION, SIDE_VECTORS, SIDES, WALL_LABELS, default_level, mounted_position,
                      grid_name, load_level, save_level, split_grid_name)
 import details
 import hud
@@ -247,6 +251,7 @@ MAX_SIDE_BAND = 8.0
 PARTIAL_SIDE = (90, 220, 230)                   # outline of a wall side whose own tile covers only a band of it
 RULER = 22                                      # width of the rulers along the map's top and left, in pixels
 RULER_LABEL_STEPS = (1, 2, 5, 10, 20, 50, 100)   # cells between ruler numbers: the first that leaves room
+ELEVATION_STEP = 0.05                           # [ / ] and the Elevation row move a placed item up or down this much
 MOUNT_ZONE = 0.3                                # an item clicked this close (in cells) to a walled side hangs on it
 TOOLS = {"paint": "B", "erase": "E", "fill": "F", "pick": "I", "start": "S", "stairs": "T", "shape": "H",
          "camera": "C", "entity": "N"}
@@ -707,6 +712,30 @@ class Editor:
                                 action=pick(p.name), icon=p.tile))
         return fields
 
+    def placement_fields(self, e):
+        """The settings that belong to where one placed item is, not to what it is: which wall of its cell it hangs
+        on (when it has walls) and its elevation. Changing them moves this copy only, never a prefab or other copies."""
+        fields = [Field("this_copy", "This copy only", "header", None, None)]
+        cx, cy = math.floor(e.x), math.floor(e.y)
+        walls = tuple(side for side in SIDES
+                      if self.level.is_solid(cx + SIDE_VECTORS[side][0], cy + SIDE_VECTORS[side][1], e.span))
+        if walls or e.wall:
+            fields.append(Field("wall", "On wall", "enum", lambda: e.wall, lambda v: self.mount_entity(e, v),
+                                choices=("",) + tuple(side for side in SIDES if side in walls or side == e.wall),
+                                labels=WALL_LABELS))
+        fields.append(Field("elevation", "Elevation", "num", lambda: e.elevation, lambda v: self.set_elevation(e, v),
+                            step=ELEVATION_STEP, low=-MAX_ELEVATION, high=MAX_ELEVATION))
+        return fields
+
+    def set_elevation(self, e, value):
+        """Raise or lower one placed item (one undo step). Only this item moves: not its prefab, not other copies."""
+        value = round(max(-MAX_ELEVATION, min(MAX_ELEVATION, value)), 4)
+        if value == e.elevation:
+            return
+        self.begin_edit()
+        e.elevation = value
+        self.say(f"Elevation {fmt(value)} (this copy only)")
+
     def linked_fields(self, e):
         """An item placed from a prefab: which prefab it is (change it, or choose none to detach it), buttons to edit
         that prefab or detach this item, and the item's settings, read-only because they come from the prefab."""
@@ -721,6 +750,7 @@ class Editor:
                         text_override=f"Edit {e.prefab} in the Prefabs section"),
                   Field("detach", "Detach", "button", None, None, action=lambda: self.set_instance_prefab(""),
                         text_override="Detach: edit this item on its own"),
+                  *self.placement_fields(e),
                   Field("from_prefab", "This item (set by its prefab)", "header", None, None),
                   info("where", "Where", f"cell {math.floor(e.x)}, {math.floor(e.y)} on {self.level.names[e.span]}"),
                   info("sprite", "Sprite", f"#{e.tile + 1}" + ("" if e.shown else "  (hidden)")),
@@ -761,7 +791,7 @@ class Editor:
             return Field(name, label, kind, (lambda n=name: getattr(e, n)),
                          (lambda v, n=name: self.set_entity(n, v)), **options)
 
-        fields = [field("name", "Name", "text")] if is_prefab else []
+        fields = [field("name", "Name", "text")] if is_prefab else             self.placement_fields(e) + [Field("item_settings", "Item settings", "header", None, None)]
         fields += [field("tile", "Icon" if is_prefab else "Sprite", "tile", low=0, high=len(self.tiles) - 1),
                    field("mode", "Mode", "enum", choices=ENTITY_MODES, labels=MODE_LABELS),
                    field("effect", "Effect", "enum", choices=ENTITY_EFFECTS, labels=EFFECT_LABELS)]
@@ -781,13 +811,6 @@ class Editor:
                                 low=0.0, high=1000.0))
         if e.mode == "respawn":
             fields.append(field("respawn", "Respawn", "num", step=1.0, low=0.0, high=600.0, unit="s"))
-        walls = () if is_prefab else tuple(       # the walls of its cell it could hang on
-            side for side in SIDES
-            if self.level.is_solid(math.floor(e.x) + SIDE_VECTORS[side][0], math.floor(e.y) + SIDE_VECTORS[side][1], e.span))
-        if walls or (e.wall and not is_prefab):
-            fields.append(Field("wall", "On wall", "enum", lambda: e.wall, lambda v: self.mount_entity(e, v),
-                                choices=("",) + tuple(side for side in SIDES if side in walls or side == e.wall),
-                                labels=WALL_LABELS))
         fields += [field("size", "Size", "num", step=0.1, low=0.1, high=3.0),
                    field("lift", "Lift", "num", step=0.1, low=-2.0, high=5.0),
                    field("shown", "Sprite", "enum", choices=(True, False), labels={True: "Shown", False: "Hidden"}),
@@ -2686,6 +2709,10 @@ class Editor:
             self.do("layer:" + LAYER_KEYS[e.key])
         elif e.key in TOOL_KEYS:
             self.do("tool:" + TOOL_KEYS[e.key])
+        elif e.key in (pygame.K_LEFTBRACKET, pygame.K_RIGHTBRACKET) and self.selected_entity() is not None:
+            item = self.selected_entity()                   # raise / lower the selected item
+            step = ELEVATION_STEP * (5 if e.mod & pygame.KMOD_SHIFT else 1)
+            self.set_elevation(item, item.elevation + (step if e.key == pygame.K_RIGHTBRACKET else -step))
         elif e.key == pygame.K_LEFTBRACKET:
             self.do("val-")
         elif e.key == pygame.K_RIGHTBRACKET:
@@ -4012,6 +4039,9 @@ class Editor:
             pygame.draw.circle(screen, ENTITY_MODE_COLORS[e.mode], (cx, cy), size // 2 + 2, 2)
             if e is chosen:                              # the selected item gets a bright outer ring
                 pygame.draw.circle(screen, ACCENT, (cx, cy), size // 2 + 6, 3)
+            if e.elevation and z >= 24:                  # raised or lowered: by how much
+                label = self.small.render(f"{e.elevation:+g}", True, ACCENT)
+                screen.blit(label, (cx + size // 2 + 2, cy - size // 2 - label.get_height() // 2))
 
     def draw_start(self, screen):
         z, level = self.zoom, self.level

@@ -256,7 +256,7 @@ def test_the_entity_tool_shows_the_prefabs_to_place_and_placing_makes_a_linked_i
     e = place(ed, (4, 4))
     assert (e.prefab, e.effect, e.amount, e.tile) == ("Heart", "health", 40.0, 11)
     assert (e.x, e.y) == (4.5, 4.5)
-    assert keys(ed)[:4] == ["prefab", "edit_prefab", "detach", "from_prefab"]    # a linked item shows which prefab it is, then its details
+    assert keys(ed)[:6] == ["prefab", "edit_prefab", "detach", "this_copy", "elevation", "from_prefab"]    # a linked item shows which prefab it is, then its details
     ed.draw(pygame.display.get_surface())
     ed.deselect()
     click(ed, details.button_box(row(ed, "pick_1")).center)
@@ -357,7 +357,7 @@ def test_a_placed_copy_shows_its_own_details_and_not_only_a_list_of_prefabs(ed):
                        animations=[Animation("rotate")], light="Glow", emits="Fire", emits_override=True,
                        emits_offset_x=0.5, shown=False)
     assert ed.selected_entity() is copy
-    assert keys(ed)[:4] == ["prefab", "edit_prefab", "detach", "from_prefab"]
+    assert keys(ed)[:6] == ["prefab", "edit_prefab", "detach", "this_copy", "elevation", "from_prefab"]
     shown = info(ed)
     assert shown["where"] == "cell 4, 4 on Floor 1"
     assert shown["sprite"] == "#12  (hidden)" and shown["mode"] == "Stays" and shown["effect"] == "Health: +25"

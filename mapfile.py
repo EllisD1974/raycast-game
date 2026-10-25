@@ -57,6 +57,7 @@ SIDE_BAND_LAYERS = tuple(f"side_{side}_{end}" for side in SIDES for end in ("fro
 SHARED_LAYERS = ("walls", "wall_h", "wall_ceil", "wall_floor") + SIDE_LAYERS + SIDE_BAND_LAYERS  # one grid for all floors
 SIDE_VECTORS = {"n": (0, -1), "e": (1, 0), "s": (0, 1), "w": (-1, 0)}  # which way each side faces on the map
 WALL_LABELS = {"": "Free standing", "n": "North wall", "e": "East wall", "s": "South wall", "w": "West wall"}
+MAX_ELEVATION = 8.0             # furthest a placed item may be raised or lowered from where its settings put it
 WALL_GAP = 0.04                 # how far in front of a wall's face an item hung on it is, in cells
 EDIT_LAYERS = ("walls",) + SPAN_LAYERS + ("wall_h",)            # what the editor lets you switch between
 RAMP_DIRS = {1: (1, 0), 2: (-1, 0), 3: (0, 1), 4: (0, -1)}      # id -> (dx, dy) the floor rises toward
@@ -483,6 +484,8 @@ class Entity:
     wall     "" for an item standing in its cell, or the side of its cell ("n", "e", "s", "w") whose wall it hangs on:
              it is then a flat picture against that wall, facing into the cell (x, y are just in front of the
              wall: see mounted_position), at `lift` above the floor
+    elevation  how much higher (or, below 0, lower) this placed item is than its settings put it. It belongs to
+             the place, like x and y: a prefab never sets it, so each copy of a prefab can sit at its own height
     A "scenery" item cannot be touched or picked up: it is only there to look at (a torch, a vent)."""
     x: float
     y: float
@@ -508,6 +511,7 @@ class Entity:
     name: str = ""                  # a prefab's name (an item placed in the map has none)
     prefab: str = ""                # the prefab this item is an instance of ("" for a plain item)
     wall: str = ""                  # the side of its cell whose wall it hangs on ("" for none)
+    elevation: float = 0.0          # this placed item's own height above where its settings put it
 
     def clone(self, **changes):
         """A copy that shares nothing with this entity (its animations are copied too)."""
@@ -538,7 +542,8 @@ class Entity:
                        emits_offset_z=float(data.get("emits_offset_z", 0.0)),
                        light=str(data.get("light", ""))[:MAX_NAME],
                        name=str(data.get("name", ""))[:MAX_NAME], prefab=str(data.get("prefab", ""))[:MAX_NAME],
-                       wall=data.get("wall") if data.get("wall") in WALL_LABELS else "")
+                       wall=data.get("wall") if data.get("wall") in WALL_LABELS else "",
+                       elevation=max(-MAX_ELEVATION, min(MAX_ELEVATION, float(data.get("elevation", 0.0)))))
 
 
 def mounted_position(cx, cy, wall):
