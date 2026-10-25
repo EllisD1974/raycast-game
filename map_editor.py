@@ -79,6 +79,12 @@ Items hang on a wall when added with a click near the side of the cell that has 
 up): they are then a flat picture against the wall, facing into the cell, at their Lift above the floor.
 The item's "On wall" setting moves it onto another wall of its cell, or off the wall.
 
+Spawn points (the Spawn tool, O): where players come into the game. Click an open cell to put one there
+with the Order shown on the second toolbar row (Order- / Order+, or [ and ]); click one again to give it
+that order, or (if it has it already) to turn it a quarter; right-click removes it. Players come in at the
+lowest order that has a spawn point not yet used, picked at random among those; once all have been used it
+starts over. A map with no spawn points uses the Start (S).
+
 Each placed item has an Elevation of its own ("This copy only" in its pane, or [ and ] with the item
 selected; Shift for bigger steps): how much higher or lower than its settings put it this one copy sits, on
 a wall or not. A prefab never changes it, and changing it moves no other copy.
@@ -174,7 +180,7 @@ from constants import FOV_DEG, HEIGHT, MOUSE_SENSITIVITY, PLAYER_HEIGHT, TILE, W
 from mapfile import (ANIMATION_KINDS, ANIMATION_LABELS, DEFAULTS, EDIT_LAYERS, EFFECT_LABELS, ENTITY_EFFECTS,
                      ENTITY_MODES, GUN_MODE_LABELS, GUN_MODES, MAP_PATH, MAX_HIT_NAMES, MAX_NAME, MAX_NAME_LENGTH, MIN_WALL_GAP,
                      EFFECT_AIM_LABELS, EFFECT_AIMS, EFFECT_COLOR_LABELS, EFFECT_COLORS, EFFECT_KIND_LABELS, EFFECT_KINDS, MIN_AMBIENT, MODE_LABELS, SHOT_LABELS, SHOT_TYPES, Animation, AmmoType, Effect,
-                     Entity, Gun, Level, Light, MAX_ELEVATION, SIDE_VECTORS, SIDES, WALL_LABELS, default_level, mounted_position,
+                     Entity, Gun, Level, Light, MAX_ELEVATION, MAX_SPAWN_ORDER, Spawner, SIDE_VECTORS, SIDES, WALL_LABELS, default_level, mounted_position,
                      grid_name, load_level, save_level, split_grid_name)
 import details
 import hud
@@ -252,11 +258,12 @@ PARTIAL_SIDE = (90, 220, 230)                   # outline of a wall side whose o
 RULER = 22                                      # width of the rulers along the map's top and left, in pixels
 RULER_LABEL_STEPS = (1, 2, 5, 10, 20, 50, 100)   # cells between ruler numbers: the first that leaves room
 ELEVATION_STEP = 0.05                           # [ / ] and the Elevation row move a placed item up or down this much
+SPAWN_FILL, SPAWN_EDGE = (90, 170, 255), (15, 40, 90)   # a spawn point on the map
 MOUNT_ZONE = 0.3                                # an item clicked this close (in cells) to a walled side hangs on it
-TOOLS = {"paint": "B", "erase": "E", "fill": "F", "pick": "I", "start": "S", "stairs": "T", "shape": "H",
-         "camera": "C", "entity": "N"}
+TOOLS = {"paint": "B", "erase": "E", "fill": "F", "pick": "I", "start": "S", "spawn": "O", "stairs": "T",
+         "shape": "H", "camera": "C", "entity": "N"}
 TOOL_KEYS = {pygame.K_b: "paint", pygame.K_e: "erase", pygame.K_f: "fill",
-             pygame.K_i: "pick", pygame.K_s: "start", pygame.K_t: "stairs", pygame.K_h: "shape",
+             pygame.K_i: "pick", pygame.K_s: "start", pygame.K_o: "spawn", pygame.K_t: "stairs", pygame.K_h: "shape",
              pygame.K_c: "camera", pygame.K_n: "entity"}
 SHAPES = {"line": "Line", "box": "Box", "filled_box": "Filled box", "ellipse": "Ellipse",
           "filled_ellipse": "Filled ellipse"}           # what the Shape tool draws, and its button
@@ -508,6 +515,7 @@ class Editor:
         self.shape_drag = None                  # (start_cell, current_cell, erasing) while dragging a shape
         self.shape_side = None                  # the wall side under the mouse where that drag started
         self.side_lock = None                   # the wall side a whole shape paints (None: the one at the mouse)
+        self.spawn_order = 0                    # the order the Spawn tool gives the spawn points it places
         self.side_from = 0.0                    # the band a wall side's own tile covers, above the wall's foot
         self.side_to = 0.0                      # (0: up to the top)
         self.stroke = None                      # "paint" / "erase" while drawing on the map
@@ -1554,6 +1562,11 @@ class Editor:
                      ("txt", f"step {fmt(self.stair_step)}", ACCENT)]
         if self.tool == "shape":
             row2 += [None] + [("btn", label, f"shape:{kind}") for kind, label in SHAPES.items()]
+        if self.tool == "spawn":
+            row2 += [None, ("btn", "Order-", "order-"), ("btn", "Order+", "order+"),
+                     ("txt", f"order {self.spawn_order}", ACCENT),
+                     ("txt", f"{len(self.level.spawners)} spawn point{'s' if len(self.level.spawners) != 1 else ''}"
+                             " (0 is used first)", DIM)]
         if self.tool == "entity":
             row2 += [None, ("txt", "Pick what to place in the list on the right, click a cell to place it, or click an item to edit it", DIM)]
         row3 = [("btn", f"{name.capitalize()}({key})", f"tool:{name}") for name, key in TOOLS.items()]
@@ -1910,6 +1923,9 @@ class Editor:
         if button == 3 and self.tool == "entity":
             self.remove_entities(cell)
             return
+        if self.tool == "spawn":
+            (self.remove_spawners if button == 3 else self.place_spawner)(cell)
+            return
         if self.tool == "shape":
             self.shape_drag = (cell, cell, button == 3)
             self.shape_side = self.side_at(self.mouse)  # (the WallSide layer paints the side picked here)
@@ -2013,6 +2029,39 @@ class Editor:
             self.camera_drag = True
         else:
             self.say("The camera can't stand there (wall, no room, or too low)")
+
+    def spawners_in(self, cell):
+        """The spawn points in this cell on the floor being edited."""
+        return [s for s in self.level.spawners
+                if (math.floor(s.x), math.floor(s.y)) == tuple(cell) and s.span == self.floor]
+
+    def place_spawner(self, cell):
+        """Spawn tool: add a spawn point in the middle of an open cell, with the chosen order. Clicking one gives
+        it the chosen order, or turns it a quarter if it has that order already."""
+        level = self.level
+        if not level.in_bounds(*cell):
+            return
+        found = self.spawners_in(cell)
+        if not found and not level.span_present(self.floor, *cell):
+            self.say("A spawn point needs open floor: no room in this cell on this floor")
+            return
+        self.begin_edit()
+        if not found:
+            level.spawners.append(Spawner(cell[0] + 0.5, cell[1] + 0.5, self.floor, 0.0, self.spawn_order))
+            self.say(f"Spawn point {len(level.spawners)}, order {self.spawn_order} (click it again to turn it)")
+        elif found[0].order != self.spawn_order:
+            found[0].order = self.spawn_order
+            self.say(f"Spawn point now has order {self.spawn_order}")
+        else:
+            found[0].angle = (found[0].angle + math.pi / 2) % math.tau
+            self.say(f"Spawn point faces {math.degrees(found[0].angle):.0f} deg")
+
+    def remove_spawners(self, cell):
+        found = self.spawners_in(cell)
+        if found:
+            self.begin_edit()
+            self.level.spawners = [s for s in self.level.spawners if s not in found]
+            self.say(f"Removed a spawn point ({len(self.level.spawners)} left)")
 
     def place_start(self, cell):
         level = self.level
@@ -2290,6 +2339,11 @@ class Editor:
             self.delete_floor()
         elif action == "rename":
             self.start_rename()
+        elif action in ("order-", "order+"):
+            self.spawn_order = max(0, min(MAX_SPAWN_ORDER, self.spawn_order + (1 if action == "order+" else -1)))
+            self.say(f"New spawn points get order {self.spawn_order} (click one to give it this order)")
+        elif action in ("val-", "val+") and self.tool == "spawn":
+            self.do("order-" if action == "val-" else "order+")        # [ and ] step the order too
         elif action in ("val-", "val+"):
             self.adjust_value(-VALUE_STEP if action == "val-" else VALUE_STEP)
         elif action == "dir":
@@ -3027,6 +3081,7 @@ class Editor:
             if x0 <= cx < x1 and y0 <= cy < y1:
                 draw_problem_outline(screen, self.cell_rect(cx, cy))
         self.draw_entities(screen)
+        self.draw_spawners(screen)
         self.draw_start(screen)
         self.draw_camera(screen)
         self.draw_cursor(screen, area)
@@ -4043,6 +4098,24 @@ class Editor:
                 label = self.small.render(f"{e.elevation:+g}", True, ACCENT)
                 screen.blit(label, (cx + size // 2 + 2, cy - size // 2 - label.get_height() // 2))
 
+    def draw_spawners(self, screen):
+        """Spawn points: a blue disc with a facing line and its order, or a hollow ring on another floor."""
+        z = self.zoom
+        origin = self.cell_rect(0, 0)
+        radius = max(4, z * 0.3)
+        for s in self.level.spawners:
+            cx, cy = origin.x + s.x * z, origin.y + s.y * z
+            if s.span != self.floor:
+                pygame.draw.circle(screen, SPAWN_FILL, (cx, cy), radius, 2)
+                continue
+            tip = (cx + math.cos(s.angle) * z * 0.45, cy + math.sin(s.angle) * z * 0.45)
+            pygame.draw.circle(screen, SPAWN_FILL, (cx, cy), radius)
+            pygame.draw.circle(screen, SPAWN_EDGE, (cx, cy), radius, 2)
+            pygame.draw.line(screen, (255, 255, 255), (cx, cy), tip, max(2, z // 12))
+            if z >= 16:
+                label = self.small.render(str(s.order), True, SPAWN_EDGE)
+                screen.blit(label, label.get_rect(center=(cx, cy)))
+
     def draw_start(self, screen):
         z, level = self.zoom, self.level
         origin = self.cell_rect(0, 0)
@@ -4294,7 +4367,8 @@ class Editor:
             self.draw_arrow(screen, rect, self.ramp_dir, TEXT)
         else:
             color = {"erase": WARN, "fill": (120, 200, 255), "pick": (200, 120, 255),
-                      "start": (60, 220, 110), "stairs": (120, 200, 255), "shape": ACCENT}.get(self.tool, ACCENT)
+                      "start": (60, 220, 110), "spawn": SPAWN_FILL, "stairs": (120, 200, 255),
+                      "shape": ACCENT}.get(self.tool, ACCENT)
             pygame.draw.rect(screen, color, self.cell_rect(*cell), 2)
 
     def draw_panel(self, screen):
@@ -4327,7 +4401,7 @@ class Editor:
             screen.blit(small, (ATLAS_X + dx * cell, y + 22 + dy * cell))
         hints = ("Atlas: click / drag = select, Ctrl = add/remove",
                  "Map: L-drag paint, R-drag erase, wheel zoom, Space+drag pan",
-                 "Tab floor, layers 1-8, tools B E F I S T H C N, [ ] value, R ramp, K key")
+                 "Tab floor, layers 1-8, tools B E F I S O T H C N, [ ] value, R ramp, K key")
         for i, text in enumerate(hints):
             screen.blit(self.small.render(text, True, DIM), (ATLAS_X, hints_y + i * 16))
 

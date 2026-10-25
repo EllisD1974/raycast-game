@@ -13,7 +13,7 @@ from constants import PLAYER_HEIGHT
 from entities import Entities, PlayerStats
 from explosions import blast_results
 from inventory import Inventory
-from physics import look, spawn, step
+from physics import look, spawn, spawn_at, step
 from projectiles import MUZZLE, Projectiles, muzzle_shift
 
 
@@ -85,6 +85,42 @@ def character_sprite(body, first_tile, player_id, viewer_angle=None):
     return (body.x, body.y, body.z, PLAYER_HEIGHT, character_tile_for(first_tile, player_id, viewer_angle, body.angle))
 
 
+class SpawnOrder:
+    """Where each player comes into the game, from the map's spawners (mapfile.Spawner).
+
+    A round goes through the spawners from the lowest order up: each player comes in at a spawner of the
+    lowest order that still has one not used in this round, picked at random among those. When every spawner
+    has been used, a new round starts at the lowest order again. So two order-0 spawners take the first two
+    players in a random order, an order-1 spawner the third, and the fourth starts the round over. Joining,
+    coming back after being knocked out and a map reload all take the next place. A map without spawners
+    puts everyone at its start."""
+
+    def __init__(self, level, rng):
+        self.level, self.rng = level, rng
+        self.used = set()                   # indices of the spawners used in this round
+
+    def next_index(self):
+        """The index of the spawner the next player comes in at (None: the map has none)."""
+        spawners = self.level.spawners
+        if not spawners:
+            return None
+        if len(self.used) >= len(spawners):
+            self.used.clear()               # every one has been used: a new round
+        free = [i for i in range(len(spawners)) if i not in self.used]
+        lowest = min(spawners[i].order for i in free)
+        pick = self.rng.choice([i for i in free if spawners[i].order == lowest])
+        self.used.add(pick)
+        return pick
+
+    def body(self, world):
+        """A player's body at the next place to come in at."""
+        index = self.next_index()
+        if index is None:
+            return spawn(self.level, world)
+        s = self.level.spawners[index]
+        return spawn_at(world, s.x, s.y, s.span, s.angle)
+
+
 @dataclass
 class PlayerState:
     """One player: where they are (body), what pickups changed (stats) and what they carry."""
@@ -108,7 +144,9 @@ class Game:
         self.level = level
         self.world = world
         self.items = Entities(level, world)
-        self.projectiles = Projectiles(rng or random.Random())
+        self.rng = rng or random.Random()
+        self.projectiles = Projectiles(self.rng)
+        self.spawns = SpawnOrder(level, self.rng)       # where players come in
         self.players = {}           # player id -> PlayerState
         self.fx = []                # particle effects to play, (name, x, y, z, dx, dy, dz[, ox, oy, oz]), until take_fx()
         self.flashes = []           # lights to flash, (name, x, y, z), until take_flashes()
@@ -123,14 +161,15 @@ class Game:
         self.items = Entities(level, world)
         self.projectiles.bullets = []
         self.fx, self.flashes = [], []
+        self.spawns = SpawnOrder(level, self.rng)       # a new round of the new map's spawners
         for state in self.players.values():             # in place: sessions hold on to these PlayerStates
-            state.body = spawn(level, world)
+            state.body = self.spawns.body(world)
             state.stats = PlayerStats(score=state.stats.score)
             state.inventory = Inventory()
 
     def add_player(self, player_id):
-        """Put a new player at the level's start."""
-        state = PlayerState(spawn(self.level, self.world))
+        """Put a new player in the game, at the next spawner (or the level's start)."""
+        state = PlayerState(self.spawns.body(self.world))
         self.players[player_id] = state
         return state
 
@@ -159,12 +198,12 @@ class Game:
         return len(fired)
 
     def hurt(self, player_id, damage):
-        """Take `damage` off a player's health. At zero they are out: back at the level's start, with full
-        health and only what a new player carries (their score stays)."""
+        """Take `damage` off a player's health. At zero they are out: back in at the next spawner (or the level's
+        start), with full health and only what a new player carries (their score stays)."""
         state = self.players[player_id]
         state.stats.health = max(0.0, state.stats.health - damage)
         if state.stats.health <= 0.0:
-            state.body = spawn(self.level, self.world)              # in place: sessions hold on to this PlayerState
+            state.body = self.spawns.body(self.world)               # in place: sessions hold on to this PlayerState
             state.stats = PlayerStats(score=state.stats.score)
             state.inventory = Inventory()
 

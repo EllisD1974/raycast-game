@@ -93,6 +93,30 @@ ANIMATION_KINDS = ("float", "rotate")
 ANIMATION_LABELS = {"float": "Float", "rotate": "Rotate"}
 
 
+MAX_SPAWN_ORDER = 99
+
+
+@dataclass
+class Spawner:
+    """A place players come into the game at (joining, after being knocked out, after a map reload).
+
+    x, y     position on the map, in cells (the middle of a cell is .5); span is the floor it stands on
+    angle    the way a player there faces, radians (0 faces +x)
+    order    which spawners are used first: every player comes in at a spawner of the lowest order that has
+             one not yet used in this round, picked at random among those; when all have been used the round
+             starts over (see game.SpawnOrder). A map without spawners uses its start instead."""
+    x: float
+    y: float
+    span: int = 0
+    angle: float = 0.0
+    order: int = 0
+
+    @classmethod
+    def from_dict(cls, data):
+        return cls(float(data["x"]), float(data["y"]), max(0, int(data.get("span", 0))),
+                   float(data.get("angle", 0.0)), max(0, min(MAX_SPAWN_ORDER, int(data.get("order", 0)))))
+
+
 @dataclass
 class Light:
     """A light that things in the world can carry. The map keeps a list of them (the editor's Lights
@@ -601,8 +625,10 @@ def default_floor_name(index):
 
 class Level:
     def __init__(self, grids, start_x=1.5, start_y=1.5, start_angle=0.0, start_span=0, names=None,
-                 entities=None, guns=None, ammo_types=None, prefabs=None, effects=None, lights=None, ambient=1.0):
+                 entities=None, guns=None, ammo_types=None, prefabs=None, effects=None, lights=None, ambient=1.0,
+                 spawners=None):
         self.grids = grids
+        self.spawners = list(spawners or [])        # where players come into the game (see Spawner)
         self.lights = list(lights or [])            # lights defined for this map (see Light)
         self.ambient = ambient                      # how bright the map is without lights: 1 is as before, less is dark
         self.effects = list(effects or [])          # particle effects defined for this map (see Effect)
@@ -636,7 +662,8 @@ class Level:
                      self.start_x, self.start_y, self.start_angle, self.start_span, self.names,
                      [e.clone() for e in self.entities], [replace(g) for g in self.guns],
                      [replace(a) for a in self.ammo_types], [p.clone() for p in self.prefabs],
-                     [replace(f) for f in self.effects], [replace(light) for light in self.lights], self.ambient)
+                     [replace(f) for f in self.effects], [replace(light) for light in self.lights], self.ambient,
+                     [replace(s) for s in self.spawners])
 
     def prefab_named(self, name):
         for prefab in self.prefabs:
@@ -733,6 +760,8 @@ class Level:
             self.start_span = 0
         elif self.start_span > floor:
             self.start_span -= 1
+        self.spawners = [replace(s, span=s.span - 1 if s.span > floor else s.span)
+                         for s in self.spawners if s.span != floor]
 
     def rename_floor(self, floor, name):
         """Rename a floor; returns the name actually used (trimmed, and made unique)."""
@@ -915,6 +944,7 @@ class Level:
         self.start_x = min(self.start_x, width - 0.5)
         self.start_y = min(self.start_y, height - 0.5)
         self.entities = [e for e in self.entities if e.x < width and e.y < height]
+        self.spawners = [s for s in self.spawners if s.x < width and s.y < height]
 
     def resize_edges(self, left=0, right=0, top=0, bottom=0):
         """Add (positive) or remove (negative) columns and rows along each side, keeping the cells
@@ -936,6 +966,8 @@ class Level:
         self.start_y = min(max(self.start_y + top, 0.5), height - 0.5)
         self.entities = [e.clone(x=e.x + left, y=e.y + top) for e in self.entities
                          if 0 <= e.x + left < width and 0 <= e.y + top < height]
+        self.spawners = [replace(s, x=s.x + left, y=s.y + top) for s in self.spawners
+                         if 0 <= s.x + left < width and 0 <= s.y + top < height]
         return left, top
 
     @staticmethod
@@ -1040,17 +1072,19 @@ class Level:
         """Problems that would break or confuse the game, as (message, cell) pairs. The cell
         is the (x, y) the problem is about, or None."""
         found = []
-        sx, sy = int(self.start_x), int(self.start_y)
-        span = self.start_span
-        if self.is_solid(sx, sy, span):
-            found.append(("start position is inside a wall", (sx, sy)))
-        elif not self.span_present(span, sx, sy):
-            found.append(("start position has no floor here on the chosen floor", (sx, sy)))
-        else:
-            lo = self.grids[grid_name("floor_h", span)][sy][sx]
-            hi = self.grids[grid_name("ceil_h", span)][sy][sx]
-            if hi - lo < PLAYER_HEIGHT:
-                found.append(("start position is too low for the player to fit", (sx, sy)))
+        places = [("start position", self.start_x, self.start_y, self.start_span)]
+        places += [(f"spawner {i + 1} (order {s.order})", s.x, s.y, s.span) for i, s in enumerate(self.spawners)]
+        for what, x, y, span in places:
+            sx, sy = int(x), int(y)
+            if self.is_solid(sx, sy, span):
+                found.append((f"{what} is inside a wall", (sx, sy)))
+            elif not self.span_present(span, sx, sy):
+                found.append((f"{what} has no floor here on the chosen floor", (sx, sy)))
+            else:
+                lo = self.grids[grid_name("floor_h", span)][sy][sx]
+                hi = self.grids[grid_name("ceil_h", span)][sy][sx]
+                if hi - lo < PLAYER_HEIGHT:
+                    found.append((f"{what} is too low for the player to fit", (sx, sy)))
 
         results = [self._floor_planes(s) for s in range(self.floor_count)]
         for y in range(self.height):
@@ -1145,6 +1179,11 @@ def parse_level(data, label="level"):
     level.start_x, level.start_y = float(start.get("x", 1.5)), float(start.get("y", 1.5))
     level.start_angle = float(start.get("angle", 0.0))
     level.start_span = min(int(start.get("span", 0)), count - 1)
+    for item in data.get("spawners", []):
+        if isinstance(item, dict):
+            spawner = Spawner.from_dict(item)
+            if 0 <= spawner.x < w and 0 <= spawner.y < h and spawner.span < count:
+                level.spawners.append(spawner)
     for item in data.get("entities", []):
         entity = Entity.from_dict(item)
         if 0 <= entity.x < w and 0 <= entity.y < h and entity.span < count:
@@ -1214,6 +1253,8 @@ def level_text(level):
         f'  "width": {level.width},\n  "height": {level.height},\n'
         f'  "floors": {json.dumps(level.names)},\n'
         f'  "start": {json.dumps(start)},\n'
+        + ('  "spawners": [\n' + ",\n".join("    " + json.dumps(asdict(s)) for s in level.spawners) + "\n  ],\n"
+           if level.spawners else "")
         + ('  "entities": [\n' + ",\n".join("    " + json.dumps(asdict(e)) for e in level.entities) + "\n  ],\n"
            if level.entities else "")
         + ('  "ammo_types": [\n' + ",\n".join("    " + json.dumps(asdict(a)) for a in level.ammo_types) + "\n  ],\n"

@@ -44,9 +44,13 @@ def look(p, pitch_delta):
 
 def spawn(level, world):
     """A player standing at the level's start, on the floor (span) the level says."""
-    x, y = level.start_x, level.start_y
-    span = level.start_span if world.span_on[level.start_span, int(y), int(x)] else 0
-    return Player(x, y, world.floor_of(span, x, y), angle=level.start_angle, span=span)
+    return spawn_at(world, level.start_x, level.start_y, level.start_span, level.start_angle)
+
+
+def spawn_at(world, x, y, span, angle):
+    """A player standing at (x, y) on floor `span` (the ground floor if that floor has no room there), facing `angle`."""
+    span = span if span < world.floors and world.span_on[span, int(y), int(x)] else 0
+    return Player(x, y, world.floor_of(span, x, y), angle=angle, span=span)
 
 
 def can_stand(world, x, y, z, span=None, grounded=True):
