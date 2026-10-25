@@ -38,6 +38,7 @@ climbs to a higher floor ends in a cell whose *lower* floor is raised to that he
 touches a neighboring cell's room on the higher floor, which is how you step across.
 """
 import json
+import math
 import os
 from dataclasses import asdict, dataclass, field, replace
 
@@ -49,13 +50,18 @@ MAX_NAME_LENGTH = 24
 MIN_WALL_GAP = 0.05             # a wall this close to the ceiling is just a full-height wall
 
 SPAN_LAYERS = ("floor_tex", "ceil_tex", "floor_h", "ceil_h", "ramp")
-SHARED_LAYERS = ("walls", "wall_h", "wall_ceil", "wall_floor")                # one grid for all floors
+SIDES = "nesw"                                                  # the four sides of a cell: north, east, south, west
+SIDE_LAYERS = tuple(f"side_{side}" for side in SIDES)           # a wall's own texture on one side (0: the wall's tile)
+SHARED_LAYERS = ("walls", "wall_h", "wall_ceil", "wall_floor") + SIDE_LAYERS   # one grid for all floors
+SIDE_VECTORS = {"n": (0, -1), "e": (1, 0), "s": (0, 1), "w": (-1, 0)}  # which way each side faces on the map
+WALL_LABELS = {"": "Free standing", "n": "North wall", "e": "East wall", "s": "South wall", "w": "West wall"}
+WALL_GAP = 0.04                 # how far in front of a wall's face an item hung on it is, in cells
 EDIT_LAYERS = ("walls",) + SPAN_LAYERS + ("wall_h",)            # what the editor lets you switch between
 RAMP_DIRS = {1: (1, 0), 2: (-1, 0), 3: (0, 1), 4: (0, -1)}      # id -> (dx, dy) the floor rises toward
 SOLID_OUTSIDE = 1       # walls value reported outside the grid: a wall
 
 _GROUND_DEFAULTS = {"walls": 0, "wall_h": 0.0, "wall_ceil": 0.0, "wall_floor": 0, "floor_tex": 5, "ceil_tex": 6,
-                    "floor_h": 0.0, "ceil_h": 1.0, "ramp": 0}
+                    "floor_h": 0.0, "ceil_h": 1.0, "ramp": 0, **{name: 0 for name in SIDE_LAYERS}}
 _UPPER_DEFAULTS = {"floor_tex": 3, "ceil_tex": 6, "floor_h": 0.0, "ceil_h": 0.0, "ramp": 0}
 
 
@@ -471,6 +477,9 @@ class Entity:
              the effect's own start offset
     light    name of the Light the item gives off while it is there ("" for none); with Scenery and a hidden
              sprite an item is just a light placed in the map
+    wall     "" for an item standing in its cell, or the side of its cell ("n", "e", "s", "w") whose wall it hangs on:
+             it is then a flat picture against that wall, facing into the cell (x, y are just in front of the
+             wall: see mounted_position), at `lift` above the floor
     A "scenery" item cannot be touched or picked up: it is only there to look at (a torch, a vent)."""
     x: float
     y: float
@@ -495,6 +504,7 @@ class Entity:
     light: str = ""                 # the light it gives off
     name: str = ""                  # a prefab's name (an item placed in the map has none)
     prefab: str = ""                # the prefab this item is an instance of ("" for a plain item)
+    wall: str = ""                  # the side of its cell whose wall it hangs on ("" for none)
 
     def clone(self, **changes):
         """A copy that shares nothing with this entity (its animations are copied too)."""
@@ -524,7 +534,20 @@ class Entity:
                        emits_offset_y=float(data.get("emits_offset_y", 0.0)),
                        emits_offset_z=float(data.get("emits_offset_z", 0.0)),
                        light=str(data.get("light", ""))[:MAX_NAME],
-                       name=str(data.get("name", ""))[:MAX_NAME], prefab=str(data.get("prefab", ""))[:MAX_NAME])
+                       name=str(data.get("name", ""))[:MAX_NAME], prefab=str(data.get("prefab", ""))[:MAX_NAME],
+                       wall=data.get("wall") if data.get("wall") in WALL_LABELS else "")
+
+
+def mounted_position(cx, cy, wall):
+    """(x, y) of an item in cell (cx, cy) hung on the wall on side `wall` of the cell (its middle for "")."""
+    dx, dy = SIDE_VECTORS.get(wall, (0, 0))
+    return cx + 0.5 + dx * (0.5 - WALL_GAP), cy + 0.5 + dy * (0.5 - WALL_GAP)
+
+
+def wall_facing(wall):
+    """The map angle an item hung on side `wall` of its cell faces: away from the wall, into the cell."""
+    dx, dy = SIDE_VECTORS[wall]
+    return math.atan2(-dy, -dx)
 
 
 def grid_name(layer, floor):
@@ -583,10 +606,8 @@ class Level:
     @classmethod
     def blank(cls, width, height, border=1, floors=1):
         """An empty map: open space, optionally walled in, with `floors` floors (at least 1)."""
-        level = cls({"walls": [[0] * width for _ in range(height)],
-                     "wall_h": [[0.0] * width for _ in range(height)],
-                     "wall_ceil": [[0.0] * width for _ in range(height)],
-                     "wall_floor": [[0] * width for _ in range(height)]}, names=[])
+        level = cls({name: [[default_for(name)] * width for _ in range(height)] for name in SHARED_LAYERS},
+                    names=[])
         for _ in range(max(1, floors)):
             level.add_floor()
         if border:
@@ -1165,6 +1186,8 @@ def level_text(level):
     """The map file's JSON as text, with one grid row per line so it is easy to read and diff."""
     blocks = []
     for name in level.grid_names():
+        if name in SIDE_LAYERS and not any(any(row) for row in level.grids[name]):
+            continue                                # (no wall has a texture of its own on that side)
         rows = ",\n".join("      " + json.dumps(row) for row in level.grids[name])
         blocks.append(f'    "{name}": [\n{rows}\n    ]')
     start = {"x": level.start_x, "y": level.start_y, "angle": level.start_angle,

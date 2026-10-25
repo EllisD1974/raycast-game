@@ -24,7 +24,8 @@ first, using the texture's alpha channel. Floor and ceiling textures ignore alph
 
 Span 0 of a cell is always below span 1. Array shapes: planes (S, H, W, 3), span_on and the
 texture grids (S, H, W), solid_from (the lowest floor each cell is a wall on, or S for none) and
-wall_tex (H, W).
+wall_tex (H, W). side_tex (H, W, 4) is the tile a wall shows on one side (north, east, south, west: see
+side_of), or -1 where that side shows what it otherwise would.
 """
 import math
 
@@ -47,6 +48,15 @@ def plane_z(planes, s, cx, cy, fx, fy):
 def _proj(z, t, eye_z, horizon, focal):
     """Screen row (float) of world height z at perpendicular distance t."""
     return horizon + (eye_z - z) / t * focal
+
+
+@njit(cache=True)
+def side_of(side, step_x, step_y):
+    """Which side of the next cell (0 north, 1 east, 2 south, 3 west) a ray crossing into it meets: `side` is 0
+    when it crossed a vertical grid line (moving `step_x` along x) and 1 for a horizontal one (`step_y`)."""
+    if side == 0:
+        return 3 if step_x > 0 else 1
+    return 0 if step_y > 0 else 2
 
 
 @njit(cache=True)
@@ -136,7 +146,7 @@ def _composite_panes(fb, x, n, pane_t, pane_tx, pane_id, pane_zlo, pane_zhi, pan
 
 @njit(cache=True)
 def _render_column(fb, zb, x, px, py, eye_z, eye_span, rdx, rdy, horizon, focal,
-                   floor_plane, ceil_plane, span_on, solid_from, pane_tex, pane_top, wall_tex, floor_tex, ceil_tex,
+                   floor_plane, ceil_plane, span_on, solid_from, pane_tex, pane_top, wall_tex, side_tex, floor_tex, ceil_tex,
                    textures, max_dist, fog_dist, bg):
     height = fb.shape[1]
     nspans = span_on.shape[0]
@@ -216,6 +226,7 @@ def _render_column(fb, zb, x, px, py, eye_z, eye_span, rdx, rdy, horizon, focal,
         shade = _shade(t1, fog_dist) * (1.0 if side == 0 else SIDE_SHADE)
 
         inside = 0 <= nx < mw and 0 <= ny < mh
+        own = side_tex[ny, nx, side_of(side, step_x, step_y)] if inside else -1   # this wall side's own tile
         n_next = 0
 
         for b in range(n_cur):
@@ -249,7 +260,7 @@ def _render_column(fb, zb, x, px, py, eye_z, eye_span, rdx, rdy, horizon, focal,
 
             # Boundary: this span covers heights zf1..zc1 at distance t1.
             if next_solid:
-                wtex = wall_tex[ny, nx] if inside else 0
+                wtex = (wall_tex[ny, nx] if own < 0 else own) if inside else 0
                 _wall(fb, zb, x, zf1, zc1, ytop, ybot, t1, wtx, wtex, shade,
                       eye_z, horizon, focal, textures)
                 continue
@@ -266,8 +277,8 @@ def _render_column(fb, zb, x, px, py, eye_z, eye_span, rdx, rdy, horizon, focal,
                     continue             # this span lies entirely below what is left
                 if zfn > cur:            # solid below it: riser or slab side, up to its floor
                     top = min(zfn, zc1)
-                    _wall(fb, zb, x, cur, top, ytop, ybot, t1, wtx, floor_tex[k, ny, nx], shade,
-                          eye_z, horizon, focal, textures)
+                    _wall(fb, zb, x, cur, top, ytop, ybot, t1, wtx, floor_tex[k, ny, nx] if own < 0 else own,
+                          shade, eye_z, horizon, focal, textures)
                     cur = top
                     if cur >= zc1:
                         break
@@ -295,6 +306,8 @@ def _render_column(fb, zb, x, px, py, eye_z, eye_span, rdx, rdy, horizon, focal,
             if cur < zc1:                # solid above the last span: the drop under a ceiling
                 if inside and solid_from[ny, nx] < nspans:      # a wall above this floor: its side shows
                     tex_above = wall_tex[ny, nx]
+                if own >= 0:
+                    tex_above = own
                 _wall(fb, zb, x, cur, zc1, ytop, ybot, t1, wtx, tex_above, shade,
                       eye_z, horizon, focal, textures)
 
@@ -315,7 +328,7 @@ def _render_column(fb, zb, x, px, py, eye_z, eye_span, rdx, rdy, horizon, focal,
 
 @njit(cache=True, parallel=True)
 def render_scene_depth(fb, zb, px, py, eye_z, eye_span, dir_x, dir_y, plane_x, plane_y, horizon, focal,
-                       floor_plane, ceil_plane, span_on, solid_from, pane_tex, pane_top, wall_tex, floor_tex,
+                       floor_plane, ceil_plane, span_on, solid_from, pane_tex, pane_top, wall_tex, side_tex, floor_tex,
                        ceil_tex, textures, max_dist, fog_dist, bg):
     """Fill `fb` (shape (W, H, 3) uint8) with the view from the given camera, and `zb` (W, H) with the
     perpendicular distance of what was drawn in each pixel (for sprites to hide behind it).
@@ -329,24 +342,55 @@ def render_scene_depth(fb, zb, px, py, eye_z, eye_span, dir_x, dir_y, plane_x, p
         _render_column(fb, zb, x, px, py, eye_z, eye_span,
                        dir_x + plane_x * camera_x, dir_y + plane_y * camera_x,
                        horizon, focal, floor_plane, ceil_plane, span_on, solid_from, pane_tex, pane_top,
-                       wall_tex, floor_tex, ceil_tex, textures, max_dist, fog_dist, bg)
+                       wall_tex, side_tex, floor_tex, ceil_tex, textures, max_dist, fog_dist, bg)
 
 
 @njit(cache=True)
 def render_scene(fb, px, py, eye_z, eye_span, dir_x, dir_y, plane_x, plane_y, horizon, focal,
-                 floor_plane, ceil_plane, span_on, solid_from, pane_tex, pane_top, wall_tex, floor_tex, ceil_tex,
+                 floor_plane, ceil_plane, span_on, solid_from, pane_tex, pane_top, wall_tex, side_tex, floor_tex, ceil_tex,
                  textures, max_dist, fog_dist, bg):
     """render_scene_depth without the depth picture, for callers that only want the walls."""
     zb = np.empty((fb.shape[0], fb.shape[1]), np.float32)
     render_scene_depth(fb, zb, px, py, eye_z, eye_span, dir_x, dir_y, plane_x, plane_y, horizon, focal,
-                       floor_plane, ceil_plane, span_on, solid_from, pane_tex, pane_top, wall_tex, floor_tex,
+                       floor_plane, ceil_plane, span_on, solid_from, pane_tex, pane_top, wall_tex, side_tex, floor_tex,
                        ceil_tex, textures, max_dist, fog_dist, bg)
+
+
+@njit(cache=True, inline="always")
+def _sprite_column(fb, zb, x, i, tx, ytop, ybot, depth, height, tsize, textures, sp_tex, sp_alpha, sp_color, lit):
+    """Draw texture column tx of sprite i in screen column x, between rows ytop and ybot, where it is nearer
+    than what is drawn there."""
+    for r in range(max(0, int(math.ceil(ytop))), min(height, int(math.ceil(ybot)))):
+        if depth >= zb[x, r]:
+            continue
+        ty = min(tsize - 1, int((r + 0.5 - ytop) / (ybot - ytop) * tsize))
+        alpha = textures[sp_tex[i], ty, tx, 3]
+        if alpha == 0:
+            continue
+        a = alpha / 255.0 * sp_alpha[i]
+        tr, tg, tb = (np.float64(textures[sp_tex[i], ty, tx, 0]), np.float64(textures[sp_tex[i], ty, tx, 1]),
+                      np.float64(textures[sp_tex[i], ty, tx, 2]))
+        cr = min(255.0, max(0.0, sp_color[i, 0, 0] * tr + sp_color[i, 0, 1] * tg + sp_color[i, 0, 2] * tb))
+        cg = min(255.0, max(0.0, sp_color[i, 1, 0] * tr + sp_color[i, 1, 1] * tg + sp_color[i, 1, 2] * tb))
+        cb = min(255.0, max(0.0, sp_color[i, 2, 0] * tr + sp_color[i, 2, 1] * tg + sp_color[i, 2, 2] * tb))
+        fb[x, r, 0] = np.uint8(min(255.0, cr * lit[i, 0]) * a + fb[x, r, 0] * (1.0 - a))
+        fb[x, r, 1] = np.uint8(min(255.0, cg * lit[i, 1]) * a + fb[x, r, 1] * (1.0 - a))
+        fb[x, r, 2] = np.uint8(min(255.0, cb * lit[i, 2]) * a + fb[x, r, 2] * (1.0 - a))
+
+
+@njit(cache=True, inline="always")
+def _sprite_rows(ahead, dz_top, dz_bot, cp, sp, horizon, focal):
+    """(top row, bottom row) on screen of a sprite `ahead` cells away on the map, its top and bottom dz_top and
+    dz_bot above the eye."""
+    ytop = horizon - (dz_top * cp - ahead * sp) / max(ahead * cp + dz_top * sp, 0.05) * focal
+    ybot = horizon - (dz_bot * cp - ahead * sp) / max(ahead * cp + dz_bot * sp, 0.05) * focal
+    return ytop, ybot
 
 
 @njit(cache=True, parallel=True)
 def draw_sprites(fb, zb, px, py, eye_z, dir_x, dir_y, pitch, horizon, focal,
-                 sp_x, sp_y, sp_z, sp_size, sp_tex, sp_spin, sp_alpha, sp_lit, sp_glow, sp_color, ambient, textures, max_dist,
-                 fog_dist):
+                 sp_x, sp_y, sp_z, sp_size, sp_tex, sp_spin, sp_face, sp_alpha, sp_lit, sp_glow, sp_color, ambient,
+                 textures, max_dist, fog_dist):
     """Draw flat sprites that always face the camera, over a picture already drawn by
     render_scene_depth (or raypitch.render_scene_pitch). The camera looks along (dir_x, dir_y),
     tilted up by `pitch` radians, with the middle of its view at screen row `horizon` (see
@@ -358,7 +402,10 @@ def draw_sprites(fb, zb, px, py, eye_z, dir_x, dir_y, pitch, horizon, focal,
     sp_color[i] is a 3 x 3 matrix the picture's (r, g, b) is put through before lighting (the identity leaves it;
     particles use it for hue and tint). Lighting (see raylight.py): sp_lit[i] is the light (r, g, b) falling on sprite i and `ambient` how bright
     the map is without lights, so a sprite is its picture * (fog shade * ambient + light); sp_glow[i] (0..1) is
-    how much it lights itself: a glowing sprite is never darker than that fraction of its own colors."""
+    how much it lights itself: a glowing sprite is never darker than that fraction of its own colors.
+    sp_face[i] is NaN for a sprite that faces the camera. Otherwise the sprite is a flat picture hung on a wall,
+    facing the map angle sp_face[i] (radians, 0 is +x): it is drawn in perspective where it is, narrowing as it
+    is seen from the side, and not at all from behind."""
     width, height = fb.shape[0], fb.shape[1]
     tsize = textures.shape[1]
     cp, sp = math.cos(pitch), math.sin(pitch)
@@ -374,28 +421,55 @@ def draw_sprites(fb, zb, px, py, eye_z, dir_x, dir_y, pitch, horizon, focal,
     bottoms = np.empty(n, np.float64)
     depths = np.empty(n, np.float64)
     lit = np.empty((n, 3), np.float64)
+    # A picture on a wall: its left and right ends on the map, and 1 / their distance along the camera's axis.
+    flat = np.zeros(n, np.bool_)
+    ends = np.empty((n, 4), np.float64)
+    inv_depth = np.empty((n, 2), np.float64)
     for i in prange(n):
         dx, dy = sp_x[i] - px, sp_y[i] - py
         ahead = dx * dir_x + dy * dir_y                      # distance along the view direction on the map
         right = -dx * dir_y + dy * dir_x
         dz_mid = sp_z[i] + sp_size[i] * 0.5 - eye_z
+        dz_top = sp_z[i] + sp_size[i] - eye_z
+        dz_bot = sp_z[i] - eye_z
         depth = ahead * cp + dz_mid * sp                     # distance along the camera's axis
         if depth < 0.05 or depth > max_dist:
             continue
-        center = width * 0.5 + right / depth * focal
-        turn = math.cos(sp_spin[i])
-        half = sp_size[i] * focal / depth * 0.5 * max(abs(turn), 0.03)
-        dz_top = sp_z[i] + sp_size[i] - eye_z
-        dz_bot = sp_z[i] - eye_z
-        ytop = horizon - (dz_top * cp - ahead * sp) / max(ahead * cp + dz_top * sp, 0.05) * focal
-        ybot = horizon - (dz_bot * cp - ahead * sp) / max(ahead * cp + dz_bot * sp, 0.05) * focal
-        if ybot <= ytop:
-            continue
-        # columns x with center - half <= x + 0.5 < center + half
-        col0[i] = int(math.ceil(max(-1.0, min(width + 1.0, center - half - 0.5))))
-        col1[i] = int(math.ceil(max(-1.0, min(width + 1.0, center + half - 0.5))))
-        left[i], across_width[i], behind[i] = center - half, 2.0 * half, turn < 0.0
-        tops[i], bottoms[i], depths[i] = ytop, ybot, depth
+        if not math.isnan(sp_face[i]):
+            nx, ny = math.cos(sp_face[i]), math.sin(sp_face[i])
+            if -dx * nx - dy * ny <= 0.0:
+                continue                                     # seen from behind (from inside the wall)
+            half_w = sp_size[i] * 0.5
+            lx, ly = sp_x[i] - half_w * ny, sp_y[i] + half_w * nx      # its left end, seen from in front
+            rx, ry = sp_x[i] + half_w * ny, sp_y[i] - half_w * nx
+            ahead_l = (lx - px) * dir_x + (ly - py) * dir_y
+            ahead_r = (rx - px) * dir_x + (ry - py) * dir_y
+            depth_l, depth_r = ahead_l * cp + dz_mid * sp, ahead_r * cp + dz_mid * sp
+            if depth_l < 0.05 or depth_r < 0.05:
+                continue                                     # (too close to the camera to draw)
+            screen_l = width * 0.5 + (-(lx - px) * dir_y + (ly - py) * dir_x) / depth_l * focal
+            screen_r = width * 0.5 + (-(rx - px) * dir_y + (ry - py) * dir_x) / depth_r * focal
+            if screen_r - screen_l < 1e-6:
+                continue
+            col0[i] = int(math.ceil(max(-1.0, min(width + 1.0, screen_l - 0.5))))
+            col1[i] = int(math.ceil(max(-1.0, min(width + 1.0, screen_r - 0.5))))
+            flat[i] = True
+            ends[i, 0], ends[i, 1], ends[i, 2], ends[i, 3] = lx, ly, rx, ry
+            inv_depth[i, 0], inv_depth[i, 1] = 1.0 / depth_l, 1.0 / depth_r
+            left[i], across_width[i] = screen_l, screen_r - screen_l
+        else:
+            center = width * 0.5 + right / depth * focal
+            turn = math.cos(sp_spin[i])
+            half = sp_size[i] * focal / depth * 0.5 * max(abs(turn), 0.03)
+            ytop, ybot = _sprite_rows(ahead, dz_top, dz_bot, cp, sp, horizon, focal)
+            if ybot <= ytop:
+                continue
+            # columns x with center - half <= x + 0.5 < center + half
+            col0[i] = int(math.ceil(max(-1.0, min(width + 1.0, center - half - 0.5))))
+            col1[i] = int(math.ceil(max(-1.0, min(width + 1.0, center + half - 0.5))))
+            left[i], across_width[i], behind[i] = center - half, 2.0 * half, turn < 0.0
+            tops[i], bottoms[i] = ytop, ybot
+        depths[i] = depth
         shade = _shade(depth, fog_dist)
         for c in range(3):
             lit[i, c] = max(shade * ambient + sp_lit[i, c], sp_glow[i])
@@ -404,23 +478,20 @@ def draw_sprites(fb, zb, px, py, eye_z, dir_x, dir_y, pitch, horizon, focal,
             if x < col0[i] or x >= col1[i]:
                 continue
             across = (x + 0.5 - left[i]) / across_width[i]
-            if behind[i]:
-                across = 1.0 - across                            # seen from behind
-            tx = min(tsize - 1, int(across * tsize))
-            ytop, ybot, depth = tops[i], bottoms[i], depths[i]
-            for r in range(max(0, int(math.ceil(ytop))), min(height, int(math.ceil(ybot)))):
-                if depth >= zb[x, r]:
-                    continue
-                ty = min(tsize - 1, int((r + 0.5 - ytop) / (ybot - ytop) * tsize))
-                alpha = textures[sp_tex[i], ty, tx, 3]
-                if alpha == 0:
-                    continue
-                a = alpha / 255.0 * sp_alpha[i]
-                tr, tg, tb = (np.float64(textures[sp_tex[i], ty, tx, 0]), np.float64(textures[sp_tex[i], ty, tx, 1]),
-                              np.float64(textures[sp_tex[i], ty, tx, 2]))
-                cr = min(255.0, max(0.0, sp_color[i, 0, 0] * tr + sp_color[i, 0, 1] * tg + sp_color[i, 0, 2] * tb))
-                cg = min(255.0, max(0.0, sp_color[i, 1, 0] * tr + sp_color[i, 1, 1] * tg + sp_color[i, 1, 2] * tb))
-                cb = min(255.0, max(0.0, sp_color[i, 2, 0] * tr + sp_color[i, 2, 1] * tg + sp_color[i, 2, 2] * tb))
-                fb[x, r, 0] = np.uint8(min(255.0, cr * lit[i, 0]) * a + fb[x, r, 0] * (1.0 - a))
-                fb[x, r, 1] = np.uint8(min(255.0, cg * lit[i, 1]) * a + fb[x, r, 1] * (1.0 - a))
-                fb[x, r, 2] = np.uint8(min(255.0, cb * lit[i, 2]) * a + fb[x, r, 2] * (1.0 - a))
+            if flat[i]:
+                # Where along the picture this column looks (perspective-correct), and how near that is.
+                k = across * inv_depth[i, 1] / ((1.0 - across) * inv_depth[i, 0] + across * inv_depth[i, 1])
+                qx = ends[i, 0] + (ends[i, 2] - ends[i, 0]) * k
+                qy = ends[i, 1] + (ends[i, 3] - ends[i, 1]) * k
+                ahead = (qx - px) * dir_x + (qy - py) * dir_y
+                ytop, ybot = _sprite_rows(ahead, sp_z[i] + sp_size[i] - eye_z, sp_z[i] - eye_z, cp, sp, horizon, focal)
+                depth = ahead * cp + (sp_z[i] + sp_size[i] * 0.5 - eye_z) * sp
+                tx = min(tsize - 1, max(0, int(k * tsize)))
+            else:
+                if behind[i]:
+                    across = 1.0 - across                        # seen from behind
+                tx = min(tsize - 1, int(across * tsize))
+                ytop, ybot, depth = tops[i], bottoms[i], depths[i]
+            if ybot > ytop:
+                _sprite_column(fb, zb, x, i, tx, ytop, ybot, depth, height, tsize, textures, sp_tex, sp_alpha,
+                               sp_color, lit)

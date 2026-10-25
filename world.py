@@ -4,7 +4,7 @@ import math
 import numpy as np
 
 from constants import STEP_HEIGHT
-from mapfile import grid_name
+from mapfile import SIDE_LAYERS, grid_name
 from raykernel import plane_z
 
 EPS = 1e-6
@@ -36,6 +36,9 @@ class World:
             self.ceil_tex[s] = tile_index(level.grids[grid_name("ceil_tex", s)])
         self.solid = (np.array(level.grids["walls"]) != 0).astype(np.uint8)   # what the renderer stops at
         self.wall_tex = tile_index(level.grids["walls"])
+        # The tile each wall shows on its north, east, south and west side, or -1 for the wall's own.
+        sides = np.array([level.grids[name] for name in SIDE_LAYERS], np.int64).transpose(1, 2, 0)
+        self.side_tex = np.where((sides > 0) & (self.solid[:, :, None] != 0), tile_index(sides), -1).astype(np.int32)
         self.pane_tex = np.full((h, w), -1, np.int32)           # see-through wall tile per cell, or -1
         self.pane_top = np.full((h, w), 1e9, np.float32)        # how high that pane reaches (a short wall)
         wall_floor = np.array(level.grids["wall_floor"], np.int32)

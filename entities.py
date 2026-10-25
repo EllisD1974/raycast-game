@@ -8,6 +8,7 @@ import math
 from dataclasses import dataclass, field
 
 from constants import PLAYER_HEIGHT
+from mapfile import wall_facing
 
 TOUCH_RADIUS = 0.45             # how close (in cells, on the map) the player must get to an item
 MAX_HEALTH = 100.0
@@ -64,7 +65,8 @@ class Entities:
 
     def sprites(self):
         """(x, y, z, size, tile, spin, alpha, glow) of every item that is there, for the renderer. Animations are
-        applied here: a float adds a bob to the height, a rotate sets the spin angle in radians."""
+        applied here: a float adds a bob to the height, a rotate sets the spin angle in radians. An item hung on
+        a wall also carries the way it faces (and None for its colors), so it is drawn flat against the wall."""
         out = []
         for item in self.items:
             if not item.present or not item.entity.shown:
@@ -79,7 +81,8 @@ class Entities:
                     z += a.amount * (1.0 + math.sin(t))     # 0 .. 2*amount above its rest height
                 elif a.kind == "rotate":
                     spin += t
-            out.append((e.x, e.y, z, e.size, e.tile, spin, 1.0, 1.0 if e.light else 0.0))   # (an item with a light glows)
+            sprite = (e.x, e.y, z, e.size, e.tile, spin, 1.0, 1.0 if e.light else 0.0)   # (an item with a light glows)
+            out.append(sprite + (None, wall_facing(e.wall)) if e.wall else sprite)
         return out
 
     @staticmethod

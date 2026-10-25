@@ -24,7 +24,7 @@ import math
 import numpy as np
 from numba import njit, prange
 
-from raykernel import MAX_PANES, SIDE_SHADE, _clamp01, _shade, plane_z
+from raykernel import MAX_PANES, SIDE_SHADE, _clamp01, _shade, plane_z, side_of
 
 
 @njit(cache=True)
@@ -41,7 +41,7 @@ def _wall_ty(z, tsize):
 
 @njit(cache=True, inline="always")
 def _trace_pixel(fb, zb, x, y, px, py, eye_z, eye_span, dx, dy, dz,
-                 floor_plane, ceil_plane, span_on, solid_from, pane_tex, pane_top, wall_tex, floor_tex, ceil_tex,
+                 floor_plane, ceil_plane, span_on, solid_from, pane_tex, pane_top, wall_tex, side_tex, floor_tex, ceil_tex,
                  textures, max_dist, fog_dist, bg, pane_t, pane_tx, pane_ty, pane_id, pane_shade):
     nspans = span_on.shape[0]
     mh, mw = solid_from.shape
@@ -126,8 +126,9 @@ def _trace_pixel(fb, zb, x, y, px, py, eye_z, eye_span, dx, dy, dz,
         wtx = int(wallx * tsize) & tmask
         shade = _shade(t1, fog_dist) * (1.0 if side == 0 else SIDE_SHADE)
         inside = 0 <= nx < mw and 0 <= ny < mh
+        own = side_tex[ny, nx, side_of(side, step_x, step_y)] if inside else -1   # this wall side's own tile
         if (not inside) or s >= solid_from[ny, nx]:
-            tex = wall_tex[ny, nx] if inside else 0
+            tex = (wall_tex[ny, nx] if own < 0 else own) if inside else 0
             red, green, blue = _fetch(textures, tex, wtx, _wall_ty(z1, tsize), shade)
             depth = t1
             break
@@ -158,6 +159,8 @@ def _trace_pixel(fb, zb, x, y, px, py, eye_z, eye_span, dx, dy, dz,
                     break
             if (not below_a_floor) and solid_from[ny, nx] < nspans:
                 tex = wall_tex[ny, nx]                              # a wall hanging above the room below
+            if own >= 0:
+                tex = own
             red, green, blue = _fetch(textures, tex, wtx, _wall_ty(z1, tsize), shade)
             depth = t1
             break
@@ -184,7 +187,7 @@ def _trace_pixel(fb, zb, x, y, px, py, eye_z, eye_span, dx, dy, dz,
 
 @njit(cache=True, parallel=True)
 def render_scene_pitch(fb, zb, px, py, eye_z, eye_span, dir_x, dir_y, pitch, focal,
-                       floor_plane, ceil_plane, span_on, solid_from, pane_tex, pane_top, wall_tex, floor_tex,
+                       floor_plane, ceil_plane, span_on, solid_from, pane_tex, pane_top, wall_tex, side_tex, floor_tex,
                        ceil_tex, textures, max_dist, fog_dist, bg):
     """Fill `fb` (W, H, 3) and `zb` (W, H) for a camera looking along (dir_x, dir_y) tilted up by `pitch`
     radians (negative looks down), with `focal` the focal length in pixels."""
@@ -204,5 +207,5 @@ def render_scene_pitch(fb, zb, px, py, eye_z, eye_span, dir_x, dir_y, pitch, foc
             v = (height * 0.5 - (y + 0.5)) / focal
             _trace_pixel(fb, zb, x, y, px, py, eye_z, eye_span,
                          fx + u * rx + v * ux, fy + u * ry + v * uy, fz + v * uz,
-                         floor_plane, ceil_plane, span_on, solid_from, pane_tex, pane_top, wall_tex, floor_tex,
+                         floor_plane, ceil_plane, span_on, solid_from, pane_tex, pane_top, wall_tex, side_tex, floor_tex,
                          ceil_tex, textures, max_dist, fog_dist, bg, pane_t, pane_tx, pane_ty, pane_id, pane_shade)

@@ -20,6 +20,9 @@ A map has several layers; you edit one at a time (keys 1-7 or the Layer buttons)
   5 CeilH      ceiling height of each cell (tall rooms, low tunnels)
   6 Ramps      ramp direction; a run of ramp cells slopes from the floor before it to the floor
                after it. R rotates the direction.
+  8 WallSide   the texture on one side of a wall: the side nearest the mouse in a wall cell is the one
+               painted (Paint, or a Shape: the side picked where the drag starts), right-click / Erase
+               puts the wall's own tile back on it, Fill does that side of the whole wall, Pick takes it.
 
 A higher floor starts empty. Painting FloorH or CeilH on it creates the room in that cell, using
 the other brush value for the missing height, and lowers the ceiling of the floor below there to
@@ -64,6 +67,10 @@ New asks for the new map's name and saves a blank map as <name>.json in the fold
 edited, so every new map is its own file (an existing file is never overwritten). Open (Ctrl+O) lists
 the maps in that folder to switch to another one: click one and Open, double-click it, or pick with the
 arrow keys and Enter. Save, Reload and Play work on the map that was made or opened last.
+
+Items hang on a wall when added with a click near the side of the cell that has the wall (the edge lights
+up): they are then a flat picture against the wall, facing into the cell, at their Lift above the floor.
+The item's "On wall" setting moves it onto another wall of its cell, or off the wall.
 
 Items (the Entity tool, N): click an empty cell to add an item there (in the middle of the cell, on
 the floor you are editing), or click an existing item to select it. A selected item opens the
@@ -156,7 +163,7 @@ from constants import FOV_DEG, HEIGHT, MOUSE_SENSITIVITY, PLAYER_HEIGHT, TILE, W
 from mapfile import (ANIMATION_KINDS, ANIMATION_LABELS, DEFAULTS, EDIT_LAYERS, EFFECT_LABELS, ENTITY_EFFECTS,
                      ENTITY_MODES, GUN_MODE_LABELS, GUN_MODES, MAP_PATH, MAX_HIT_NAMES, MAX_NAME, MAX_NAME_LENGTH, MIN_WALL_GAP,
                      EFFECT_AIM_LABELS, EFFECT_AIMS, EFFECT_COLOR_LABELS, EFFECT_COLORS, EFFECT_KIND_LABELS, EFFECT_KINDS, MIN_AMBIENT, MODE_LABELS, SHOT_LABELS, SHOT_TYPES, Animation, AmmoType, Effect,
-                     Entity, Gun, Level, Light, default_level,
+                     Entity, Gun, Level, Light, SIDE_VECTORS, SIDES, WALL_LABELS, default_level, mounted_position,
                      grid_name, load_level, save_level, split_grid_name)
 import details
 import hud
@@ -224,8 +231,11 @@ STAMP_LAYERS = ("walls", "floor_tex", "ceil_tex")
 ROOM_HEIGHT_LAYERS = ("floor_h", "ceil_h")                  # heights that make up a floor's rooms
 VALUE_LAYERS = ROOM_HEIGHT_LAYERS + ("wall_h",)             # every layer painted with a number
 LAYER_LABELS = {"walls": "Walls", "floor_tex": "FloorTex", "ceil_tex": "CeilTex",
-                "floor_h": "FloorH", "ceil_h": "CeilH", "ramp": "Ramps", "wall_h": "WallH"}
-LAYER_KEYS = {pygame.K_1 + i: name for i, name in enumerate(EDIT_LAYERS)}
+                "floor_h": "FloorH", "ceil_h": "CeilH", "ramp": "Ramps", "wall_h": "WallH", "sides": "WallSide"}
+EDITOR_LAYERS = EDIT_LAYERS + ("sides",)                    # the stored layers, and the sides of walls
+TILE_LAYERS = STAMP_LAYERS + ("sides",)                     # layers painted with atlas tiles
+LAYER_KEYS = {pygame.K_1 + i: name for i, name in enumerate(EDITOR_LAYERS)}
+MOUNT_ZONE = 0.3                                # an item clicked this close (in cells) to a walled side hangs on it
 TOOLS = {"paint": "B", "erase": "E", "fill": "F", "pick": "I", "start": "S", "stairs": "T", "shape": "H",
          "camera": "C", "entity": "N"}
 TOOL_KEYS = {pygame.K_b: "paint", pygame.K_e: "erase", pygame.K_f: "fill",
@@ -479,6 +489,8 @@ class Editor:
         self.stairs_drag = None                 # (start_cell, current_cell) while dragging
         self.shape = "box"                      # what the Shape tool draws (one of SHAPES)
         self.shape_drag = None                  # (start_cell, current_cell, erasing) while dragging a shape
+        self.shape_side = None                  # the wall side under the mouse where that drag started
+        self.side_lock = None                   # the wall side a whole shape paints (None: the one at the mouse)
         self.stroke = None                      # "paint" / "erase" while drawing on the map
         self.last_cell = None
         self.pan_drag = False
@@ -753,6 +765,13 @@ class Editor:
                                 low=0.0, high=1000.0))
         if e.mode == "respawn":
             fields.append(field("respawn", "Respawn", "num", step=1.0, low=0.0, high=600.0, unit="s"))
+        walls = () if is_prefab else tuple(       # the walls of its cell it could hang on
+            side for side in SIDES
+            if self.level.is_solid(math.floor(e.x) + SIDE_VECTORS[side][0], math.floor(e.y) + SIDE_VECTORS[side][1], e.span))
+        if walls or (e.wall and not is_prefab):
+            fields.append(Field("wall", "On wall", "enum", lambda: e.wall, lambda v: self.mount_entity(e, v),
+                                choices=("",) + tuple(side for side in SIDES if side in walls or side == e.wall),
+                                labels=WALL_LABELS))
         fields += [field("size", "Size", "num", step=0.1, low=0.1, high=3.0),
                    field("lift", "Lift", "num", step=0.1, low=-2.0, high=5.0),
                    field("shown", "Sprite", "enum", choices=(True, False), labels={True: "Shown", False: "Hidden"}),
@@ -1478,7 +1497,7 @@ class Editor:
         if self.show_preview:
             row1.append(("btn", "Cam->Start", "camstart"))
         row2 = [("txt", "Layer:", DIM)]
-        row2 += [("btn", f"{LAYER_LABELS[name]}({i + 1})", f"layer:{name}") for i, name in enumerate(EDIT_LAYERS)]
+        row2 += [("btn", f"{LAYER_LABELS[name]}({i + 1})", f"layer:{name}") for i, name in enumerate(EDITOR_LAYERS)]
         row2.append(None)
         if self.layer in VALUE_LAYERS:
             row2 += [("btn", "Val-", "val-"), ("btn", "Val+", "val+"),
@@ -1684,9 +1703,35 @@ class Editor:
         for layer in ROOM_HEIGHT_LAYERS:
             self.level.set(self.gname(layer), x, y, DEFAULTS[self.gname(layer)])
 
+    def side_at(self, pos):
+        """The side ("n", "e", "s" or "w") of the cell under screen point `pos` that the point is nearest to."""
+        cell = self.cell_at(pos)
+        rect = self.cell_rect(*cell)
+        fx = (pos[0] - rect.x) / max(1, rect.w) - 0.5
+        fy = (pos[1] - rect.y) / max(1, rect.h) - 0.5
+        if abs(fx) >= abs(fy):
+            return "e" if fx > 0 else "w"
+        return "s" if fy > 0 else "n"
+
+    def painted_side(self):
+        """The side of a wall that painting on the WallSide layer changes: the one a Shape drag started on,
+        or the one nearest the mouse."""
+        return self.side_lock or self.side_at(self.mouse)
+
+    def set_side(self, cx, cy, side, tile_id):
+        """Give the wall in (cx, cy) tile `tile_id` on one side (0: the wall's own tile). Open cells are left alone."""
+        if self.level.in_bounds(cx, cy) and self.level.walls[cy][cx]:
+            self.level.set(f"side_{side}", cx, cy, tile_id)
+
+    def side_tile(self, cx, cy, side):
+        """The map id a wall shows on one side: its own for that side, else the wall's."""
+        return self.level.get(f"side_{side}", cx, cy) or self.level.walls[cy][cx]
+
     def paint_at(self, cx, cy):
         layer, level = self.layer, self.level
-        if layer in STAMP_LAYERS:
+        if layer == "sides":
+            self.set_side(cx, cy, self.painted_side(), self.primary_id())
+        elif layer in STAMP_LAYERS:
             for dx, dy, tile_id in self.stamp():
                 self.put_tile(cx + dx, cy + dy, tile_id)
         elif layer == "wall_h":
@@ -1707,6 +1752,9 @@ class Editor:
     def put_tile(self, x, y, tile_id):
         """Set one cell of a tile layer (walls, floor or ceiling texture) to `tile_id`."""
         level = self.level
+        if self.layer == "walls" and level.in_bounds(x, y) and not level.walls[y][x]:
+            for side in SIDES:                                  # a new wall shows its own tile on every side
+                level.set(f"side_{side}", x, y, 0)
         if self.layer == "walls" and level.in_bounds(x, y) and not level.is_solid(x, y, self.floor):
             level.set("wall_h", x, y, DEFAULTS["wall_h"])      # a new wall starts full height
             level.set("wall_floor", x, y, self.floor)          # ... and on this floor, not the ones below
@@ -1736,7 +1784,11 @@ class Editor:
                 or (explicit_counts and level.has_explicit_wall_ceiling(x, y)))
 
     def erase_at(self, cx, cy):
-        if self.layer == "walls":
+        if self.layer == "sides":
+            self.set_side(cx, cy, self.painted_side(), 0)
+        elif self.layer == "walls":
+            for side in SIDES:                                          # ... and its sides' own tiles
+                self.level.set(f"side_{side}", cx, cy, 0)
             self.level.set("wall_h", cx, cy, DEFAULTS["wall_h"])       # an erased wall forgets its height
             self.level.set("wall_ceil", cx, cy, DEFAULTS["wall_ceil"])  # ... and its ceiling
             self.level.set("wall_floor", cx, cy, DEFAULTS["wall_floor"])
@@ -1754,6 +1806,18 @@ class Editor:
         (self.erase_at if self.stroke == "erase" else self.paint_at)(*cell)
 
     def fill(self, cell):
+        if self.layer == "sides":                       # that side of the whole wall, where it faces open space
+            side = self.side_at(self.mouse)
+            dx, dy = SIDE_VECTORS[side]
+            group = [(x, y) for x, y in self.level.wall_region(*cell)
+                     if not (self.level.in_bounds(x + dx, y + dy) and self.level.walls[y + dy][x + dx])]
+            if not group:
+                self.say("Click a wall to give one side of the whole wall the selected tile")
+                return
+            self.begin_edit()
+            for x, y in group:
+                self.set_side(x, y, side, self.primary_id())
+            return
         level, grid, value = self.level, self.gname(), self.brush_value()
         if self.layer == "wall_h":                      # sets the height of the whole wall you click
             group = level.wall_region(*cell)
@@ -1781,6 +1845,7 @@ class Editor:
             return
         if self.tool == "shape":
             self.shape_drag = (cell, cell, button == 3)
+            self.shape_side = self.side_at(self.mouse)  # (the WallSide layer paints the side picked here)
             return
         if button == 3:
             self.begin_edit()
@@ -1813,6 +1878,30 @@ class Editor:
         return [e for e in self.level.entities
                 if (math.floor(e.x), math.floor(e.y)) == tuple(cell) and e.span == self.floor]
 
+    def mount_side(self, cell):
+        """The side of open cell `cell` that the mouse is near and that has a wall on the floor being edited
+        (an item added there hangs on that wall), or None."""
+        level = self.level
+        if not level.in_bounds(*cell) or not level.span_present(self.floor, *cell) or level.is_solid(*cell, self.floor):
+            return None
+        rect = self.cell_rect(*cell)
+        fx = (self.mouse[0] - rect.x) / max(1, rect.w)
+        fy = (self.mouse[1] - rect.y) / max(1, rect.h)
+        near = {"w": fx, "e": 1.0 - fx, "n": fy, "s": 1.0 - fy}
+        side = min(near, key=near.get)
+        dx, dy = SIDE_VECTORS[side]
+        if near[side] > MOUNT_ZONE or not level.is_solid(cell[0] + dx, cell[1] + dy, self.floor):
+            return None
+        return side
+
+    def mount_entity(self, e, wall):
+        """Hang an item on the wall on side `wall` of its cell, or ("") stand it in the middle of the cell."""
+        if e.wall == wall:
+            return
+        self.begin_edit()
+        e.wall = wall
+        e.x, e.y = mounted_position(math.floor(e.x), math.floor(e.y), wall)
+
     def place_entity(self, cell):
         """Entity tool: clicking an item selects it (its settings appear in the Details pane);
         clicking an empty cell adds an item there, in the middle of the cell on the floor being
@@ -1829,13 +1918,13 @@ class Editor:
             self.say("An item needs an open floor or the top of a wall to stand on: no room in this cell on this floor")
             return
         self.begin_edit()
+        wall = self.mount_side(cell) or ""             # (near a walled side: hung on that wall)
+        x, y = mounted_position(*cell, wall)
         prefab = level.prefab_named(self.place_prefab) if self.place_prefab else None
         if prefab is not None:                      # an instance of the chosen prefab: it follows the prefab
-            level.entities.append(prefab.clone(x=cell[0] + 0.5, y=cell[1] + 0.5, span=self.floor, name="",
-                                               prefab=prefab.name))
+            level.entities.append(prefab.clone(x=x, y=y, span=self.floor, name="", prefab=prefab.name, wall=wall))
         else:
-            level.entities.append(self.entity_brush.clone(x=cell[0] + 0.5, y=cell[1] + 0.5, span=self.floor,
-                                                          animations=[]))
+            level.entities.append(self.entity_brush.clone(x=x, y=y, span=self.floor, animations=[], wall=wall))
         self.select_entity(level.entities[-1])
         self.say("Added an item: change its settings in the Details pane" if prefab is None
                  else f"Placed {prefab.name}: edit it in the Prefabs section")
@@ -1875,6 +1964,12 @@ class Editor:
 
     def pick(self, cell):
         if not self.level.in_bounds(*cell):
+            return
+        if self.layer == "sides":
+            if self.level.walls[cell[1]][cell[0]]:
+                self.selection = {self.side_tile(*cell, self.side_at(self.mouse)) - 1}
+                self.tool = "paint"
+                self.say(f"Picked tile #{min(self.selection) + 1}")
             return
         value = self.level.get(self.gname(), *cell)
         if self.edits_wall_ceiling(*cell):
@@ -1931,6 +2026,7 @@ class Editor:
         if not cells:
             return
         self.begin_edit()
+        self.side_lock = self.shape_side
         for cell in cells:
             if erasing:
                 self.erase_at(*cell)
@@ -1938,6 +2034,7 @@ class Editor:
                 self.put_tile(*cell, tiles[cell])
             else:
                 self.paint_at(*cell)
+        self.side_lock = None
         self.say(f"{'Erased' if erasing else 'Drew'} {SHAPES[self.shape].lower()}: {len(cells)} cells")
 
     def finish_atlas_drag(self):
@@ -1994,7 +2091,7 @@ class Editor:
             return
         if self.tool in ("erase", "pick", "start", "stairs"):
             self.tool = "paint"
-        if self.layer not in STAMP_LAYERS:
+        if self.layer not in TILE_LAYERS:
             self.layer = "walls"                        # choosing a tile means you want to paint tiles
             self.say("Switched to the Walls layer (tile selection applies to the texture layers)")
 
@@ -2740,6 +2837,10 @@ class Editor:
             screen.blit(self.tile_surface(wall - 1, dim=layer != "walls"), rect)
             if level.short_wall_top(x, y) is not None:
                 draw_short_wall_mark(screen, rect)
+            if layer == "sides":
+                for side in SIDES:
+                    if level.get(f"side_{side}", x, y):
+                        self.draw_side(screen, rect, side, level.get(f"side_{side}", x, y))
             return
         if layer == "wall_h":                           # heights live on walls: open cells are just context
             pygame.draw.rect(screen, EMPTY_CELL, rect)
@@ -2751,7 +2852,7 @@ class Editor:
             screen.blit(self.tile_surface(grids[grid_name("floor_tex", below)][y][x] - 1, dim=True), rect)
             return
         g = self.gname
-        if layer == "walls":
+        if layer in ("walls", "sides"):
             pygame.draw.rect(screen, EMPTY_CELL, rect)
         elif layer in ("floor_tex", "ceil_tex"):
             screen.blit(self.tile_surface(grids[g()][y][x] - 1), rect)
@@ -2769,6 +2870,21 @@ class Editor:
             self.draw_arrow(screen, rect, grids[g("ramp")][y][x], ACCENT)
         if self.zoom >= 16 and any(level.span_present(s, x, y) for s in range(floor + 1, level.floor_count)):
             draw_upper_mark(screen, rect)
+
+    @staticmethod
+    def side_rect(rect, side):
+        """The strip along one side of a cell's rectangle on the map, a quarter of the cell deep."""
+        depth = max(3, rect.w // 4)
+        return {"n": pygame.Rect(rect.x, rect.y, rect.w, depth), "s": pygame.Rect(rect.x, rect.bottom - depth, rect.w, depth),
+                "w": pygame.Rect(rect.x, rect.y, depth, rect.h), "e": pygame.Rect(rect.right - depth, rect.y, depth, rect.h)}[side]
+
+    def draw_side(self, screen, rect, side, tile_id, alpha=255):
+        """A wall side's own tile, as a strip along that side of the wall's cell."""
+        strip = self.side_rect(rect, side)
+        picture = pygame.transform.scale(self.tile_surface(tile_id - 1), strip.size)
+        picture.set_alpha(alpha)
+        screen.blit(picture, strip)
+        pygame.draw.rect(screen, ACCENT, strip, 1)
 
     def draw_wall_ceiling(self, screen, x, y, rect):
         """A wall on the CeilH layer where the ceiling over it matters: colored like a ceiling, with
@@ -3761,6 +3877,12 @@ class Editor:
             if e.span != self.floor:
                 continue
             cx, cy = round(origin.x + e.x * z), round(origin.y + e.y * z)
+            if e.wall:                                   # hung on a wall: a bar on the wall, the icon in front of it
+                dx, dy = SIDE_VECTORS[e.wall]
+                half = int(z * 0.3)
+                pygame.draw.line(screen, ENTITY_MODE_COLORS[e.mode], (cx - abs(dy) * half, cy - abs(dx) * half),
+                                 (cx + abs(dy) * half, cy + abs(dx) * half), max(2, z // 10))
+                cx, cy = cx - round(dx * size * 0.6), cy - round(dy * size * 0.6)
             sprite = pygame.transform.scale(self.tiles[max(0, min(e.tile, len(self.tiles) - 1))], (size, size))
             pygame.draw.circle(screen, (20, 20, 30), (cx, cy), size // 2 + 2)
             screen.blit(sprite, sprite.get_rect(center=(cx, cy)))
@@ -3995,6 +4117,17 @@ class Editor:
         if not area.collidepoint(self.mouse) or self.pan_drag:
             return
         cell = self.cell_at(self.mouse)
+        if self.layer == "sides" and self.tool in ("paint", "erase", "fill", "pick", "shape") \
+                and self.level.in_bounds(*cell) and self.level.walls[cell[1]][cell[0]]:
+            side, rect = self.side_at(self.mouse), self.cell_rect(*cell)
+            if self.tool in ("paint", "shape", "fill") and self.stroke != "erase" and self.selection:
+                self.draw_side(screen, rect, side, self.primary_id(), alpha=170)
+            pygame.draw.rect(screen, WARN if self.tool == "erase" or self.stroke == "erase" else ACCENT,
+                             self.side_rect(rect, side), 2)
+            return
+        if self.tool == "entity" and self.mount_side(cell) and self.selected_entity() is None:
+            pygame.draw.rect(screen, ACCENT, self.side_rect(self.cell_rect(*cell), self.mount_side(cell)), 2)
+            return
         if self.tool == "paint" and self.stroke != "erase" and self.layer in STAMP_LAYERS:
             for dx, dy, tile_id in self.stamp():
                 ghost = self.tile_surface(tile_id - 1).copy()
@@ -4028,7 +4161,7 @@ class Editor:
         hover = self.tile_index_at(self.mouse)
         if hover is not None:
             pygame.draw.rect(screen, TEXT, self.tile_rect(hover), 1)
-        if self.layer not in STAMP_LAYERS:              # the atlas is not what this layer paints with
+        if self.layer not in TILE_LAYERS:               # the atlas is not what this layer paints with
             shade = pygame.Surface(self.atlas_img.get_size(), pygame.SRCALPHA)
             shade.fill((20, 20, 26, 150))
             screen.blit(shade, self.atlas_rect())
@@ -4041,7 +4174,7 @@ class Editor:
             screen.blit(small, (ATLAS_X + dx * cell, y + 22 + dy * cell))
         hints = ("Atlas: click / drag = select, Ctrl = add/remove",
                  "Map: L-drag paint, R-drag erase, wheel zoom, Space+drag pan",
-                 "Tab floor, layers 1-7, tools B E F I S T H C N, [ ] value, R ramp, K key")
+                 "Tab floor, layers 1-8, tools B E F I S T H C N, [ ] value, R ramp, K key")
         for i, text in enumerate(hints):
             screen.blit(self.small.render(text, True, DIM), (ATLAS_X, hints_y + i * 16))
 
@@ -4243,6 +4376,10 @@ class Editor:
                     if self.wall_ceiling_matters(x, y):
                         kind = "set" if self.level.has_explicit_wall_ceiling(x, y) else "automatic"
                         how += f", ceiling over it {fmt(self.level.wall_ceiling(x, y))} ({kind})"
+                    if self.layer == "sides":
+                        side = self.side_at(self.mouse)
+                        own = g[f"side_{side}"][y][x]
+                        how += f"   {WALL_LABELS[side].split()[0]} side: " + (f"tile #{own}" if own else "the wall's own")
                     return f"Cell ({x}, {y}): wall id {g['walls'][y][x]}{how}"
                 parts = [f"Cell ({x}, {y})"]
                 for s in self.level.rooms_at(x, y):

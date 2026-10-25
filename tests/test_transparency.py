@@ -394,7 +394,7 @@ def render_raw(world, x, y, angle, span=0, z=0.0):
     render_scene(fb, x, y, z + 0.5, span, math.cos(angle), math.sin(angle),
                  -math.sin(angle) * r.half_fov_tan, math.cos(angle) * r.half_fov_tan,
                  HEIGHT / 2, r.focal, world.floor_plane, world.ceil_plane, world.span_on, world.solid_from,
-                 world.pane_tex, world.pane_top, world.wall_tex, world.floor_tex, world.ceil_tex,
+                 world.pane_tex, world.pane_top, world.wall_tex, world.side_tex, world.floor_tex, world.ceil_tex,
                  r.textures, MAX_DEPTH, FOG_DIST, sentinel)
     return fb, sentinel
 
