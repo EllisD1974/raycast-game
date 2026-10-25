@@ -4,6 +4,10 @@
   "height": 16,
   "floors": ["Floor 1"],
   "start": {"x": 1.5, "y": 7.5, "angle": 0.0, "span": 0},
+  "spawners": [
+    {"x": 1.5, "y": 7.5, "span": 0, "angle": 0.0, "order": 0},
+    {"x": 63.5, "y": 7.5, "span": 0, "angle": 3.141592653589793, "order": 1}
+  ],
   "entities": [
     {"x": 5.5, "y": 1.04, "span": 0, "tile": 10, "mode": "once", "effect": "score", "amount": 10.0, "respawn": 10.0, "size": 0.4, "lift": 0.0, "animations": [], "item": "", "gun": "", "ammo": "", "shown": true, "emits": "", "emits_override": false, "emits_offset_x": 0.0, "emits_offset_y": 0.0, "emits_offset_z": 0.0, "light": "", "name": "", "prefab": "", "wall": "n", "elevation": 0.0},
     {"x": 6.5, "y": 1.04, "span": 0, "tile": 11, "mode": "persistent", "effect": "health", "amount": 25.0, "respawn": 10.0, "size": 1.0, "lift": 0.0, "animations": [{"kind": "float", "speed": 0.5, "amount": 0.1}], "item": "", "gun": "", "ammo": "", "shown": true, "emits": "", "emits_override": false, "emits_offset_x": 0.0, "emits_offset_y": 0.0, "emits_offset_z": 0.0, "light": "", "name": "", "prefab": "Prefab", "wall": "n", "elevation": 0.0},
