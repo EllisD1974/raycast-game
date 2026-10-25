@@ -13,7 +13,7 @@ import main
 import net
 from game import Game, Inputs
 from mapfile import Entity, Level, save_level
-from menu import MAX_SENSITIVITY, GameSettings, Menu
+from menu import MAX_SENSITIVITY, MIN_SENSITIVITY, GameSettings, Menu
 from session import ClientSession, HostSession
 from test_session import FIRST_CHARACTER, make_world, run
 
@@ -58,17 +58,83 @@ def test_the_main_page_has_resume_settings_and_exit_and_host_settings_only_for_t
     assert escape(menu) == "resume"                                    # Esc on the main page closes the menu
 
 
-def test_settings_change_the_sensitivity_and_fullscreen_and_back_returns():
+def item(menu, kind):
+    return next(i for i in menu.items(SIZE) if i.kind == kind)
+
+
+def mouse(menu, kind, pos, button=1):
+    if kind == pygame.MOUSEMOTION:
+        return menu.handle(pygame.event.Event(kind, pos=pos, rel=(0, 0), buttons=(1, 0, 0)), SIZE)
+    return menu.handle(pygame.event.Event(kind, pos=pos, button=button), SIZE)
+
+
+def type_keys(menu, text):
+    for char in text:
+        menu.handle(pygame.event.Event(pygame.KEYDOWN, key=0, mod=0, unicode=char), SIZE)
+
+
+def key(menu, k):
+    return menu.handle(pygame.event.Event(pygame.KEYDOWN, key=k, mod=0, unicode=""), SIZE)
+
+
+def test_the_sensitivity_slider_follows_a_click_and_a_drag_and_is_saved_when_let_go():
     settings = GameSettings()
     menu = Menu(settings)
     press(menu, "Settings")
-    assert menu.page == "settings"
-    assert press(menu, "More") == "settings" and settings.sensitivity == 1.25
-    assert press(menu, "Less") == "settings" and press(menu, "Less") == "settings" and settings.sensitivity == 0.75
+    slider = item(menu, "slider").rect
+    start, end = menu.track(slider)
+    assert mouse(menu, pygame.MOUSEBUTTONDOWN, (start, slider.centery)) is None
+    assert settings.sensitivity == MIN_SENSITIVITY                     # the far left: the least
+    assert mouse(menu, pygame.MOUSEMOTION, (end + 50, slider.centery)) is None
+    assert settings.sensitivity == MAX_SENSITIVITY                     # (dragged past the end: the most)
+    mouse(menu, pygame.MOUSEMOTION, ((start + end) // 2, slider.centery + 40))   # off the slider still drags
+    assert settings.sensitivity == pytest.approx((MIN_SENSITIVITY + MAX_SENSITIVITY) / 2, abs=0.05)
+    assert round(settings.sensitivity / 0.05, 6).is_integer()          # in steps of 0.05
+    assert mouse(menu, pygame.MOUSEBUTTONUP, ((start + end) // 2, slider.centery)) == "settings"
+    assert not menu.dragging
+
+
+def test_the_sensitivity_can_be_typed_and_is_held_to_the_range():
+    settings = GameSettings()
+    menu = Menu(settings)
+    menu.page = "settings"
+    box = item(menu, "input")
+    assert box.label == "1"
+    mouse(menu, pygame.MOUSEBUTTONDOWN, box.rect.center)
+    assert menu.typing == "1"
+    key(menu, pygame.K_BACKSPACE)
+    type_keys(menu, "2.5x.5")                                          # (only digits and one point are taken)
+    assert menu.typing == "2.55"
+    assert key(menu, pygame.K_RETURN) == "settings" and settings.sensitivity == 2.55 and menu.typing is None
+    mouse(menu, pygame.MOUSEBUTTONDOWN, box.rect.center)
+    type_keys(menu, "99")
+    assert key(menu, pygame.K_ESCAPE) is None and settings.sensitivity == 2.55     # Esc forgets what was typed
+    assert menu.page == "settings"                                     # ... and stays on the page
+    mouse(menu, pygame.MOUSEBUTTONDOWN, box.rect.center)
+    key(menu, pygame.K_BACKSPACE)
+    key(menu, pygame.K_BACKSPACE)
+    key(menu, pygame.K_BACKSPACE)
+    key(menu, pygame.K_BACKSPACE)
+    type_keys(menu, "9")
+    assert key(menu, pygame.K_RETURN) == "settings" and settings.sensitivity == MAX_SENSITIVITY
+    mouse(menu, pygame.MOUSEBUTTONDOWN, box.rect.center)
+    for _ in range(4):
+        key(menu, pygame.K_BACKSPACE)
+    type_keys(menu, ".")
+    assert key(menu, pygame.K_RETURN) is None and settings.sensitivity == MAX_SENSITIVITY and menu.message
+    mouse(menu, pygame.MOUSEBUTTONDOWN, box.rect.center)
+    for _ in range(4):
+        key(menu, pygame.K_BACKSPACE)
+    type_keys(menu, "0.75")
+    assert mouse(menu, pygame.MOUSEBUTTONDOWN, (5, 5)) == "settings"    # clicking away keeps it
+    assert settings.sensitivity == 0.75
+
+
+def test_fullscreen_toggles_and_back_returns():
+    settings = GameSettings()
+    menu = Menu(settings)
+    press(menu, "Settings")
     assert press(menu, "Fullscreen: off") == "settings" and settings.fullscreen
-    for _ in range(40):
-        menu.press("sensitivity+")
-    assert settings.sensitivity == MAX_SENSITIVITY and not buttons(menu)["More"].enabled
     assert escape(menu) is None and menu.page == "main"                # Esc goes back a page
 
 

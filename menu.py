@@ -1,7 +1,7 @@
 """The in-game menu: Esc opens it over the game.
 
-Pages: the main page (Resume, Settings, Host settings for the host, Exit), Settings (mouse sensitivity,
-fullscreen), Host settings (who is playing, Change map) and the list of maps to change to. The menu only
+Pages: the main page (Resume, Settings, Host settings for the host, Exit), Settings (mouse sensitivity: a
+slider to drag and a box to type the number in; fullscreen), Host settings (who is playing, Change map) and the list of maps to change to. The menu only
 draws itself and says what was asked for: Menu.handle() returns "resume", "exit", "settings" (a setting
 changed: apply and save them) or "map:<path>" (the host wants everyone moved to that map), and main.py does
 it. The player's settings are kept between runs in a small file (GameSettings).
@@ -14,13 +14,15 @@ import pygame
 
 SETTINGS_PATH = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), ".config"),
                              "raycast-game", "game.json")
-SENSITIVITY_STEP, MIN_SENSITIVITY, MAX_SENSITIVITY = 0.25, 0.25, 4.0    # times the standard mouse sensitivity
+MIN_SENSITIVITY, MAX_SENSITIVITY = 0.1, 5.0     # times the standard mouse sensitivity
+SLIDER_STEP = 0.05                              # the slider moves the sensitivity in steps of this
 BUTTON_W, BUTTON_H, GAP = 360, 46, 12
-SMALL_W = (BUTTON_W - GAP) // 2                 # the two buttons of a -/+ pair
+INPUT_W = 90                                    # the box the sensitivity can be typed into, beside its slider
 LIST_ROWS = 8                                   # maps shown at once in the Change map list
 SHADE = (0, 0, 0, 160)
 PANEL, EDGE = (32, 34, 42, 235), (90, 94, 110)
 BUTTON, BUTTON_HOT, BUTTON_OFF = (62, 65, 76), (88, 92, 108), (46, 48, 56)
+TRACK, FIELD = (70, 74, 88), (22, 24, 30)
 TEXT, DIM, ACCENT, WARN = (230, 230, 235), (150, 152, 162), (255, 205, 60), (255, 120, 100)
 TITLES = {"main": "Paused", "settings": "Settings", "host": "Host settings", "maps": "Change map"}
 BACK = {"settings": "main", "host": "main", "maps": "host"}     # where Back (or Esc) goes from each page
@@ -55,12 +57,19 @@ class GameSettings:
 
 @dataclass
 class Item:
-    """One line of a page: a button (with an action) or a line of text (action None)."""
+    """One line of a page: a button (with an action), a line of text (action None), or the sensitivity's slider
+    ("slider:") or the box its number is typed into ("input:")."""
     rect: pygame.Rect
     label: str
     action: str = None
     enabled: bool = True
     color: tuple = TEXT
+
+    @property
+    def kind(self):
+        if not self.action:
+            return "text"
+        return self.action.split(":")[0] if self.action.startswith(("slider:", "input:")) else "button"
 
 
 class Menu:
@@ -75,11 +84,14 @@ class Menu:
         self.page = "main"
         self.scroll = 0                         # first map shown in the Change map list
         self.message, self.message_color = "", DIM
+        self.dragging = False                   # the sensitivity slider is being dragged
+        self.typing = None                      # text being typed into the sensitivity box (None: not typing)
         self.font = pygame.font.Font(None, 30)
         self.title_font = pygame.font.Font(None, 46)
 
     def show(self):
         self.open, self.page, self.message = True, "main", ""
+        self.dragging, self.typing = False, None
 
     def hide(self):
         self.open = False
@@ -101,16 +113,17 @@ class Menu:
 
     def items(self, size):
         """The lines of the open page, laid out in the middle of a window of `size`."""
-        lines = []                              # (label, action, enabled, color, half): half is "left" / "right"
+        lines = []                              # (label, action, enabled, color, half): "left" / "right" share a row
         if self.page == "main":
             lines += [("Resume", "resume"), ("Settings", "page:settings")]
             if self.is_host:
                 lines.append(("Host settings", "page:host"))
             lines.append(("Exit game", "exit"))
         elif self.page == "settings":
-            lines += [(f"Mouse sensitivity: {self.settings.sensitivity:g}x", None),
-                      ("Less", "sensitivity-", self.settings.sensitivity > MIN_SENSITIVITY, TEXT, "left"),
-                      ("More", "sensitivity+", self.settings.sensitivity < MAX_SENSITIVITY, TEXT, "right"),
+            shown = self.typing if self.typing is not None else f"{self.settings.sensitivity:g}"
+            lines += [("Mouse sensitivity", None),
+                      ("", "slider:sensitivity", True, TEXT, "left"),
+                      (shown, "input:sensitivity", True, TEXT, "right"),
                       (f"Fullscreen: {'on' if self.settings.fullscreen else 'off'}", "fullscreen"),
                       ("Back", "back")]
         elif self.page == "host":
@@ -140,8 +153,8 @@ class Menu:
         for label, action, enabled, color, half in lines:
             if half == "right":
                 y -= BUTTON_H + GAP                             # beside the "left" one before it
-            left = x + (SMALL_W + GAP if half == "right" else 0)
-            width = SMALL_W if half else BUTTON_W
+            left = x + (BUTTON_W - INPUT_W if half == "right" else 0)
+            width = {"left": BUTTON_W - INPUT_W - GAP, "right": INPUT_W}.get(half, BUTTON_W)
             out.append(Item(pygame.Rect(left, y, width, BUTTON_H), label, action, enabled, color))
             y += BUTTON_H + GAP
         return out
@@ -157,6 +170,20 @@ class Menu:
 
     def handle(self, event, size):
         """React to one event while the menu is open. Returns what main.py should do, or None."""
+        if self.typing is not None:                     # typing the sensitivity takes the keys
+            if event.type == pygame.KEYDOWN:
+                return self.type_key(event)
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                changed = self.finish_typing(True)       # clicking away keeps what was typed
+                return self.handle(event, size) or changed
+            return None
+        if self.dragging:
+            if event.type == pygame.MOUSEMOTION:
+                self.slide_to(event.pos[0], size)
+            elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                self.dragging = False
+                return "settings"                       # (applied and saved once, when it is let go)
+            return None
         if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
             if self.page == "main":
                 return "resume"
@@ -166,8 +193,61 @@ class Menu:
         elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             for item in self.items(size):
                 if item.action and item.enabled and item.rect.collidepoint(event.pos):
+                    if item.kind == "slider":
+                        self.dragging = True
+                        self.slide_to(event.pos[0], size)
+                        return None
+                    if item.kind == "input":
+                        self.typing = f"{self.settings.sensitivity:g}"
+                        return None
                     return self.press(item.action)
         return None
+
+    # ------------------------------------------------------------------ the sensitivity: slider and typed number
+
+    def slider_rect(self, size):
+        return next(item.rect for item in self.items(size) if item.kind == "slider")
+
+    @staticmethod
+    def track(rect):
+        """The part of the slider's rect the handle runs along (x from, x to)."""
+        return rect.x + 14, rect.right - 14
+
+    def slide_to(self, x, size):
+        """Set the sensitivity from where along the slider screen column `x` is, in steps of SLIDER_STEP."""
+        start, end = self.track(self.slider_rect(size))
+        fraction = max(0.0, min(1.0, (x - start) / max(1, end - start)))
+        value = MIN_SENSITIVITY + fraction * (MAX_SENSITIVITY - MIN_SENSITIVITY)
+        self.settings.sensitivity = round(round(value / SLIDER_STEP) * SLIDER_STEP, 4)
+        self.settings.sensitivity = max(MIN_SENSITIVITY, min(MAX_SENSITIVITY, self.settings.sensitivity))
+
+    def type_key(self, event):
+        """A key while typing the sensitivity: digits and a point add to it, Enter uses it, Esc forgets it."""
+        if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+            return self.finish_typing(True)
+        if event.key == pygame.K_ESCAPE:
+            return self.finish_typing(False)
+        if event.key == pygame.K_BACKSPACE:
+            self.typing = self.typing[:-1]
+        elif getattr(event, "unicode", "") and event.unicode in "0123456789." and len(self.typing) < 6:
+            if event.unicode != "." or "." not in self.typing:
+                self.typing += event.unicode
+        return None
+
+    def finish_typing(self, keep):
+        """Stop typing the sensitivity. Keeping it uses the number (held to the slider's range); something that is
+        not a number is said so and changes nothing. Returns "settings" if it changed."""
+        text, self.typing = self.typing, None
+        if not keep:
+            return None
+        try:
+            value = float(text)
+        except ValueError:
+            self.say("Type a number, like 1.5", warn=True)
+            return None
+        self.settings.sensitivity = round(max(MIN_SENSITIVITY, min(MAX_SENSITIVITY, value)), 4)
+        self.say("")
+        return "settings"
 
     def press(self, action):
         """Do what a button says on the menu itself (pages, settings); return what main.py should do."""
@@ -177,11 +257,6 @@ class Menu:
         if action == "back":
             self.page, self.message = BACK[self.page], ""
             return None
-        if action in ("sensitivity-", "sensitivity+"):
-            step = SENSITIVITY_STEP if action.endswith("+") else -SENSITIVITY_STEP
-            self.settings.sensitivity = max(MIN_SENSITIVITY, min(MAX_SENSITIVITY,
-                                                                 round(self.settings.sensitivity + step, 4)))
-            return "settings"
         if action == "fullscreen":
             self.settings.fullscreen = not self.settings.fullscreen
             return "settings"
@@ -205,6 +280,12 @@ class Menu:
         title = self.title_font.render(TITLES[self.page], True, ACCENT)
         surface.blit(title, title.get_rect(midtop=(box.centerx, box.y + 22)))
         for item in self.items(size):
+            if item.kind == "slider":
+                self.draw_slider(surface, item.rect, mouse)
+                continue
+            if item.kind == "input":
+                self.draw_input(surface, item)
+                continue
             if item.action:
                 hot = item.enabled and item.rect.collidepoint(mouse)
                 pygame.draw.rect(surface, BUTTON_HOT if hot else (BUTTON if item.enabled else BUTTON_OFF), item.rect,
@@ -214,3 +295,23 @@ class Menu:
         if self.message:
             note = self.font.render(self.message, True, self.message_color)
             surface.blit(note, note.get_rect(midbottom=(box.centerx, box.bottom - 14)))
+
+    def draw_slider(self, surface, rect, mouse):
+        """The sensitivity slider: a track filled up to the handle, which sits at the current value."""
+        start, end = self.track(rect)
+        fraction = (self.settings.sensitivity - MIN_SENSITIVITY) / (MAX_SENSITIVITY - MIN_SENSITIVITY)
+        handle = round(start + fraction * (end - start))
+        middle = rect.centery
+        pygame.draw.rect(surface, TRACK, (start, middle - 3, end - start, 6), border_radius=3)
+        pygame.draw.rect(surface, ACCENT, (start, middle - 3, handle - start, 6), border_radius=3)
+        hot = self.dragging or rect.collidepoint(mouse)
+        pygame.draw.circle(surface, TEXT if hot else (200, 200, 208), (handle, middle), 11)
+        pygame.draw.circle(surface, ACCENT, (handle, middle), 11, 2)
+
+    def draw_input(self, surface, item):
+        """The box the sensitivity is typed into: its number, or what is being typed with a caret."""
+        typing = self.typing is not None
+        pygame.draw.rect(surface, FIELD, item.rect, border_radius=6)
+        pygame.draw.rect(surface, ACCENT if typing else EDGE, item.rect, 2, border_radius=6)
+        text = self.font.render(item.label + ("|" if typing else "x"), True, TEXT)
+        surface.blit(text, text.get_rect(center=item.rect.center))
