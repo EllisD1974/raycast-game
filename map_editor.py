@@ -585,8 +585,10 @@ class Editor:
         return pygame.display.get_surface().get_size()
 
     def preview_width(self):
-        """Width of the 3D view's column at the window's right; 0 while the view is hidden."""
-        if not self.show_preview or self.section_open():    # the Guns and Prefabs sections have no use for the 3D view
+        """Width of the 3D view's column at the window's right; 0 while the view is hidden. It stays beside the
+        Prefabs section, so editing a prefab shows the items made from it changing in the world; the Guns, Effects
+        and Lights sections have previews of their own instead."""
+        if not self.show_preview or (self.section_open() and not self.prefabs_mode):
             return 0
         return int(min(PREVIEW_MAX_W, max(PREVIEW_MIN_W, (self._size()[0] - PANEL_W) * 0.4)))
 

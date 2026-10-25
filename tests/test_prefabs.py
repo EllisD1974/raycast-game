@@ -445,3 +445,39 @@ def test_clicking_the_map_next_to_a_selected_copy_selects_or_places_and_never_re
     assert len(ed.level.entities) == 2 and copy in ed.level.entities
     ed.map_click((4, 4), 1)                                                       # back on the first: it is selected
     assert ed.selected_entity() is copy and len(ed.level.entities) == 2
+
+
+# ------------------------------------------------------------------ the 3D view beside the Prefabs section
+
+def test_the_3d_view_stays_open_beside_the_prefabs_section_and_not_the_others(ed):
+    ed.set_preview(True)
+    add_prefab(ed)
+    ed.prefab_selected = 0
+    ed.update(0.0, [0] * 512)
+    ed.draw(pygame.display.get_surface())
+    column, pane, area = ed.preview_column(), ed.details_rect(), ed.map_area()
+    assert column is not None and pane is not None
+    assert area.right <= pane.x and pane.right <= column.x                    # list, settings, 3D view side by side
+    assert all(rect.right <= area.right for rect, _i in ed.prefab_rows()[0])
+    ed.do("guns")
+    assert ed.preview_column() is None                                        # (the Guns section has its own preview)
+
+
+def test_editing_a_prefab_shows_in_the_3d_view(ed):
+    p = add_prefab(ed)
+    p.name = "Gem"
+    ed.place_prefab = "Gem"
+    place(ed, (3, 3))
+    ed.set_preview(True)
+    ed.do("prefabs")
+    ed.prefab_selected = 0
+    ed.update(0.0, [0] * 512)
+    assert [s[4] for s in ed.preview.items.sprites()] == [p.tile]
+    before = p.tile
+    click(ed, row(ed, "tile").plus.center)                                   # the next icon
+    assert p.tile == before + 1
+    ed.preview.last_build = -1e9                                              # (no wait for the rebuild throttle)
+    ed.update(0.0, [0] * 512)
+    assert ed.preview.built_revision == ed.revision
+    assert [s[4] for s in ed.preview.items.sprites()] == [p.tile]
+    ed.draw(pygame.display.get_surface())
