@@ -376,6 +376,7 @@ def test_a_small_window_still_lays_out_and_draws(tmp_path):
 
 def test_new_and_reload_keep_the_view_working(ed, tmp_path):
     ed.do("new")
+    ed.finish_new_map()                                         # (keep the name it offers)
     ed.update(0.0, keys())
     assert ed.preview.built_revision == ed.revision and ed.preview.world.width == 16
     ed.draw(pygame.display.get_surface())

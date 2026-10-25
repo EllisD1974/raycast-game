@@ -1,6 +1,8 @@
 """Map editor for the simple raycaster.
 
 Run:  python map_editor.py [maps/map.json]      (opens maximized)
+      Without a map it opens the one edited last (made, opened or given here), or maps/map.json the first
+      time. Which one that was is kept in %LOCALAPPDATA%/raycast-game/editor.json.
 
 A map has any number of floors stacked on top of each other. The ground floor exists everywhere;
 higher floors have a room only where you paint one. Pick the floor you are editing from the
@@ -54,6 +56,11 @@ Tools: B paint, E erase, F fill, I pick from the map, S set the start (on the fl
 editing; click it again to rotate), T stairs (drag a line on the FloorH layer: heights rise by
 the Step each cell, starting at the brush value). Ctrl+Z / Ctrl+Y undo / redo, Ctrl+S save,
 F5 save and play, Home reset view, Tab / Shift+Tab switch floor, F2 rename floor.
+
+New asks for the new map's name and saves a blank map as <name>.json in the folder of the map being
+edited, so every new map is its own file (an existing file is never overwritten). Open (Ctrl+O) lists
+the maps in that folder to switch to another one: click one and Open, double-click it, or pick with the
+arrow keys and Enter. Save, Reload and Play work on the map that was made or opened last.
 
 Items (the Entity tool, N): click an empty cell to add an item there (in the middle of the cell, on
 the floor you are editing), or click an existing item to select it. A selected item opens the
@@ -130,6 +137,7 @@ the small marks drawn on the map: the orange dot for a room on a floor above, th
 ring when the start is on another floor), red outlines on problem cells, faded floors and walls,
 ramp arrows and height colors.
 """
+import json
 import math
 import os
 import subprocess
@@ -201,6 +209,13 @@ WARN = (255, 120, 100)
 BUTTON = (62, 65, 76)
 BUTTON_HOT = (88, 92, 108)
 BUTTON_ON = (70, 110, 190)
+SHADE = (0, 0, 0, 150)                          # dims the editor behind a dialog
+MAP_NAME_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -_")
+MAX_MAP_NAME = 40                               # characters in a map's file name (without .json)
+SETTINGS_PATH = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), ".config"),
+                             "raycast-game", "editor.json")    # remembers the map edited last
+OPEN_ROWS, OPEN_ROW_H = 12, 26                  # Open dialog: map names shown at once, and their row height
+DOUBLE_CLICK = 0.4                              # seconds between two clicks on a map that open it
 
 STAMP_LAYERS = ("walls", "floor_tex", "ceil_tex")
 ROOM_HEIGHT_LAYERS = ("floor_h", "ceil_h")                  # heights that make up a floor's rooms
@@ -330,9 +345,34 @@ def default_brush(grid):
     return 1.5 * floor if layer == "floor_h" else 1.5 * floor + 1.5
 
 
+def last_map(settings=SETTINGS_PATH):
+    """The map edited last, as remembered in `settings`, or None if there is none or it is gone."""
+    try:
+        with open(settings, encoding="utf-8") as f:
+            path = json.load(f).get("last_map")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return path if isinstance(path, str) and os.path.isfile(path) else None
+
+
+def remember_map(path, settings=SETTINGS_PATH):
+    """Remember `path` in `settings` as the map edited last. Not being able to write it changes nothing else."""
+    try:
+        os.makedirs(os.path.dirname(settings), exist_ok=True)
+        with open(settings, "w", encoding="utf-8") as f:
+            json.dump({"last_map": os.path.abspath(path)}, f)
+    except OSError:
+        pass
+
+
 class Editor:
-    def __init__(self, path):
+    def __init__(self, path, settings=None):
+        """Edit the map at `path` (a blank one if the file is not there yet). `settings` is the file to remember
+        the map being edited in (see last_map), or None not to remember it."""
         self.path = path
+        self.settings = settings
+        if settings:
+            remember_map(path, settings)
         self._scaled = {}
         self._atlas_stamp = None                # modification time of textures.png when last loaded
         self._atlas_check = 0.0                 # when textures.png was last checked for changes
@@ -356,6 +396,13 @@ class Editor:
         self.dropdown_open = False
         self.show_legend = True                 # the key to the marks on the map (K toggles)
         self.rename = None                      # text being typed while renaming a floor
+        self.new_name = None                    # name being typed in the New map dialog (None: closed)
+        self.new_error = ""                     # why the typed name can't be used, shown in the dialog
+        self.open_maps = None                   # file names listed in the Open dialog (None: closed)
+        self.open_pick = 0                      # index of the picked one
+        self.open_scroll = 0                    # index of the first one shown
+        self.open_error = ""                    # why the picked map can't be opened, shown in the dialog
+        self.open_click = (None, 0.0)           # (index, time) of the last click on the list, for double-clicks
         self.layer = "walls"
         self.tool = "paint"
         self.entity_brush = Entity(0.0, 0.0, tile=ENTITY_FIRST_TILE)   # settings new items start with
@@ -1406,7 +1453,7 @@ class Editor:
                  ("btn", "Border", "border"), ("txt", "Edge", DIM),
                  *[("btn", f"{side}{sign}", f"edge:{side}{sign}") for side in "LRTB" for sign in "+-"],
                  ("txt", f"{self.level.width}x{self.level.height}".ljust(7), ACCENT), None,
-                 ("btn", "New", "new"), ("btn", "Reload", "reload"), ("btn", "Save", "save"),
+                 ("btn", "New", "new"), ("btn", "Open", "open"), ("btn", "Reload", "reload"), ("btn", "Save", "save"),
                  ("btn", "Play(F5)", "play")]
         for y, items in zip(ROW_Y, (row1, row2, row3)):
             x = 8
@@ -2002,13 +2049,13 @@ class Editor:
             self.level.fill_border(self.primary_id())
         elif action.startswith("edge:"):
             self.resize_side(action[5], 1 if action[6] == "+" else -1)
-        elif action in ("new", "reload"):
+        elif action in ("new", "open", "reload"):
             if self.dirty and self.confirm != action:
                 self.confirm = action
                 self.say(f"Unsaved changes: click {action.capitalize()} again to discard them", 6)
                 return
             self.confirm = None
-            self.new_map() if action == "new" else self.reload()
+            {"new": self.start_new_map, "open": self.start_open, "reload": self.reload}[action]()
         elif action == "save":
             self.save()
         elif action == "play":
@@ -2125,28 +2172,118 @@ class Editor:
             name = self.gname()
             self.value[name] = max(low, min(high, round(self.brush(name) + delta, 4)))
 
-    def new_map(self):
+    def start_new_map(self):
+        """Open the New map dialog, offering a name no map in the folder has yet."""
+        name, number = "new_map", 1
+        while os.path.exists(self.map_file(name)):
+            number += 1
+            name = f"new_map_{number}"
+        self.new_name, self.new_error = name, ""
+
+    def map_file(self, name):
+        """Where the map called `name` is saved: <name>.json next to the map being edited."""
+        return os.path.join(self.map_folder(), name + ".json")
+
+    def finish_new_map(self, commit=True):
+        """Make the blank map under the typed name and save it, so the editor works on that file from now
+        on. A name that is empty or already a file keeps the dialog open with the reason."""
+        if not commit:
+            self.new_name, self.new_error = None, ""
+            self.say("No new map made")
+            return
+        name = (self.new_name or "").strip()
+        path = self.map_file(name)
+        if not name:
+            self.new_error = "Type a name for the map"
+            return
+        if os.path.exists(path):
+            self.new_error = f"{name}.json already exists: pick another name"
+            return
+        level = self.blank_map()
+        try:
+            save_level(path, level)
+        except OSError as e:
+            self.new_error = f"Can't save {name}.json: {e.strerror or e}"
+            return
+        self.new_name, self.new_error = None, ""
+        self.switch_to(path)
+        self.start_over(level)
+        self.say(f"New blank map (16x16), saved as {name}.json")
+
+    @staticmethod
+    def blank_map():
+        level = Level.blank(16, 16)
+        level.start_x = level.start_y = 1.5
+        return level
+
+    def start_over(self, level):
+        """Edit `level` from here on (a new, opened or reloaded map), with no undo history."""
         self.undo.clear()
         self.redo.clear()
-        self.level = Level.blank(16, 16)
-        self.level.start_x = self.level.start_y = 1.5
+        self.level = level
         self.clamp_floor()
         self.dirty = False
         self.revision += 1
         self.fit_view()
-        self.say("New blank map (16x16)")
+
+    def switch_to(self, path):
+        """Work on the map file at `path` from now on (and remember it, if remembering)."""
+        self.path = path
+        if self.settings:
+            remember_map(path, self.settings)
+
+    def map_folder(self):
+        return os.path.dirname(os.path.abspath(self.path))
+
+    def start_open(self):
+        """Open the Open dialog: the maps in the folder of the map being edited, that one picked."""
+        try:
+            names = sorted((n for n in os.listdir(self.map_folder()) if n.lower().endswith(".json")), key=str.lower)
+        except OSError as e:
+            self.say(f"Can't list the maps: {e.strerror or e}")
+            return
+        if not names:
+            self.say("No maps in this folder yet")
+            return
+        current = os.path.basename(self.path)
+        self.open_maps, self.open_error = names, ""
+        self.open_pick = names.index(current) if current in names else 0
+        self.open_scroll = 0
+        self.open_click = (None, 0.0)
+        self.pick_map(self.open_pick)
+
+    def pick_map(self, index):
+        """Pick the map at `index` in the Open dialog, scrolling the list to show it."""
+        self.open_pick = max(0, min(len(self.open_maps) - 1, index))
+        self.open_error = ""
+        if self.open_pick < self.open_scroll:
+            self.open_scroll = self.open_pick
+        elif self.open_pick >= self.open_scroll + OPEN_ROWS:
+            self.open_scroll = self.open_pick - OPEN_ROWS + 1
+
+    def finish_open(self, commit=True):
+        """Edit the picked map from now on. One that can't be read keeps the dialog open with the reason."""
+        if not commit:
+            self.open_maps, self.open_error = None, ""
+            self.say("Kept the map that was open")
+            return
+        name = self.open_maps[self.open_pick]
+        path = os.path.join(self.map_folder(), name)
+        try:
+            level = load_level(path)
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
+            self.open_error = f"Can't open {name}: {e}"[:90]
+            return
+        self.open_maps, self.open_error = None, ""
+        self.switch_to(path)
+        self.start_over(level)
+        self.say(f"Opened {name}")
 
     def reload(self):
         if not os.path.exists(self.path):
             self.say("Nothing saved yet to reload")
             return
-        self.level = load_level(self.path)
-        self.clamp_floor()
-        self.undo.clear()
-        self.redo.clear()
-        self.dirty = False
-        self.revision += 1
-        self.fit_view()
+        self.start_over(load_level(self.path))
         self.say(f"Reloaded {os.path.basename(self.path)}")
 
     def save(self):
@@ -2211,6 +2348,28 @@ class Editor:
             self.on_wheel(e)
 
     def on_key(self, e):
+        if self.open_maps is not None:                  # the Open dialog takes every key
+            if e.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                self.finish_open(True)
+            elif e.key == pygame.K_ESCAPE:
+                self.finish_open(False)
+            elif e.key in (pygame.K_UP, pygame.K_DOWN, pygame.K_PAGEUP, pygame.K_PAGEDOWN):
+                step = {pygame.K_UP: -1, pygame.K_DOWN: 1, pygame.K_PAGEUP: -OPEN_ROWS, pygame.K_PAGEDOWN: OPEN_ROWS}
+                self.pick_map(self.open_pick + step[e.key])
+            elif e.key in (pygame.K_HOME, pygame.K_END):
+                self.pick_map(0 if e.key == pygame.K_HOME else len(self.open_maps) - 1)
+            return
+        if self.new_name is not None:                   # the New map dialog takes every key
+            char = getattr(e, "unicode", "")
+            if e.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                self.finish_new_map(True)
+            elif e.key == pygame.K_ESCAPE:
+                self.finish_new_map(False)
+            elif e.key == pygame.K_BACKSPACE:
+                self.new_name, self.new_error = self.new_name[:-1], ""
+            elif char and char in MAP_NAME_CHARS and len(self.new_name) < MAX_MAP_NAME:
+                self.new_name, self.new_error = self.new_name + char, ""
+            return
         if self.rename is not None:                     # typing a floor name takes every key
             char = getattr(e, "unicode", "")
             if e.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
@@ -2247,6 +2406,8 @@ class Editor:
             self.delete_selected()
         elif ctrl and e.key == pygame.K_s:
             self.do("save")
+        elif ctrl and e.key == pygame.K_o:
+            self.do("open")
         elif ctrl and e.key == pygame.K_z:
             self.do("redo" if e.mod & pygame.KMOD_SHIFT else "undo")
         elif ctrl and e.key == pygame.K_y:
@@ -2292,6 +2453,17 @@ class Editor:
 
     def on_mouse_down(self, e):
         self.mouse = e.pos
+        if self.open_maps is not None:                  # the Open dialog takes every click
+            if e.button == 1:
+                self.open_dialog_click(e.pos)
+            return
+        if self.new_name is not None:                   # the New map dialog takes every click
+            _box, _field, create, cancel = self.new_map_rects()
+            if e.button == 1 and create.collidepoint(e.pos):
+                self.finish_new_map(True)
+            elif e.button == 1 and cancel.collidepoint(e.pos):
+                self.finish_new_map(False)
+            return
         if self.rename is not None:                     # clicking away keeps the typed name
             self.finish_rename(True)
             return
@@ -2392,6 +2564,12 @@ class Editor:
             self.revision += 1
 
     def on_wheel(self, e):
+        if self.open_maps is not None:                  # the wheel scrolls the Open dialog's list
+            most = max(0, len(self.open_maps) - OPEN_ROWS)
+            self.open_scroll = max(0, min(most, self.open_scroll - e.y))
+            return
+        if self.new_name is not None:
+            return
         pane = self.details_rect()
         if pane is not None and pane.collidepoint(self.mouse):      # the wheel steps the value under it
             self.details_wheel(self.mouse, e.y)
@@ -2438,6 +2616,8 @@ class Editor:
         self.draw_status(screen)
         self.draw_toolbar(screen)
         self.draw_dropdown(screen)
+        self.draw_new_map_dialog(screen)
+        self.draw_open_dialog(screen)
         title = f"Map editor - {os.path.basename(self.path)}{' *' if self.dirty else ''}"
         if pygame.display.get_caption()[0] != title:
             pygame.display.set_caption(title)
@@ -3809,6 +3989,108 @@ class Editor:
         arrow = [(cx - 6, cy - 3), (cx + 6, cy - 3), (cx, cy + 4)]
         pygame.draw.polygon(screen, TEXT, arrow)
 
+    def new_map_rects(self):
+        """(box, name field, Create button, Cancel button) of the New map dialog, in the middle of the window."""
+        w, h = self._size()
+        box = pygame.Rect(0, 0, min(520, w - 20), 178)
+        box.center = (w // 2, h // 2)
+        field = pygame.Rect(box.x + 20, box.y + 62, box.w - 40, 32)
+        cancel = pygame.Rect(box.right - 20 - 100, box.bottom - 16 - 32, 100, 32)
+        create = pygame.Rect(cancel.x - 12 - 100, cancel.y, 100, 32)
+        return box, field, create, cancel
+
+    @staticmethod
+    def draw_shade(screen):
+        """Dim everything drawn so far, under a dialog."""
+        shade = pygame.Surface(screen.get_size(), pygame.SRCALPHA)
+        shade.fill(SHADE)
+        screen.blit(shade, (0, 0))
+
+    def open_rects(self):
+        """(box, list, Open button, Cancel button, [(row rect, map index)] of the rows shown) of the Open dialog."""
+        w, h = self._size()
+        rows = min(OPEN_ROWS, max(1, len(self.open_maps)))
+        box = pygame.Rect(0, 0, min(520, w - 20), 62 + rows * OPEN_ROW_H + 34 + 16 + 32 + 16)
+        box.center = (w // 2, h // 2)
+        listing = pygame.Rect(box.x + 20, box.y + 62, box.w - 40, rows * OPEN_ROW_H)
+        cancel = pygame.Rect(box.right - 20 - 100, box.bottom - 16 - 32, 100, 32)
+        opener = pygame.Rect(cancel.x - 12 - 100, cancel.y, 100, 32)
+        shown = [(pygame.Rect(listing.x, listing.y + i * OPEN_ROW_H, listing.w, OPEN_ROW_H), self.open_scroll + i)
+                 for i in range(rows) if self.open_scroll + i < len(self.open_maps)]
+        return box, listing, opener, cancel, shown
+
+    def open_dialog_click(self, pos):
+        _box, _listing, opener, cancel, shown = self.open_rects()
+        if opener.collidepoint(pos) or cancel.collidepoint(pos):
+            self.finish_open(opener.collidepoint(pos))
+            return
+        for rect, index in shown:
+            if rect.collidepoint(pos):
+                again = self.open_click[0] == index and time.time() - self.open_click[1] < DOUBLE_CLICK
+                self.pick_map(index)
+                self.open_click = (index, time.time())
+                if again:
+                    self.finish_open(True)
+                return
+
+    def draw_open_dialog(self, screen):
+        """The Open dialog over a dimmed editor: the maps in the folder, the picked one highlighted."""
+        if self.open_maps is None:
+            return
+        self.draw_shade(screen)
+        box, listing, opener, cancel, shown = self.open_rects()
+        pygame.draw.rect(screen, PANEL_BG, box, border_radius=6)
+        pygame.draw.rect(screen, GRID, box, 1, border_radius=6)
+        folder = os.path.basename(self.map_folder())
+        screen.blit(self.font.render(f"Open map ({folder}/)", True, ACCENT), (box.x + 20, box.y + 14))
+        screen.blit(self.small.render("Double-click or Enter opens it, Esc cancels", True, DIM), (box.x + 20, box.y + 40))
+        pygame.draw.rect(screen, (24, 26, 32), listing)
+        current = os.path.basename(self.path)
+        for rect, index in shown:
+            name = self.open_maps[index]
+            if index == self.open_pick:
+                pygame.draw.rect(screen, BUTTON_ON, rect)
+            elif rect.collidepoint(self.mouse):
+                pygame.draw.rect(screen, BUTTON_HOT, rect)
+            screen.blit(self.font.render(name[:-5], True, TEXT), (rect.x + 8, rect.y + 4))
+            if name == current:
+                note = self.small.render("open now", True, DIM)
+                screen.blit(note, (rect.right - note.get_width() - 8, rect.y + 6))
+        pygame.draw.rect(screen, GRID, listing, 1)
+        if len(self.open_maps) > OPEN_ROWS:                 # where the rows shown are in the whole list
+            track = listing.h * OPEN_ROWS // len(self.open_maps)
+            top = listing.y + (listing.h - track) * self.open_scroll // (len(self.open_maps) - OPEN_ROWS)
+            pygame.draw.rect(screen, DIM, (listing.right - 4, top, 3, track))
+        if self.open_error:
+            screen.blit(self.small.render(self.open_error, True, WARN), (box.x + 20, listing.bottom + 8))
+        for rect, label in ((opener, "Open"), (cancel, "Cancel")):
+            pygame.draw.rect(screen, BUTTON_HOT if rect.collidepoint(self.mouse) else BUTTON, rect, border_radius=4)
+            text = self.font.render(label, True, TEXT)
+            screen.blit(text, text.get_rect(center=rect.center))
+
+    def draw_new_map_dialog(self, screen):
+        """The New map dialog over a dimmed editor: the name being typed and where it will be saved."""
+        if self.new_name is None:
+            return
+        self.draw_shade(screen)
+        box, field, create, cancel = self.new_map_rects()
+        pygame.draw.rect(screen, PANEL_BG, box, border_radius=6)
+        pygame.draw.rect(screen, GRID, box, 1, border_radius=6)
+        screen.blit(self.font.render("New map", True, ACCENT), (box.x + 20, box.y + 14))
+        screen.blit(self.small.render("Name (Enter to create, Esc to cancel):", True, DIM), (box.x + 20, box.y + 40))
+        pygame.draw.rect(screen, (24, 26, 32), field, border_radius=4)
+        pygame.draw.rect(screen, ACCENT, field, 2, border_radius=4)
+        caret = "|" if int(time.time() * 2) % 2 == 0 else " "
+        screen.blit(self.font.render(self.new_name + caret, True, TEXT), (field.x + 8, field.y + 8))
+        folder = os.path.basename(self.map_folder())
+        note, color = (self.new_error, WARN) if self.new_error else \
+            (f"Saved as {folder}/{self.new_name.strip() or '...'}.json", DIM)
+        screen.blit(self.small.render(note, True, color), (box.x + 20, field.bottom + 8))
+        for rect, label in ((create, "Create"), (cancel, "Cancel")):
+            pygame.draw.rect(screen, BUTTON_HOT if rect.collidepoint(self.mouse) else BUTTON, rect, border_radius=4)
+            text = self.font.render(label, True, TEXT)
+            screen.blit(text, text.get_rect(center=rect.center))
+
     def draw_dropdown(self, screen):
         """The open floor list, drawn last so it sits on top of everything."""
         if not self.dropdown_open:
@@ -3866,13 +4148,18 @@ class Editor:
                 f"   Tool: {self.tool}")
 
 
+def starting_map(args, settings=SETTINGS_PATH):
+    """The map to open: the one named on the command line, else the one edited last, else maps/map.json."""
+    return os.path.abspath(args[0]) if args else (last_map(settings) or MAP_PATH)
+
+
 def main():
-    path = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else MAP_PATH
+    path = starting_map(sys.argv[1:])
     pygame.init()
     pygame.display.set_mode((1280, 860), pygame.RESIZABLE)
     if not os.path.exists(ATLAS_PATH):
         sys.exit("textures.png not found - run `python make_atlas.py` first")
-    editor = Editor(path)
+    editor = Editor(path, SETTINGS_PATH)
     editor.start_maximized()                    # the editor opens maximized
     clock = pygame.time.Clock()
     while editor.running:
