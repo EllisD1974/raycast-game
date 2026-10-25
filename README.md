@@ -71,6 +71,14 @@ rejoining. A reload starts everyone over at the map's start with full health and
 kept), because the new map may not have the old guns. A map or picture that cannot be read is reported on
 screen and the game carries on with the old one. This works when playing alone too.
 
+The host can also move everyone to another map while playing: Esc opens the menu, and **Host settings >
+Change map** lists the maps in the current map's folder. Everyone switches over the same way, without
+rejoining, and the host's live reload then follows the new map.
+
+In the game, Esc opens a menu: **Resume**, **Settings** (mouse sensitivity and fullscreen, kept between runs),
+**Host settings** (for the host) and **Exit game**. Playing alone, the menu pauses the game; in a hosted game
+it carries on for everyone else.
+
     uv run python main.py --host SECRET                      # host (listens on 0.0.0.0:7777)
     uv run python main.py --join 127.0.0.1 SECRET            # join (use the host's address)
 

@@ -4,7 +4,9 @@ Run:  python make_atlas.py   (once: creates assets/textures.png, the 32x32 textu
       python main.py         controls:
           mouse            look around (left/right turns, up/down tilts the view, up to 45 degrees)
           WASD / arrows    move (the left/right arrows turn too); hold SHIFT to sprint
-          SPACE jump, TAB let go of / take back the mouse, ESC quit, F11 fullscreen
+          SPACE jump, TAB let go of / take back the mouse, F11 fullscreen
+          ESC the menu: resume, settings (mouse sensitivity, fullscreen), host settings (the host can
+                        move everyone to another map) and exit
       The game opens maximized and can be resized; the picture keeps its aspect ratio.
       python main.py --map other.json   (play a different map)
 Multiplayer (one player hosts, the others join with the password):
@@ -29,9 +31,10 @@ import net
 from atlas import ATLAS_PATH, atlas_array, transparent_tiles, unpack_atlas
 from character import character_tiles
 from constants import FPS_CAP, HEIGHT, MOUSE_SENSITIVITY, TURN_SPEED, WIDTH
-from game import Game, Inputs
+from game import Events, Game, Inputs
 from hud import draw_hud
 from mapfile import MAP_PATH, load_or_default
+from menu import GameSettings, Menu
 from physics import look
 from renderer import BACKGROUND, Renderer, fit_rect  # noqa: F401  (re-exported: main.Renderer etc.)
 from session import ClientSession, HostSession, LocalSession
@@ -69,13 +72,14 @@ def draw_crosshair(surface, center, arm, thickness):
         pygame.draw.rect(surface, CROSSHAIR, bar)
 
 
-def present(screen, frame):
+def present(screen, frame, crosshair=True):
     """Scale the picture up to the window (keeping its aspect ratio, black bars around it) and
     draw the crosshair at screen resolution, so it stays thin however big the window is."""
     screen.fill((0, 0, 0))
     rect = fit_rect(screen.get_size())
     pygame.transform.scale(frame, rect.size, screen.subsurface(rect))
-    draw_crosshair(screen, rect.center, *crosshair_size(rect))
+    if crosshair:
+        draw_crosshair(screen, rect.center, *crosshair_size(rect))
 
 
 class Screen:
@@ -113,10 +117,14 @@ class Screen:
         else:
             self.window.set_windowed()
 
-    def show(self, frame):
-        """Put `frame` (a WIDTH x HEIGHT surface) on the window, with the crosshair."""
+    def show(self, frame, overlay=None):
+        """Put `frame` (a WIDTH x HEIGHT surface) on the window, with the crosshair, or with `overlay` (a surface the
+        size of the window, with alpha: the menu) over it instead."""
         if self.gpu is None:
-            present(self.window.get_surface(), frame)
+            window = self.window.get_surface()
+            present(window, frame, crosshair=overlay is None)
+            if overlay is not None:
+                window.blit(overlay, (0, 0))
             self.window.flip()
             return
         rect = fit_rect(self.window.size)
@@ -124,6 +132,10 @@ class Screen:
         self.gpu.draw_color = (0, 0, 0, 255)
         self.gpu.clear()
         self.texture.draw(dstrect=rect)
+        if overlay is not None:
+            video.Texture.from_surface(self.gpu, overlay).draw()        # (blended by its alpha)
+            self.gpu.present()
+            return
         bars = crosshair_bars(rect.center, *crosshair_size(rect))
         self.gpu.draw_color = (*CROSSHAIR_OUTLINE, 255)
         for bar in bars:
@@ -145,8 +157,9 @@ class MouseLook:
 
     `window` is the pygame.Window to hold the mouse in; without one it is the window pygame.display opened."""
 
-    def __init__(self, window=None):
+    def __init__(self, window=None, sensitivity=MOUSE_SENSITIVITY):
         self.window = window
+        self.sensitivity = sensitivity          # radians per pixel of mouse movement (Settings can change it)
         self.captured = False
         self.dx = 0
         self.dy = 0
@@ -179,7 +192,7 @@ class MouseLook:
     def take(self):
         """(turn, tilt) in radians for the movement since the last call: mouse right turns right,
         mouse up tilts the view up."""
-        turn, tilt = self.dx * MOUSE_SENSITIVITY, -self.dy * MOUSE_SENSITIVITY
+        turn, tilt = self.dx * self.sensitivity, -self.dy * self.sensitivity
         self.dx = self.dy = 0
         return turn, tilt
 
@@ -253,13 +266,22 @@ def join(address, password, port, graphics):
 
 
 def reload_game(session, graphics, map_path):
-    """Read the map and textures again and carry on in them (a host tells its joiners). Raises if either
-    cannot be read, leaving the game as it was."""
+    """Read the map and textures again and carry on in them (a host tells its joiners). With another map's path,
+    that changes the map for everyone (the host's Change map). Raises if either cannot be read, leaving the game
+    as it was."""
     level = load_or_default(map_path)
     with open(ATLAS_PATH, "rb") as f:
         png = f.read()
     graphics.load(png)
     session.reload(level, graphics.make_world(level), graphics.character_tile, png)
+
+
+def apply_settings(settings, screen, mouse):
+    """Use the player's settings (changed in the menu) and keep them for next time."""
+    mouse.sensitivity = MOUSE_SENSITIVITY * settings.sensitivity
+    if settings.fullscreen != screen.fullscreen:
+        screen.toggle_fullscreen()
+    settings.save()
 
 
 def main():
@@ -276,6 +298,7 @@ def main():
         sys.exit("textures.png not found - run `python make_atlas.py` first")
     port = int((arg_values("--port", 1) or [net.DEFAULT_PORT])[0])
     watcher = None                                          # a joiner is sent new maps by its host instead
+    map_path = None
     if joining:
         address, password = arg_values("--join", 2)
         session = join(address, password, port, graphics)
@@ -317,7 +340,12 @@ def main():
         return
 
     maximize(screen.window)          # the game opens maximized; the picture scales to fit
-    mouse = MouseLook(screen.window)
+    settings = GameSettings.load()
+    mouse = MouseLook(screen.window, MOUSE_SENSITIVITY * settings.sensitivity)
+    if settings.fullscreen:
+        screen.toggle_fullscreen()
+    menu = Menu(settings, is_host=isinstance(session, HostSession), map_path=map_path,
+                players=lambda: len(session.game.players) if hasattr(session, "game") else 1)
     mouse.set_captured(True)
     print("Compiling the renderer (first run only; later runs use the cache)...")
     jump_pressed = reload_pressed = False
@@ -328,11 +356,35 @@ def main():
         elapsed = clock.tick(FPS_CAP) / 1000
         dt = min(elapsed, 0.05)
         for event in pygame.event.get():
-            if (event.type in (pygame.QUIT, pygame.WINDOWCLOSE)
-                    or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE)):
+            if event.type in (pygame.QUIT, pygame.WINDOWCLOSE):
                 running = False
             elif event.type == pygame.KEYDOWN and event.key == pygame.K_F11:
                 screen.toggle_fullscreen()
+                settings.fullscreen = screen.fullscreen
+                settings.save()
+            elif menu.open:                                     # the menu takes every other key and click
+                action = menu.handle(event, screen.window.size)
+                if action == "resume":
+                    menu.hide()
+                    mouse.set_captured(True)
+                elif action == "exit":
+                    running = False
+                elif action == "settings":
+                    apply_settings(settings, screen, mouse)
+                elif action and action.startswith("map:"):
+                    try:
+                        reload_game(session, graphics, action[4:])      # everyone moves to the new map
+                    except (OSError, ValueError, KeyError, TypeError, pygame.error) as e:
+                        menu.say(f"Could not load it: {e}"[:60], warn=True)
+                    else:
+                        map_path = menu.map_path = action[4:]
+                        watcher = FileWatcher([map_path, ATLAS_PATH])   # live reload follows the new map
+                        message, message_left = f"Map changed to {os.path.basename(map_path)}", 3.0
+                        menu.hide()
+                        mouse.set_captured(True)
+            elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                menu.show()                                     # Esc opens the menu and lets go of the mouse
+                mouse.set_captured(False)
             elif event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
                 jump_pressed = True
             elif event.type == pygame.KEYDOWN and event.key == pygame.K_TAB:
@@ -350,6 +402,8 @@ def main():
         mouse_turn, tilt = mouse.take()
         wish = Inputs(forward, strafe, key_turn * TURN_SPEED * dt + mouse_turn, tilt, jump_pressed, sprint,
                       mouse.captured and pygame.mouse.get_pressed()[0], reload_pressed, tuple(equips), cycle)
+        if menu.open:
+            wish = Inputs()                                     # (the player stands still while in the menu)
         jump_pressed = reload_pressed = False
         equips, cycle = [], 0
         if watcher and watcher.changed():
@@ -359,7 +413,8 @@ def main():
             except (OSError, ValueError, KeyError, TypeError, pygame.error) as e:   # keep playing the old map
                 print(f"Reload failed: {e}")
                 message, message_left = f"Reload failed: {e}"[:80], 4.0
-        happened = session.step(wish, dt, elapsed)
+        # Playing alone, the menu pauses the game; a host or joiner plays on (the others are still playing).
+        happened = Events() if menu.open and type(session) is LocalSession else session.step(wish, dt, elapsed)
         if getattr(session, "loads", 0) > loads:            # (a joiner) the host switched to a new map
             loads, message, message_left = session.loads, "The host loaded a new map", 2.0
         if session.ended:
@@ -375,7 +430,11 @@ def main():
         me = session.me
         picture = graphics.renderer.draw(session.world, me.body, session.sprites(), session.lighting())
         draw_hud(picture, font, me.stats, message if message_left > 0 else "", me.inventory, graphics.tiles, kick)
-        screen.show(picture)
+        overlay = None
+        if menu.open:
+            overlay = pygame.Surface(screen.window.size, pygame.SRCALPHA)
+            menu.draw(overlay, pygame.mouse.get_pos())
+        screen.show(picture, overlay)
         screen.title = f"simple raycaster - {clock.get_fps():.0f} fps{session.status()}"
     mouse.set_captured(False)
     session.close()
