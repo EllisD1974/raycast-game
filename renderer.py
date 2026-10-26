@@ -29,6 +29,23 @@ class Renderer:
         screen and looking down moves it up."""
         return HEIGHT / 2 + math.tan(player.pitch) * self.focal
 
+    def project(self, player, x, y, z):
+        """(column, row, depth) where the world point (x, y, z) lands in the picture drawn from `player` (the same
+        camera draw() uses, sheared or rotated), or None if it is behind the camera."""
+        dir_x, dir_y = math.cos(player.angle), math.sin(player.angle)
+        if abs(player.pitch) < SHEAR_PITCH:
+            pitch, horizon = 0.0, self.horizon(player)
+        else:
+            pitch, horizon = player.pitch, HEIGHT / 2
+        cp, sp = math.cos(pitch), math.sin(pitch)
+        dx, dy, dz = x - player.x, y - player.y, z - player.eye_z
+        ahead = dx * dir_x + dy * dir_y
+        depth = ahead * cp + dz * sp
+        if depth < 0.05:
+            return None
+        right, up = -dx * dir_y + dy * dir_x, dz * cp - ahead * sp
+        return WIDTH / 2 + right / depth * self.focal, horizon - up / depth * self.focal, depth
+
     def draw(self, world, player, sprites=(), lighting=None):
         """Render the view from `player` and return the WIDTH x HEIGHT picture. `sprites` are
         (x, y, z, size, tile[, spin[, alpha[, glow[, color[, facing]]]]]) items drawn as flat pictures that face the

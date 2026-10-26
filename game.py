@@ -21,6 +21,8 @@ MAX_STEP_DT = 0.05              # longest time one player's step may cover (main
 HIT_FLASH = 0.25                # seconds a player who was hurt shows red to the others
 HIT_TINT = (1.0, 0.45, 0.45, 0.0, 0.35, 0.0, 0.0, 0.0, 0.35)   # the color matrix of a player just hurt (red)
 IDENTITY = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
+MAX_PLAYER_NAME = 16            # characters in a player's name
+NO_TEAM = 0                     # a player on no team: everyone else is an opponent
 
 
 @dataclass
@@ -83,6 +85,24 @@ def character_tile_for(first_tile, player_id, viewer_angle=None, angle=None):
     return first_tile + (player_id % len(SHIRTS)) * VIEWS + view
 
 
+def clean_name(text):
+    """A player name as it may be used: printable characters only, trimmed, at most MAX_PLAYER_NAME long ("" for
+    anything that is not text)."""
+    if not isinstance(text, str):
+        return ""
+    return "".join(c for c in text if c.isprintable()).strip()[:MAX_PLAYER_NAME]
+
+
+def shown_name(name, player_id):
+    """What a player is called on screen: their name, or "Player N" when they have none."""
+    return name or f"Player {player_id + 1}"
+
+
+def same_team(a, b):
+    """True if two players' teams make them teammates (players on no team have none)."""
+    return a != NO_TEAM and a == b
+
+
 def hit_tint(hit):
     """The color matrix of a player hurt `hit` seconds of HIT_FLASH ago from the end: red, fading back to their own
     colors as hit runs out (None when it has)."""
@@ -137,12 +157,14 @@ class SpawnOrder:
 
 @dataclass
 class PlayerState:
-    """One player: where they are (body), what pickups changed (stats) and what they carry, and how much longer
-    they show red to the others after being hurt (hit, seconds)."""
+    """One player: where they are (body), what pickups changed (stats) and what they carry, how much longer they
+    show red to the others after being hurt (hit, seconds), their name and their team (NO_TEAM for none)."""
     body: object
     stats: PlayerStats = field(default_factory=PlayerStats)
     inventory: Inventory = field(default_factory=Inventory)
     hit: float = 0.0
+    name: str = ""
+    team: int = NO_TEAM
 
 
 @dataclass
@@ -295,6 +317,11 @@ class Game:
     def sprites(self, viewer=None):
         """Items, bullets and the players other than `viewer` as the renderer wants them."""
         return self.items.sprites() + self.projectiles.sprites() + self.player_sprites(viewer)
+
+    def labels(self, viewer=None):
+        """(x, y, z of the top of the head, name, team) of each player other than `viewer`, for their names."""
+        return [(s.body.x, s.body.y, s.body.z + PLAYER_HEIGHT, shown_name(s.name, pid), s.team)
+                for pid, s in self.players.items() if pid != viewer]
 
     def player_sprites(self, viewer=None):
         if self.character_tile is None:

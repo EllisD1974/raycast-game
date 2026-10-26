@@ -33,7 +33,7 @@ from atlas import ATLAS_PATH, atlas_array, transparent_tiles, unpack_atlas
 from character import character_tiles
 from constants import FPS_CAP, HEIGHT, MOUSE_SENSITIVITY, TURN_SPEED, WIDTH
 from game import Events, Game, Inputs
-from hud import draw_hud, draw_hurt, hurt_flash
+from hud import draw_hud, draw_hurt, draw_names, hurt_flash
 from home import Home
 from mapfile import MAP_PATH, load_or_default
 from menu import GameSettings, Menu
@@ -243,7 +243,7 @@ class Graphics:
         return World(level, len(self.tiles), self.see_through)
 
 
-def client_session(address, port, password, graphics):
+def client_session(address, port, password, graphics, name=""):
     """A session joining the host at address:port. It is ready once the host has sent its map, textures and first
     snapshot: step it until session.ready (or session.ended, with the reason it failed). The host's textures
     replace whatever `graphics` had loaded, so the joiner needs no map or textures of its own."""
@@ -254,12 +254,13 @@ def client_session(address, port, password, graphics):
             raise ValueError(f"textures: {e}")
         return graphics.character_tile
 
-    return ClientSession(net.Client(address, port, password), graphics.make_world, graphics.character_tile, use_atlas)
+    return ClientSession(net.Client(address, port, password), graphics.make_world, graphics.character_tile, use_atlas,
+                         name)
 
 
-def join(address, password, port, graphics):
+def join(address, password, port, graphics, name=""):
     """--join: connect to a host and wait for the game; exits with a message if that fails."""
-    session = client_session(address, port, password, graphics)
+    session = client_session(address, port, password, graphics, name)
     print(f"Joining {address}:{port}...")
     give_up = time.monotonic() + JOIN_TIMEOUT
     while not session.ready and not session.ended:
@@ -274,7 +275,7 @@ def join(address, password, port, graphics):
     return session
 
 
-def start_host(graphics, map_path, password, port=net.DEFAULT_PORT, bind="0.0.0.0", max_players=8):
+def start_host(graphics, map_path, password, port=net.DEFAULT_PORT, bind="0.0.0.0", max_players=8, name=""):
     """A HostSession playing the map at `map_path`, letting in up to max_players - 1 others who know `password`.
     Raises if the map or the textures cannot be read, or nothing can listen on the port."""
     graphics.load(ATLAS_PATH)                           # (back to our own textures after having joined someone)
@@ -282,7 +283,7 @@ def start_host(graphics, map_path, password, port=net.DEFAULT_PORT, bind="0.0.0.
     game = Game(level, graphics.make_world(level), character_tile=graphics.character_tile)
     host = net.Host(password, port, bind, max_clients=max(1, max_players - 1))
     with open(ATLAS_PATH, "rb") as f:                   # joiners draw with the host's textures
-        return HostSession(game, host, f.read())
+        return HostSession(game, host, f.read(), name)
 
 
 def reload_game(session, graphics, map_path):
@@ -336,7 +337,8 @@ def home_screen(screen, clock, graphics, settings, note="", events=None):
             elif action == "host":
                 settings.save()
                 try:
-                    session = start_host(graphics, home.map_path(), home.host_password, max_players=settings.max_players)
+                    session = start_host(graphics, home.map_path(), home.host_password, max_players=settings.max_players,
+                                         name=settings.name)
                 except (OSError, ValueError, KeyError, TypeError, pygame.error) as e:
                     home.say(f"Could not host: {e}"[:60], warn=True)
                 else:
@@ -344,7 +346,7 @@ def home_screen(screen, clock, graphics, settings, note="", events=None):
                           f"for up to {settings.max_players} players")
                     return session, home.map_path()
             elif action == "join":
-                joining = client_session(home.join_address, home.port(), home.join_password, graphics)
+                joining = client_session(home.join_address, home.port(), home.join_password, graphics, settings.name)
                 give_up = time.monotonic() + JOIN_TIMEOUT
                 home.go("connecting")
             elif action == "cancel":
@@ -376,6 +378,7 @@ def play(screen, clock, graphics, settings, session, map_path, from_home=False):
     kick = 0.0                                   # 1 right after a shot, fading to 0 (the gun's recoil)
     hurt = 0.0                                   # the red flash after being hurt, 1 fading to 0
     font = pygame.font.Font(None, 22)
+    name_font = pygame.font.Font(None, 18)
     message, message_left = "", 0.0
     mouse = MouseLook(screen.window, MOUSE_SENSITIVITY * settings.sensitivity)
     menu = Menu(settings, is_host=isinstance(session, HostSession), map_path=map_path,
@@ -466,6 +469,7 @@ def play(screen, clock, graphics, settings, session, map_path, from_home=False):
 
         me = session.me
         picture = graphics.renderer.draw(session.world, me.body, session.sprites(), session.lighting())
+        draw_names(picture, name_font, graphics.renderer, me.body, session.labels(), me.team)
         draw_hurt(picture, hurt)                            # (under the HUD, which stays easy to read)
         draw_hud(picture, font, me.stats, message if message_left > 0 else "", me.inventory, graphics.tiles, kick)
         overlay = None
@@ -513,7 +517,7 @@ def main():
     map_path = None
     if joining:
         address, password = arg_values("--join", 2)
-        session = join(address, password, port, graphics)
+        session = join(address, password, port, graphics, settings.name)
     else:
         map_path = (arg_values("--map", 1) or [MAP_PATH])[0]
         if "--map" in sys.argv and not os.path.exists(map_path):
@@ -521,13 +525,14 @@ def main():
         if arg_values("--host", 1):
             bind = (arg_values("--bind", 1) or ["0.0.0.0"])[0]
             try:
-                session = start_host(graphics, map_path, arg_values("--host", 1)[0], port, bind)
+                session = start_host(graphics, map_path, arg_values("--host", 1)[0], port, bind, name=settings.name)
             except OSError as e:
                 sys.exit(f"cannot host on {bind}:{port}: {e}")
             print(f"Hosting on {bind}:{session.host.port}; others join with --join <your address> <password>")
         else:
             level = load_or_default(map_path)
-            session = LocalSession(Game(level, graphics.make_world(level), character_tile=graphics.character_tile))
+            session = LocalSession(Game(level, graphics.make_world(level), character_tile=graphics.character_tile),
+                                   settings.name)
 
     # `--snapshot out.png` renders one frame and exits (for checking).
     if "--snapshot" in sys.argv:

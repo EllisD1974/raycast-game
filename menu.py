@@ -37,6 +37,7 @@ class GameSettings:
     fullscreen: bool = False
     host_map: str = ""                          # the map file (name) last hosted
     max_players: int = 8                        # the most players last allowed in when hosting
+    name: str = ""                              # what the player is called in the game
 
     @classmethod
     def load(cls, path=SETTINGS_PATH):

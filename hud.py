@@ -9,9 +9,38 @@ SHADOW = (0, 0, 0)
 HIGHLIGHT = (255, 240, 120)
 DIM = (170, 170, 180)
 UNIT = HEIGHT / 8                      # a gun's size of 1.0 draws its 32 pixel tile this many pixels tall
+NAME_TEAMMATE, NAME_OPPONENT = (235, 235, 240), (255, 70, 70)   # a name over a teammate's head, and anyone else's
+NAME_DISTANCE = 24.0                   # names further away than this are not shown
+NAME_LIFT = 0.12                       # how far above the head a name floats, in cells
 HURT_COLOR = (220, 20, 20)
 HURT_ALPHA = 64                        # how strong the red over the picture is just after a hit (of 255)
 HURT_FADE = 3.0                        # the flash fades out in 1 / HURT_FADE seconds
+
+
+def draw_names(picture, font, renderer, viewer, labels, team):
+    """Each other player's name floating over their head: white for a teammate of `team`, red for anyone else.
+    A name is hidden when a wall or floor stands between the viewer and that player's head, and far away."""
+    from game import same_team                  # (hud draws; game knows the teams)
+    width, height = picture.get_size()
+    depths = renderer.depth
+    for x, y, z, name, their_team in labels:
+        spot = renderer.project(viewer, x, y, z + NAME_LIFT)
+        if spot is None or spot[2] > NAME_DISTANCE:
+            continue
+        column, row, depth = spot
+        head = renderer.project(viewer, x, y, z - 0.05)                     # just under the top of the head
+        if head is None:
+            continue
+        cx, cy = int(head[0]), int(head[1])
+        if 0 <= cx < width and 0 <= cy < height and depths[cx, cy] < head[2] - 0.15:
+            continue                                                       # something is in front of them
+        color = NAME_TEAMMATE if same_team(team, their_team) else NAME_OPPONENT
+        label = font.render(name, True, color)
+        left, top = int(column - label.get_width() / 2), int(row - label.get_height())
+        if top + label.get_height() < 0 or top > height or left + label.get_width() < 0 or left > width:
+            continue
+        picture.blit(font.render(name, True, SHADOW), (left + 1, top + 1))
+        picture.blit(label, (left, top))
 
 
 def hurt_flash(flash, damage, dt):

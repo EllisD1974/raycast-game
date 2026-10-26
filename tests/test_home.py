@@ -62,7 +62,7 @@ def key(home, k):
 
 def test_the_home_page_offers_host_join_settings_and_exit(folder):
     home = Home(GameSettings(), str(folder))
-    assert list(buttons(home)) == ["Host game", "Join game", "Settings", "Exit"]
+    assert list(buttons(home)) == ["", "Host game", "Join game", "Settings", "Exit"]     # (the first: the name box)
     assert click(home, "Exit") == "exit"
     click(home, "Settings")
     assert home.page == "settings" and any(i.kind == "slider" for i in home.items(SIZE))
@@ -182,12 +182,16 @@ def test_a_host_lets_in_only_as_many_players_as_it_allows(folder, graphics):
             s.close()
 
 
-def scripted(home_like, steps):
+def scripted(home_like, steps, give_up=600):
     """An event source for main.home_screen that plays `steps` (a list of functions of a shadow Home returning
-    events), keeping the shadow Home in step so the clicks land where the real one draws its buttons."""
-    pending = list(steps)
+    events), keeping the shadow Home in step so the clicks land where the real one draws its buttons. After
+    `give_up` calls it closes the window, so a home screen that never returns fails the test instead of hanging."""
+    pending, calls = list(steps), [0]
 
     def events():
+        calls[0] += 1
+        if calls[0] > give_up:
+            return [pygame.event.Event(pygame.QUIT)]
         if not pending:
             return []
         out = pending.pop(0)(home_like)
@@ -230,8 +234,8 @@ def screen(monkeypatch, folder):
 
 def test_the_home_screen_starts_hosting_the_map_picked(screen, folder, graphics, monkeypatch):
     real_start = main.start_host
-    monkeypatch.setattr(main, "start_host", lambda g, path, password, max_players: real_start(
-        g, path, password, port=0, bind="127.0.0.1", max_players=max_players))
+    monkeypatch.setattr(main, "start_host", lambda g, path, password, max_players, name="": real_start(
+        g, path, password, port=0, bind="127.0.0.1", max_players=max_players, name=name))
     settings = GameSettings(max_players=3)
     steps = [press_label("Host game"), press_label("dunes"), press_box("host_password"), typed("pw"),
              press_label("Start hosting")]

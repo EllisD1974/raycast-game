@@ -1,5 +1,5 @@
 """The home screen, shown when the game is started on its own (not from the map editor's Play, nor with --map,
---host or --join): Host game, Join game, Settings and Exit.
+--host or --join): the player's name, Host game, Join game, Settings and Exit.
 
 Host game picks a map from the maps folder, a password (needed) and the most players to let in, and Join game takes
 the host's IP address (empty to start with), its port (7777 to start with) and its password. Like the in-game menu (menu.Pages), Home only lays itself
@@ -8,6 +8,7 @@ main.py does it, reading what was chosen from the Home and its GameSettings.
 """
 import os
 
+from game import MAX_PLAYER_NAME, clean_name
 from menu import MAX_PLAYERS, MIN_PLAYERS, Pages, cell, map_files
 from net import DEFAULT_PORT
 
@@ -51,7 +52,8 @@ class Home(Pages):
 
     def lines(self):
         if self.page == "home":
-            return [[cell("Host game", "page:host")], [cell("Join game", "page:join")],
+            return [[cell("Your name", width=LABEL_W), cell(self.shown("name", self.settings.name), "input:name")],
+                    [cell("Host game", "page:host")], [cell("Join game", "page:join")],
                     [cell("Settings", "page:settings")], [cell("Exit", "exit")]]
         if self.page == "settings":
             return self.settings_lines()
@@ -117,6 +119,8 @@ class Home(Pages):
     # ------------------------------------------------------------------ text boxes
 
     def field_value(self, name):
+        if name == "name":
+            return self.settings.name
         if name == "address":
             return self.join_address
         if name == "port":
@@ -126,6 +130,8 @@ class Home(Pages):
         return super().field_value(name)
 
     def field_accepts(self, name, char):
+        if name == "name":
+            return True
         if name == "address":
             return char in ADDRESS_CHARS
         if name == "port":
@@ -135,9 +141,13 @@ class Home(Pages):
         return super().field_accepts(name, char)
 
     def field_max(self, name):
-        return {"address": 64, "port": 5, "host_password": 32, "join_password": 32}.get(name, super().field_max(name))
+        return {"name": MAX_PLAYER_NAME, "address": 64, "port": 5, "host_password": 32,
+                "join_password": 32}.get(name, super().field_max(name))
 
     def set_field(self, name, text):
+        if name == "name":
+            self.settings.name = clean_name(text)
+            return "settings"                           # (kept for next time)
         if name == "address":
             self.join_address = text.strip()
             return None
