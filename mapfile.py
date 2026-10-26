@@ -1273,6 +1273,110 @@ def level_text(level):
     return text
 
 
+# --------------------------------------------------------------------------- copying an area of one floor
+
+WALL_LAYERS = ("walls", "wall_h", "wall_ceil") + SIDE_LAYERS + SIDE_BAND_LAYERS   # what a wall carries with it
+
+
+@dataclass
+class Area:
+    """A rectangle of one floor copied out of a map, to paste elsewhere (on any floor, in any map).
+
+    It holds what belongs to that floor only: its span grids (floor and ceiling textures and heights, ramps) and
+    the walls that start on it (their tile, height, the ceiling over them and their sides), and the items and spawn
+    points standing on it. Walls of other floors - a ground-floor wall fills every floor above it - are not part of
+    it. Positions are relative to the area's top-left cell."""
+    width: int
+    height: int
+    floor: int                                  # the floor it was copied from
+    span: dict = field(default_factory=dict)    # span layer -> rows of values
+    walls: dict = field(default_factory=dict)   # (dx, dy) -> {wall layer: value} of the walls in it
+    entities: list = field(default_factory=list)
+    spawners: list = field(default_factory=list)
+
+
+def area_rect(level, a, b):
+    """(x0, y0, x1, y1): the cells between corners a and b (inclusive, either way round), kept inside the map."""
+    x0, x1 = sorted((a[0], b[0]))
+    y0, y1 = sorted((a[1], b[1]))
+    return max(0, x0), max(0, y0), min(level.width - 1, x1), min(level.height - 1, y1)
+
+
+def _starts_on(level, x, y, floor):
+    """True if the cell holds a wall that starts on `floor` (the walls a floor owns)."""
+    return bool(level.walls[y][x]) and level.wall_floor(x, y) == floor
+
+
+def _in(thing, x0, y0, x1, y1, floor):
+    return thing.span == floor and x0 <= math.floor(thing.x) <= x1 and y0 <= math.floor(thing.y) <= y1
+
+
+def copy_area(level, a, b, floor):
+    """The Area of `floor` between cells a and b."""
+    x0, y0, x1, y1 = area_rect(level, a, b)
+    area = Area(x1 - x0 + 1, y1 - y0 + 1, floor)
+    for layer in SPAN_LAYERS:
+        grid = level.grids[grid_name(layer, floor)]
+        area.span[layer] = [row[x0:x1 + 1] for row in grid[y0:y1 + 1]]
+    for y in range(y0, y1 + 1):
+        for x in range(x0, x1 + 1):
+            if _starts_on(level, x, y, floor):
+                area.walls[(x - x0, y - y0)] = {layer: level.grids[layer][y][x] for layer in WALL_LAYERS}
+    area.entities = [e.clone(x=e.x - x0, y=e.y - y0) for e in level.entities if _in(e, x0, y0, x1, y1, floor)]
+    area.spawners = [replace(s, x=s.x - x0, y=s.y - y0) for s in level.spawners if _in(s, x0, y0, x1, y1, floor)]
+    return area
+
+
+def _clear_wall(level, x, y):
+    for layer in WALL_LAYERS + ("wall_floor",):
+        level.set(layer, x, y, default_for(layer))
+
+
+def clear_area(level, a, b, floor):
+    """Empty `floor` between cells a and b: its span grids back to the floor's defaults (no room on a higher floor),
+    its walls, items and spawn points gone. Other floors' walls stay."""
+    x0, y0, x1, y1 = area_rect(level, a, b)
+    for y in range(y0, y1 + 1):
+        for x in range(x0, x1 + 1):
+            for layer in SPAN_LAYERS:
+                name = grid_name(layer, floor)
+                level.set(name, x, y, default_for(name))
+            if _starts_on(level, x, y, floor):
+                _clear_wall(level, x, y)
+    level.entities = [e for e in level.entities if not _in(e, x0, y0, x1, y1, floor)]
+    level.spawners = [s for s in level.spawners if not _in(s, x0, y0, x1, y1, floor)]
+
+
+def paste_area(level, area, x, y, floor):
+    """Put `area` onto `floor` with its top-left cell at (x, y), in place of what that floor had there (cells off the
+    map are left out). Its walls start on `floor`; a wall of this floor where the area has none goes; walls of other
+    floors stay. Items and spawn points that stood there on this floor make way for the area's."""
+    x0, y0 = max(0, x), max(0, y)
+    x1, y1 = min(level.width - 1, x + area.width - 1), min(level.height - 1, y + area.height - 1)
+    if x1 < x0 or y1 < y0:
+        return
+    level.entities = [e for e in level.entities if not _in(e, x0, y0, x1, y1, floor)]
+    level.spawners = [s for s in level.spawners if not _in(s, x0, y0, x1, y1, floor)]
+    for cy in range(y0, y1 + 1):
+        for cx in range(x0, x1 + 1):
+            dx, dy = cx - x, cy - y
+            for layer in SPAN_LAYERS:
+                level.set(grid_name(layer, floor), cx, cy, area.span[layer][dy][dx])
+            wall = area.walls.get((dx, dy))
+            if wall is not None:
+                if level.walls[cy][cx] and level.wall_floor(cx, cy) < floor:
+                    continue                            # (a lower floor's wall already fills this cell)
+                for layer, value in wall.items():
+                    level.set(layer, cx, cy, value)
+                level.set("wall_floor", cx, cy, floor)
+            elif _starts_on(level, cx, cy, floor):
+                _clear_wall(level, cx, cy)
+    inside = lambda t: x0 <= math.floor(t.x + x) <= x1 and y0 <= math.floor(t.y + y) <= y1
+    level.entities += [e.clone(x=e.x + x, y=e.y + y, span=floor) for e in area.entities if inside(e)]
+    level.spawners += [replace(s, x=s.x + x, y=s.y + y, span=floor) for s in area.spawners if inside(s)]
+    level.apply_prefabs()
+
+
 # --------------------------------------------------------------------------- bringing things in from another map
 
 IMPORT_KINDS = {"prefabs": "Prefabs", "lights": "Lights", "effects": "Effects", "guns": "Guns",

@@ -84,6 +84,13 @@ Items hang on a wall when added with a click near the side of the cell that has 
 up): they are then a flat picture against the wall, facing into the cell, at their Lift above the floor.
 The item's "On wall" setting moves it onto another wall of its cell, or off the wall.
 
+Copy and paste (the Select tool, M): drag a rectangle on the map to select it, then Ctrl+C copies it, Ctrl+X
+cuts it and Delete clears it; Ctrl+A selects the whole map. Ctrl+V (or Paste) carries the copy under the mouse:
+each click puts it down there (centered on the mouse), until Esc or a right-click. Only the floor being edited
+is copied: its floor and ceiling textures and heights and its ramps, the walls that start on it (with their
+heights and sides), and the items and spawn points on it; walls of other floors stay where they are. It pastes
+onto the floor being edited, which may be another floor, and stays copied when another map is opened.
+
 Spawn points (the Spawn tool, O): where players come into the game. Click an open cell to put one there
 with the Order shown on the second toolbar row (Order- / Order+, or [ and ]); click one again to give it
 that order, or (if it has it already) to turn it a quarter; right-click removes it. Players come in at the
@@ -187,7 +194,7 @@ from mapfile import (ANIMATION_KINDS, ANIMATION_LABELS, DEFAULTS, EDIT_LAYERS, E
                      EFFECT_AIM_LABELS, EFFECT_AIMS, EFFECT_COLOR_LABELS, EFFECT_COLORS, EFFECT_KIND_LABELS, EFFECT_KINDS, MIN_AMBIENT, MODE_LABELS, SHOT_LABELS, SHOT_TYPES, Animation, AmmoType, Effect,
                      Entity, Gun, Level, Light, MAX_ELEVATION, MAX_SPAWN_ORDER, Spawner, SIDE_VECTORS, SIDES, WALL_LABELS, default_level, mounted_position,
                      IMPORT_KINDS, TAKEN_CHOICES, grid_name, import_things, load_level, save_level, split_grid_name,
-                     things_named, with_needs)
+                     things_named, with_needs, area_rect, clear_area, copy_area, paste_area)
 import details
 import hud
 from entities import describe
@@ -267,10 +274,10 @@ ELEVATION_STEP = 0.05                           # [ / ] and the Elevation row mo
 SPAWN_FILL, SPAWN_EDGE = (90, 170, 255), (15, 40, 90)   # a spawn point on the map
 MOUNT_ZONE = 0.3                                # an item clicked this close (in cells) to a walled side hangs on it
 TOOLS = {"paint": "B", "erase": "E", "fill": "F", "pick": "I", "start": "S", "spawn": "O", "stairs": "T",
-         "shape": "H", "camera": "C", "entity": "N"}
+         "shape": "H", "select": "M", "camera": "C", "entity": "N"}
 TOOL_KEYS = {pygame.K_b: "paint", pygame.K_e: "erase", pygame.K_f: "fill",
              pygame.K_i: "pick", pygame.K_s: "start", pygame.K_o: "spawn", pygame.K_t: "stairs", pygame.K_h: "shape",
-             pygame.K_c: "camera", pygame.K_n: "entity"}
+             pygame.K_m: "select", pygame.K_c: "camera", pygame.K_n: "entity"}
 SHAPES = {"line": "Line", "box": "Box", "filled_box": "Filled box", "ellipse": "Ellipse",
           "filled_ellipse": "Filled ellipse"}           # what the Shape tool draws, and its button
 ENTITY_MODE_COLORS = {"once": (255, 255, 255), "respawn": (90, 210, 255), "persistent": (110, 230, 120),
@@ -523,6 +530,10 @@ class Editor:
         self.shape_side = None                  # the wall side under the mouse where that drag started
         self.side_lock = None                   # the wall side a whole shape paints (None: the one at the mouse)
         self.spawn_order = 0                    # the order the Spawn tool gives the spawn points it places
+        self.area = None                        # Select tool: the cells selected, (x0, y0, x1, y1), or None
+        self.area_drag = None                   # (start cell, current cell) while dragging a selection
+        self.clip = None                        # what was copied (mapfile.Area); kept across maps
+        self.pasting = False                    # the copy follows the mouse; a click puts it down
         self.side_from = 0.0                    # the band a wall side's own tile covers, above the wall's foot
         self.side_to = 0.0                      # (0: up to the top)
         self.stroke = None                      # "paint" / "erase" while drawing on the map
@@ -1569,6 +1580,15 @@ class Editor:
                      ("txt", f"step {fmt(self.stair_step)}", ACCENT)]
         if self.tool == "shape":
             row2 += [None] + [("btn", label, f"shape:{kind}") for kind, label in SHAPES.items()]
+        if self.tool == "select":
+            row2 += [None, ("btn", "Copy", "copy"), ("btn", "Cut", "cut"), ("btn", "Paste", "paste"),
+                     ("btn", "Clear", "clear"), ("btn", "All", "select_all")]
+            if self.area:
+                x0, y0, x1, y1 = self.area
+                row2.append(("txt", f"{x1 - x0 + 1}x{y1 - y0 + 1} selected", ACCENT))
+            if self.clip:
+                row2.append(("txt", f"copy: {self.clip.width}x{self.clip.height}"
+                                    + (" (click to put it down, Esc stops)" if self.pasting else ""), DIM))
         if self.tool == "spawn":
             row2 += [None, ("btn", "Order-", "order-"), ("btn", "Order+", "order+"),
                      ("txt", f"order {self.spawn_order}", ACCENT),
@@ -1933,6 +1953,22 @@ class Editor:
         if self.tool == "spawn":
             (self.remove_spawners if button == 3 else self.place_spawner)(cell)
             return
+        if self.tool == "select":
+            if button == 3:                             # right-click: stop pasting, or let go of the selection
+                if self.pasting:
+                    self.pasting = False
+                else:
+                    self.area = None
+                return
+            if self.pasting:
+                x, y = self.paste_corner(cell)
+                self.begin_edit()
+                paste_area(self.level, self.clip, x, y, self.floor)
+                self.area = area_rect(self.level, (x, y), (x + self.clip.width - 1, y + self.clip.height - 1))
+                self.say(f"Pasted on {self.level.names[self.floor]}: click again for another, Esc stops")
+            else:
+                self.area_drag = (cell, cell)
+            return
         if self.tool == "shape":
             self.shape_drag = (cell, cell, button == 3)
             self.shape_side = self.side_at(self.mouse)  # (the WallSide layer paints the side picked here)
@@ -2036,6 +2072,36 @@ class Editor:
             self.camera_drag = True
         else:
             self.say("The camera can't stand there (wall, no room, or too low)")
+
+    def area_action(self, action):
+        """Copy, Cut, Clear, Paste and All for the Select tool (see the module's notes on copy and paste)."""
+        floor = self.level.names[self.floor]
+        if action == "select_all":
+            self.tool, self.pasting = "select", False
+            self.area = (0, 0, self.level.width - 1, self.level.height - 1)
+            self.say(f"Selected the whole map on {floor}")
+        elif action == "paste":
+            if self.clip is None:
+                self.say("Nothing copied yet: select an area and Copy (Ctrl+C) first")
+                return
+            self.tool, self.pasting = "select", True
+            self.say(f"Click to put the {self.clip.width}x{self.clip.height} copy down on {floor}; Esc stops")
+        elif self.area is None:
+            self.say("Select an area first: drag on the map with the Select tool (M)")
+        else:
+            corners = self.area[:2], self.area[2:]
+            if action in ("copy", "cut"):
+                self.clip = copy_area(self.level, *corners, self.floor)
+            if action in ("cut", "clear"):
+                self.begin_edit()
+                clear_area(self.level, *corners, self.floor)
+            done = {"copy": "Copied", "cut": "Cut", "clear": "Cleared"}[action]
+            self.say(f"{done} {self.area[2] - self.area[0] + 1}x{self.area[3] - self.area[1] + 1} of {floor}"
+                     + ("; Ctrl+V pastes it" if action != "clear" else ""))
+
+    def paste_corner(self, cell):
+        """The top-left cell the copy goes at when the mouse is over `cell` (the copy is centered on it)."""
+        return cell[0] - self.clip.width // 2, cell[1] - self.clip.height // 2
 
     def spawners_in(self, cell):
         """The spawn points in this cell on the floor being edited."""
@@ -2315,9 +2381,12 @@ class Editor:
         elif action.startswith("shape:"):
             self.shape = action[6:]
             self.say(f"Shape: {SHAPES[self.shape]} (drag on the map; right-drag erases, Shift: square / circle)")
+        elif action in ("copy", "cut", "clear", "paste", "select_all"):
+            self.area_action(action)
         elif action.startswith("tool:"):
             self.tool = action[5:]
-            self.shape_drag = None
+            self.shape_drag = self.area_drag = None
+            self.pasting = False
             self.guns_mode = self.prefabs_mode = self.effects_mode = self.lights_mode = False
             if self.tool != "entity":
                 self.deselect()
@@ -2746,6 +2815,11 @@ class Editor:
             if self.shape_drag:
                 self.shape_drag = None
                 self.say("Shape cancelled")
+            elif self.pasting:
+                self.pasting = False
+                self.say("Stopped pasting (Ctrl+V pastes again)")
+            elif self.area is not None and self.tool == "select":
+                self.area = None
             elif self.dropdown_open:
                 self.dropdown_open = False
             elif self.menu_open is not None:
@@ -2754,6 +2828,10 @@ class Editor:
                 self.deselect()                         # (Esc no longer quits: close the window for that)
         elif e.key == pygame.K_DELETE and self.details_width():
             self.delete_selected()
+        elif e.key == pygame.K_DELETE and self.tool == "select" and self.area is not None:
+            self.do("clear")
+        elif ctrl and e.key in (pygame.K_c, pygame.K_x, pygame.K_v, pygame.K_a):
+            self.do({pygame.K_c: "copy", pygame.K_x: "cut", pygame.K_v: "paste", pygame.K_a: "select_all"}[e.key])
         elif ctrl and e.key == pygame.K_s:
             self.do("save")
         elif ctrl and e.key == pygame.K_o:
@@ -2889,6 +2967,11 @@ class Editor:
             self.finish_stairs()
         if self.shape_drag and e.button == (3 if self.shape_drag[2] else 1):
             self.finish_shape()
+        if self.area_drag and e.button == 1:
+            self.area = area_rect(self.level, *self.area_drag)
+            self.area_drag = None
+            x0, y0, x1, y1 = self.area
+            self.say(f"Selected {x1 - x0 + 1}x{y1 - y0 + 1}: Ctrl+C copies, Ctrl+X cuts, Delete clears")
         if e.button in (1, 3):
             self.stroke = self.last_cell = None
         if e.button == 1:
@@ -2915,6 +2998,8 @@ class Editor:
             self.stairs_drag = (self.stairs_drag[0], self.cell_at(e.pos))
         elif self.shape_drag:
             self.shape_drag = (self.shape_drag[0], self.cell_at(e.pos), self.shape_drag[2])
+        elif self.area_drag:
+            self.area_drag = (self.area_drag[0], self.cell_at(e.pos))
         elif self.pan_drag:
             self.pan[0] += e.rel[0]
             self.pan[1] += e.rel[1]
@@ -4361,7 +4446,43 @@ class Editor:
         if not docked:
             screen.set_clip(None)
 
+    def area_screen_rect(self, x0, y0, x1, y1):
+        return self.cell_rect(x0, y0).union(self.cell_rect(x1, y1))
+
+    def draw_selection(self, screen, area):
+        """Select tool: the rectangle being dragged or selected, and while pasting the copy under the mouse."""
+        if self.area_drag:
+            pygame.draw.rect(screen, ACCENT, self.area_screen_rect(*area_rect(self.level, *self.area_drag)), 2)
+        elif self.area is not None:
+            box = self.area_screen_rect(*self.area)
+            pygame.draw.rect(screen, (20, 20, 26), box.inflate(2, 2), 1)
+            pygame.draw.rect(screen, ACCENT, box, 2)
+        if self.pasting and self.clip is not None and area.collidepoint(self.mouse):
+            x, y = self.paste_corner(self.cell_at(self.mouse))
+            clip = self.clip
+            for dy in range(clip.height):
+                for dx in range(clip.width):
+                    wall = clip.walls.get((dx, dy))
+                    tile = wall["walls"] if wall else clip.span["floor_tex"][dy][dx]
+                    ghost = self.tile_surface(tile - 1).copy()
+                    ghost.set_alpha(150 if wall else 90)
+                    screen.blit(ghost, self.cell_rect(x + dx, y + dy))
+            origin, z = self.cell_rect(0, 0), self.zoom
+            size = max(8, int(z * 0.6))
+            for e in clip.entities:                             # the items and spawn points that come with it
+                icon = pygame.transform.scale(self.tiles[max(0, min(e.tile, len(self.tiles) - 1))], (size, size))
+                icon.set_alpha(170)
+                screen.blit(icon, icon.get_rect(center=(origin.x + (e.x + x) * z, origin.y + (e.y + y) * z)))
+            for sp in clip.spawners:
+                pygame.draw.circle(screen, SPAWN_FILL, (origin.x + (sp.x + x) * z, origin.y + (sp.y + y) * z),
+                                   max(4, z * 0.3), 2)
+            pygame.draw.rect(screen, ACCENT, self.area_screen_rect(x, y, x + clip.width - 1, y + clip.height - 1), 2)
+
     def draw_cursor(self, screen, area):
+        if self.tool == "select":
+            self.draw_selection(screen, area)
+            if self.area_drag or self.pasting:
+                return
         if self.shape_drag:
             erasing = self.shape_drag[2]
             tiles = not erasing and self.layer in STAMP_LAYERS and self.stamp()
@@ -4442,7 +4563,7 @@ class Editor:
             screen.blit(small, (ATLAS_X + dx * cell, y + 22 + dy * cell))
         hints = ("Atlas: click / drag = select, Ctrl = add/remove",
                  "Map: L-drag paint, R-drag erase, wheel zoom, Space+drag pan",
-                 "Tab floor, layers 1-8, tools B E F I S O T H C N, [ ] value, R ramp, K key")
+                 "Tab floor, layers 1-8, tools B E F I S O T H M C N, [ ] value, R ramp, K key")
         for i, text in enumerate(hints):
             screen.blit(self.small.render(text, True, DIM), (ATLAS_X, hints_y + i * 16))
 
