@@ -1273,5 +1273,136 @@ def level_text(level):
     return text
 
 
+# --------------------------------------------------------------------------- bringing things in from another map
+
+IMPORT_KINDS = {"prefabs": "Prefabs", "lights": "Lights", "effects": "Effects", "guns": "Guns",
+                "ammo_types": "Ammo types"}                 # what can be brought in from another map, and its label
+IMPORT_ORDER = ("lights", "effects", "ammo_types", "guns", "prefabs")    # each kind only names kinds before it
+REFERENCES = {                                              # the fields of each kind that name another thing
+    "lights": (),
+    "effects": (("light", "lights"),),
+    "ammo_types": (("trail", "effects"), ("light", "lights"), ("player_hit_effects", "effects"),
+                   ("player_hit_lights", "lights"), ("world_hit_effects", "effects"), ("world_hit_lights", "lights"),
+                   ("explosion_effects", "effects"), ("explosion_lights", "lights")),
+    "guns": (("ammo", "ammo_types"), ("muzzle", "effects"), ("flash", "lights")),
+    "prefabs": (("light", "lights"), ("emits", "effects"), ("gun", "guns"), ("ammo", "ammo_types")),
+}
+TAKEN_CHOICES = ("keep", "replace", "copy")                 # what to do when an imported name is already used
+
+
+def things_named(level, kind):
+    """{name: the thing} of one kind (IMPORT_KINDS) in a level."""
+    return {thing.name: thing for thing in getattr(level, kind)}
+
+
+def references(thing, kind):
+    """[(kind, name)] of the other things `thing` names (empty names left out)."""
+    out = []
+    for field_name, other in REFERENCES[kind]:
+        value = getattr(thing, field_name)
+        for name in (value if isinstance(value, (list, tuple)) else (value,)):
+            if name:
+                out.append((other, name))
+    return out
+
+
+def with_needs(source, picks):
+    """`picks` ({(kind, name)}) and everything they name, and everything those name, as far as `source` has them."""
+    found, todo = set(), list(picks)
+    while todo:
+        kind, name = todo.pop()
+        thing = things_named(source, kind).get(name)
+        if thing is None or (kind, name) in found:
+            continue
+        found.add((kind, name))
+        todo += references(thing, kind)
+    return found
+
+
+@dataclass
+class ImportResult:
+    added: list = field(default_factory=list)       # (kind, name) brought in under their own name
+    replaced: list = field(default_factory=list)    # (kind, name) that replaced this map's thing of that name
+    kept: list = field(default_factory=list)        # (kind, name) left out: this map's thing of that name is used
+    same: list = field(default_factory=list)        # (kind, name) this map already has, just the same
+    renamed: dict = field(default_factory=dict)     # (kind, old name) -> new name, for copies of taken names
+    needed: int = 0                                 # how many came in only because a picked thing names them
+
+    def summary(self):
+        count = len(self.added) + len(self.replaced) + len(self.renamed)
+        parts = [f"Imported {count} thing{'s' if count != 1 else ''}"]
+        if self.same:
+            parts.append(f"{len(self.same)} already here")
+        if self.needed:
+            parts.append(f"{self.needed} of them needed by the ones picked")
+        if self.replaced:
+            parts.append(f"{len(self.replaced)} replaced")
+        if self.renamed:
+            parts.append(f"{len(self.renamed)} added as copies")
+        if self.kept:
+            parts.append(f"{len(self.kept)} kept as they were")
+        return ", ".join(parts)
+
+
+def unique_thing_name(name, taken):
+    """`name` with " 2", " 3"... added until it is not in `taken` (kept within MAX_NAME)."""
+    number = 2
+    while True:
+        suffix = f" {number}"
+        candidate = name[:MAX_NAME - len(suffix)] + suffix
+        if candidate not in taken:
+            return candidate
+        number += 1
+
+
+def import_things(level, source, picks, taken="copy"):
+    """Copy the things in `picks` ({(kind, name)}) from the level `source` into `level`, with everything they name
+    (a prefab's light and effect, a gun's ammo type, an ammo type's effects...). A thing whose name `level` already
+    uses is kept as it is ("keep": the import uses this map's one), replaces it ("replace") or comes in as a copy
+    under a new name ("copy"), and the imported things that name it are changed to name the copy. A thing this map
+    already has exactly the same is left as it is whatever `taken` says, and a copy is not made twice: one already
+    here under another name (from an earlier import) is used instead. Returns what was done (ImportResult)."""
+    result = ImportResult()
+    wanted = with_needs(source, picks)
+    result.needed = len(wanted - set(picks))
+    copies = {}
+    for kind in IMPORT_ORDER:
+        mine = getattr(level, kind)
+        for name in sorted(n for k, n in wanted if k == kind):
+            thing = things_named(source, kind)[name]
+            thing = thing.clone() if kind == "prefabs" else replace(thing)
+            existing = things_named(level, kind)
+            if name in existing and taken == "keep":
+                result.kept.append((kind, name))
+                continue
+            for field_name, other in REFERENCES[kind]:          # name the copies made above, not the originals
+                value = getattr(thing, field_name)
+                if isinstance(value, (list, tuple)):
+                    setattr(thing, field_name, type(value)(copies.get((other, v), v) for v in value))
+                else:
+                    setattr(thing, field_name, copies.get((other, value), value))
+            if name in existing and existing[name] == thing:
+                result.same.append((kind, name))                    # nothing to bring in
+                continue
+            if name in existing and taken == "replace":
+                mine[mine.index(existing[name])] = thing
+                result.replaced.append((kind, name))
+            elif name in existing:
+                twin = next((t for t in mine if replace(t, name=name) == thing), None)
+                if twin is not None:                                    # (an earlier import's copy, just the same)
+                    copies[(kind, name)] = twin.name
+                    result.same.append((kind, name))
+                    continue
+                thing.name = unique_thing_name(name, set(existing))
+                copies[(kind, name)] = thing.name
+                result.renamed[(kind, name)] = thing.name
+                mine.append(thing)
+            else:
+                mine.append(thing)
+                result.added.append((kind, name))
+    level.apply_prefabs()                                       # (copies placed from a replaced prefab follow it)
+    return result
+
+
 def load_or_default(path=MAP_PATH):
     return load_level(path) if os.path.exists(path) else default_level()

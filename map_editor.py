@@ -74,6 +74,11 @@ New asks for the new map's name and saves a blank map as <name>.json in the fold
 edited, so every new map is its own file (an existing file is never overwritten). Open (Ctrl+O) lists
 the maps in that folder to switch to another one: click one and Open, double-click it, or pick with the
 arrow keys and Enter. Save, Reload and Play work on the map that was made or opened last.
+Import brings prefabs, lights, effects, guns and ammo types in from another map in that folder: pick the map,
+tick what to bring (a group's heading ticks it all), and choose what happens when a name is already used here:
+keep this map's, replace it, or add the imported one as a copy with a new name. Whatever the picked things use
+comes too (a prefab's light and effect, a gun's ammo type and its effects), and anything this map already has
+exactly the same is left alone. One undo step takes the whole import back.
 
 Items hang on a wall when added with a click near the side of the cell that has the wall (the edge lights
 up): they are then a flat picture against the wall, facing into the cell, at their Lift above the floor.
@@ -181,7 +186,8 @@ from mapfile import (ANIMATION_KINDS, ANIMATION_LABELS, DEFAULTS, EDIT_LAYERS, E
                      ENTITY_MODES, GUN_MODE_LABELS, GUN_MODES, MAP_PATH, MAX_HIT_NAMES, MAX_NAME, MAX_NAME_LENGTH, MIN_WALL_GAP,
                      EFFECT_AIM_LABELS, EFFECT_AIMS, EFFECT_COLOR_LABELS, EFFECT_COLORS, EFFECT_KIND_LABELS, EFFECT_KINDS, MIN_AMBIENT, MODE_LABELS, SHOT_LABELS, SHOT_TYPES, Animation, AmmoType, Effect,
                      Entity, Gun, Level, Light, MAX_ELEVATION, MAX_SPAWN_ORDER, Spawner, SIDE_VECTORS, SIDES, WALL_LABELS, default_level, mounted_position,
-                     grid_name, load_level, save_level, split_grid_name)
+                     IMPORT_KINDS, TAKEN_CHOICES, grid_name, import_things, load_level, save_level, split_grid_name,
+                     things_named, with_needs)
 import details
 import hud
 from entities import describe
@@ -472,6 +478,7 @@ class Editor:
         self.rename = None                      # text being typed while renaming a floor
         self.new_name = None                    # name being typed in the New map dialog (None: closed)
         self.new_error = ""                     # why the typed name can't be used, shown in the dialog
+        self.importing = None                   # the Import dialog (an ImportDialog), while it is open
         self.open_maps = None                   # file names listed in the Open dialog (None: closed)
         self.open_pick = 0                      # index of the picked one
         self.open_scroll = 0                    # index of the first one shown
@@ -1574,7 +1581,7 @@ class Editor:
                  ("btn", "Border", "border"), ("txt", "Edge", DIM),
                  *[("btn", f"{side}{sign}", f"edge:{side}{sign}") for side in "LRTB" for sign in "+-"],
                  ("txt", f"{self.level.width}x{self.level.height}".ljust(7), ACCENT), None,
-                 ("btn", "New", "new"), ("btn", "Open", "open"), ("btn", "Reload", "reload"), ("btn", "Save", "save"),
+                 ("btn", "New", "new"), ("btn", "Open", "open"), ("btn", "Import", "import"), ("btn", "Reload", "reload"), ("btn", "Save", "save"),
                  ("btn", "Play(F5)", "play")]
         for y, items in zip(ROW_Y, (row1, row2, row3)):
             x = 8
@@ -2372,6 +2379,8 @@ class Editor:
                 return
             self.confirm = None
             {"new": self.start_new_map, "open": self.start_open, "reload": self.reload}[action]()
+        elif action == "import":
+            self.start_import()
         elif action == "save":
             self.save()
         elif action == "play":
@@ -2551,6 +2560,25 @@ class Editor:
     def map_folder(self):
         return os.path.dirname(os.path.abspath(self.path))
 
+    def start_import(self):
+        """Open the Import dialog on the maps in this map's folder (not this one)."""
+        names = [n for n in map_files(self.map_folder()) if n != os.path.basename(self.path)]
+        if not names:
+            self.say("There are no other maps in this folder to import from")
+            return
+        self.importing = ImportDialog(self.map_folder(), names, self.level, self.font, self.small, self.tiles)
+
+    def after_import(self, outcome):
+        """What the Import dialog asked for: None (carry on), "close", or ("import", source level, picks, taken)."""
+        if outcome == "close":
+            self.importing = None
+            self.say("Nothing imported")
+        elif isinstance(outcome, tuple):
+            _, source, picks, taken = outcome
+            self.importing = None
+            self.begin_edit()                                   # (one undo step takes it all back)
+            self.say(import_things(self.level, source, picks, taken).summary(), 8)
+
     def start_open(self):
         """Open the Open dialog: the maps in the folder of the map being edited, that one picked."""
         try:
@@ -2664,6 +2692,9 @@ class Editor:
             self.on_wheel(e)
 
     def on_key(self, e):
+        if self.importing is not None:                  # the Import dialog takes every key
+            self.after_import(self.importing.key(e))
+            return
         if self.open_maps is not None:                  # the Open dialog takes every key
             if e.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
                 self.finish_open(True)
@@ -2776,6 +2807,10 @@ class Editor:
 
     def on_mouse_down(self, e):
         self.mouse = e.pos
+        if self.importing is not None:                  # the Import dialog takes every click
+            if e.button == 1:
+                self.after_import(self.importing.click(e.pos, self._size()))
+            return
         if self.open_maps is not None:                  # the Open dialog takes every click
             if e.button == 1:
                 self.open_dialog_click(e.pos)
@@ -2891,6 +2926,9 @@ class Editor:
             self.revision += 1
 
     def on_wheel(self, e):
+        if self.importing is not None:                  # the wheel scrolls the Import dialog's list
+            self.importing.wheel(e.y)
+            return
         if self.open_maps is not None:                  # the wheel scrolls the Open dialog's list
             most = max(0, len(self.open_maps) - OPEN_ROWS)
             self.open_scroll = max(0, min(most, self.open_scroll - e.y))
@@ -2945,6 +2983,9 @@ class Editor:
         self.draw_dropdown(screen)
         self.draw_new_map_dialog(screen)
         self.draw_open_dialog(screen)
+        if self.importing is not None:
+            self.draw_shade(screen)
+            self.importing.draw(screen, self._size(), self.mouse)
         title = f"Map editor - {os.path.basename(self.path)}{' *' if self.dirty else ''}"
         if pygame.display.get_caption()[0] != title:
             pygame.display.set_caption(title)
@@ -4625,6 +4666,236 @@ class Editor:
 def starting_map(args, settings=SETTINGS_PATH):
     """The map to open: the one named on the command line, else the one edited last, else maps/map.json."""
     return os.path.abspath(args[0]) if args else (last_map(settings) or MAP_PATH)
+
+
+def map_files(folder):
+    """The map files in `folder`, by name (none if it cannot be read)."""
+    try:
+        return sorted((n for n in os.listdir(folder) if n.lower().endswith(".json")), key=str.lower)
+    except OSError:
+        return []
+
+
+TAKEN_LABELS = {"keep": "Keep mine", "replace": "Replace", "copy": "Add a copy"}
+COMING = (90, 170, 255)                         # Import dialog: the box of a thing coming in with a ticked one
+IMPORT_ICON = 20                                # Import dialog: the picture beside each thing, in pixels
+IMPORT_ROWS, IMPORT_ROW_H = 12, 26              # Import dialog: list rows shown at once, and their height
+
+
+class ImportDialog:
+    """The editor's Import dialog: first the other maps in the folder, then what one of them has (prefabs, lights,
+    effects, guns, ammo types) to tick, and what to do with names this map already uses. It changes nothing
+    itself: click() and key() say what to do - None (carry on), "close", or ("import", source, picks, taken)."""
+
+    def __init__(self, folder, names, level, font, small, tiles=()):
+        """`tiles` are the atlas's pictures (the maps in a folder share one atlas), to show what each thing looks
+        like."""
+        self.folder, self.names, self.level = folder, names, level
+        self.font, self.small = font, small
+        self.tiles = list(tiles)
+        self._icons = {}                        # (kind, name) -> the small picture drawn beside it
+        self.source = self.source_name = None   # the map picked to import from, once picked
+        self.chosen = set()                     # (kind, name) ticked
+        self.taken = "copy"                     # what to do with a name already used here (TAKEN_CHOICES)
+        self.scroll = 0
+        self.error = ""
+
+    # ------------------------------------------------------------------ what is listed
+
+    def rows(self):
+        """The list's rows: ("map", name) to pick from, or ("kind", kind) headings and ("thing", (kind, name))."""
+        if self.source is None:
+            return [("map", n) for n in self.names]
+        out = []
+        for kind, _label in IMPORT_KINDS.items():
+            names = sorted(things_named(self.source, kind), key=str.lower)
+            if names:
+                out.append(("kind", kind))
+                out += [("thing", (kind, n)) for n in names]
+        return out
+
+    def icon(self, kind, name):
+        """The small picture of a thing in the map imported from: its tile (a prefab's icon, a gun's picture, an
+        ammo type's bullet, an effect's particle) cropped to what is drawn in it and made to fit, or for a light a
+        swatch of its color at full strength. None when there is nothing to show."""
+        key = (kind, name)
+        if key not in self._icons:
+            thing = things_named(self.source, kind)[name]
+            picture = None
+            if kind == "lights":
+                bright = max(thing.r, thing.g, thing.b, 1)
+                picture = pygame.Surface((IMPORT_ICON, IMPORT_ICON))
+                picture.fill(tuple(round(c * 255 / bright) for c in (thing.r, thing.g, thing.b)))
+                pygame.draw.rect(picture, GRID, picture.get_rect(), 1)
+            elif self.tiles:
+                tile = self.tiles[max(0, min(thing.tile, len(self.tiles) - 1))]
+                box = tile.get_bounding_rect()                  # just what is drawn in the tile, made to fit
+                if box.w and box.h:
+                    scale = IMPORT_ICON / max(box.w, box.h)
+                    part = pygame.transform.scale(tile.subsurface(box), (max(1, round(box.w * scale)),
+                                                                         max(1, round(box.h * scale))))
+                    picture = pygame.Surface((IMPORT_ICON, IMPORT_ICON), pygame.SRCALPHA)
+                    picture.blit(part, part.get_rect(center=picture.get_rect().center))
+            self._icons[key] = picture
+        return self._icons[key]
+
+    def coming(self):
+        """{(kind, name): name of a ticked thing that uses it} for what is not ticked but will come in with what is
+        (a prefab's light, a gun's ammo type and that ammo's effects...)."""
+        out = {}
+        for picked in sorted(self.chosen):
+            for needed in sorted(with_needs(self.source, {picked}) - self.chosen):
+                out.setdefault(needed, picked[1])
+        return out
+
+    def state(self, kind, name):
+        """How a thing of the source stands here: "new", "same" (this map has it just the same) or "taken"."""
+        mine = things_named(self.level, kind).get(name)
+        theirs = things_named(self.source, kind)[name]
+        return "new" if mine is None else ("same" if mine == theirs else "taken")
+
+    def rects(self, size):
+        """(box, list, [(row rect, row)], {button: rect}) laid out in the middle of a window of `size`."""
+        w, h = size
+        shown_rows = min(IMPORT_ROWS, max(1, len(self.rows())))
+        extra = 0 if self.source is None else 30 + 26          # (the "name taken" choice and the count)
+        box = pygame.Rect(0, 0, min(600, w - 20), 66 + shown_rows * IMPORT_ROW_H + 16 + extra + 30 + 48)
+        box.center = (w // 2, h // 2)
+        listing = pygame.Rect(box.x + 20, box.y + 66, box.w - 40, shown_rows * IMPORT_ROW_H)
+        rows = self.rows()
+        self.scroll = max(0, min(self.scroll, len(rows) - IMPORT_ROWS))
+        shown = [(pygame.Rect(listing.x, listing.y + i * IMPORT_ROW_H, listing.w, IMPORT_ROW_H), rows[self.scroll + i])
+                 for i in range(shown_rows) if self.scroll + i < len(rows)]
+        buttons = {"cancel": pygame.Rect(box.right - 20 - 100, box.bottom - 16 - 32, 100, 32)}
+        if self.source is not None:
+            buttons["back"] = buttons["cancel"].move(-112, 0)
+            buttons["import"] = buttons["back"].move(-112, 0)
+            y = listing.bottom + 14
+            for i, choice in enumerate(TAKEN_CHOICES):
+                buttons[f"taken:{choice}"] = pygame.Rect(listing.x + 170 + i * 122, y, 114, 28)
+        return box, listing, shown, buttons
+
+    # ------------------------------------------------------------------ input
+
+    def click(self, pos, size):
+        _box, _listing, shown, buttons = self.rects(size)
+        for name, rect in buttons.items():
+            if rect.collidepoint(pos):
+                return self.press(name)
+        for rect, (kind, value) in shown:
+            if not rect.collidepoint(pos):
+                continue
+            if kind == "map":
+                self.pick(value)
+            elif kind == "kind":
+                group = {(value, n) for n in things_named(self.source, value)}
+                self.chosen = self.chosen - group if group <= self.chosen else self.chosen | group
+            else:
+                self.chosen ^= {value}
+            return None
+        return None
+
+    def press(self, button):
+        if button == "cancel":
+            return "close"
+        if button == "back":
+            self.source = self.source_name = None
+            self.chosen, self.scroll, self.error = set(), 0, ""
+            return None
+        if button.startswith("taken:"):
+            self.taken = button[6:]
+            return None
+        if button == "import":
+            if not self.chosen:
+                self.error = "Tick something to import first"
+                return None
+            return ("import", self.source, set(self.chosen), self.taken)
+        return None
+
+    def pick(self, name):
+        """Read the map to import from; one that cannot be read says why and stays on the list of maps."""
+        try:
+            self.source = load_level(os.path.join(self.folder, name))
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
+            self.error = f"Can't read {name}: {e}"[:80]
+            return
+        self.source_name, self.chosen, self.scroll, self.error = name, set(), 0, ""
+        if not self.rows():
+            self.error = f"{name[:-5]} has no prefabs, lights, effects, guns or ammo types"
+
+    def key(self, e):
+        if e.key == pygame.K_ESCAPE:
+            return "close" if self.source is None else self.press("back")
+        if e.key in (pygame.K_RETURN, pygame.K_KP_ENTER) and self.source is not None:
+            return self.press("import")
+        return None
+
+    def wheel(self, y):
+        self.scroll = max(0, self.scroll - y)
+
+    # ------------------------------------------------------------------ drawing
+
+    def draw(self, screen, size, mouse):
+        box, listing, shown, buttons = self.rects(size)
+        coming = self.coming() if self.source is not None else {}
+        pygame.draw.rect(screen, PANEL_BG, box, border_radius=6)
+        pygame.draw.rect(screen, GRID, box, 1, border_radius=6)
+        if self.source is None:
+            title, hint = "Import from a map", "Pick the map to bring prefabs, lights, effects, guns or ammo from"
+        else:
+            title, hint = (f"Import from {self.source_name[:-5]}",
+                           "Tick what to bring in (a heading ticks its group); what they use comes too")
+        screen.blit(self.font.render(title, True, ACCENT), (box.x + 20, box.y + 14))
+        screen.blit(self.small.render(hint, True, DIM), (box.x + 20, box.y + 42))
+        pygame.draw.rect(screen, (24, 26, 32), listing)
+        for rect, (kind, value) in shown:
+            if rect.collidepoint(mouse):
+                pygame.draw.rect(screen, BUTTON_HOT, rect)
+            if kind == "map":
+                screen.blit(self.font.render(value[:-5], True, TEXT), (rect.x + 8, rect.y + 4))
+            elif kind == "kind":
+                group = {(value, n) for n in things_named(self.source, value)}
+                ticked, along = len(group & self.chosen), len(group & set(coming))
+                count = f"{ticked} of {len(group)}" + (f", {along} coming with them" if along else "")
+                screen.blit(self.font.render(f"{IMPORT_KINDS[value]}  ({count})", True, ACCENT), (rect.x + 8, rect.y + 4))
+            else:
+                ticked, along = value in self.chosen, value in coming
+                tick = pygame.Rect(rect.x + 18, rect.y + 6, 14, 14)
+                if ticked or along:                         # yellow: ticked; blue: comes in with a ticked thing
+                    pygame.draw.rect(screen, ACCENT if ticked else COMING, tick, border_radius=2)
+                else:
+                    pygame.draw.rect(screen, DIM, tick, 1, border_radius=2)
+                picture = self.icon(*value)
+                if picture is not None:
+                    screen.blit(picture, (tick.right + 10, rect.y + (IMPORT_ROW_H - IMPORT_ICON) // 2))
+                screen.blit(self.font.render(value[1], True, TEXT), (tick.right + 18 + IMPORT_ICON, rect.y + 4))
+                notes = [(f"comes with {coming[value]}", COMING)] if along else []
+                notes += {"same": [("already here", DIM)], "taken": [("name used here", WARN)]}.get(self.state(*value), [])
+                right = rect.right - 8
+                for text, color in reversed(notes):
+                    label = self.small.render(text, True, color)
+                    right -= label.get_width()
+                    screen.blit(label, (right, rect.y + 6))
+                    right -= 14
+        pygame.draw.rect(screen, GRID, listing, 1)
+        if len(self.rows()) > IMPORT_ROWS:                  # where the rows shown are in the whole list
+            track = listing.h * IMPORT_ROWS // len(self.rows())
+            top = listing.y + (listing.h - track) * self.scroll // (len(self.rows()) - IMPORT_ROWS)
+            pygame.draw.rect(screen, DIM, (listing.right - 4, top, 3, track))
+        if self.source is not None:
+            screen.blit(self.small.render("If a name is used here:", True, TEXT), (listing.x, listing.bottom + 20))
+            needs = len(with_needs(self.source, self.chosen)) - len(self.chosen)
+            count = f"{len(self.chosen)} ticked" + (f", and {needs} more they use (blue)" if needs else "")
+            screen.blit(self.small.render(count, True, DIM), (listing.x, listing.bottom + 52))
+        for name, rect in buttons.items():
+            on = name == f"taken:{self.taken}"
+            hot = rect.collidepoint(mouse)
+            pygame.draw.rect(screen, BUTTON_ON if on else (BUTTON_HOT if hot else BUTTON), rect, border_radius=4)
+            label = TAKEN_LABELS[name[6:]] if name.startswith("taken:") else name.capitalize()
+            text = (self.small if name.startswith("taken:") else self.font).render(label, True, TEXT)
+            screen.blit(text, text.get_rect(center=rect.center))
+        if self.error:
+            screen.blit(self.small.render(self.error, True, WARN), (box.x + 20, box.bottom - 40))
 
 
 def main():
