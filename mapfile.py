@@ -38,6 +38,7 @@ climbs to a higher floor ends in a cell whose *lower* floor is raised to that he
 touches a neighboring cell's room on the higher floor, which is how you step across.
 """
 import json
+import math
 import os
 from dataclasses import asdict, dataclass, field, replace
 
@@ -49,13 +50,22 @@ MAX_NAME_LENGTH = 24
 MIN_WALL_GAP = 0.05             # a wall this close to the ceiling is just a full-height wall
 
 SPAN_LAYERS = ("floor_tex", "ceil_tex", "floor_h", "ceil_h", "ramp")
-SHARED_LAYERS = ("walls", "wall_h", "wall_ceil", "wall_floor")                # one grid for all floors
+SIDES = "nesw"                                                  # the four sides of a cell: north, east, south, west
+SIDE_LAYERS = tuple(f"side_{side}" for side in SIDES)           # a wall's own texture on one side (0: the wall's tile)
+# The heights above the wall's base that a side's own texture covers, from and to (to 0: up to the top).
+SIDE_BAND_LAYERS = tuple(f"side_{side}_{end}" for side in SIDES for end in ("from", "to"))
+SHARED_LAYERS = ("walls", "wall_h", "wall_ceil", "wall_floor") + SIDE_LAYERS + SIDE_BAND_LAYERS  # one grid for all floors
+SIDE_VECTORS = {"n": (0, -1), "e": (1, 0), "s": (0, 1), "w": (-1, 0)}  # which way each side faces on the map
+WALL_LABELS = {"": "Free standing", "n": "North wall", "e": "East wall", "s": "South wall", "w": "West wall"}
+MAX_ELEVATION = 8.0             # furthest a placed item may be raised or lowered from where its settings put it
+WALL_GAP = 0.04                 # how far in front of a wall's face an item hung on it is, in cells
 EDIT_LAYERS = ("walls",) + SPAN_LAYERS + ("wall_h",)            # what the editor lets you switch between
 RAMP_DIRS = {1: (1, 0), 2: (-1, 0), 3: (0, 1), 4: (0, -1)}      # id -> (dx, dy) the floor rises toward
 SOLID_OUTSIDE = 1       # walls value reported outside the grid: a wall
 
 _GROUND_DEFAULTS = {"walls": 0, "wall_h": 0.0, "wall_ceil": 0.0, "wall_floor": 0, "floor_tex": 5, "ceil_tex": 6,
-                    "floor_h": 0.0, "ceil_h": 1.0, "ramp": 0}
+                    "floor_h": 0.0, "ceil_h": 1.0, "ramp": 0, **{name: 0 for name in SIDE_LAYERS},
+                    **{name: 0.0 for name in SIDE_BAND_LAYERS}}
 _UPPER_DEFAULTS = {"floor_tex": 3, "ceil_tex": 6, "floor_h": 0.0, "ceil_h": 0.0, "ramp": 0}
 
 
@@ -81,6 +91,30 @@ MAX_HIT_NAMES = 8                               # effects (and lights) an ammo t
 MAX_NAME = 24                                   # longest name of an item, gun or particle effect
 ANIMATION_KINDS = ("float", "rotate")
 ANIMATION_LABELS = {"float": "Float", "rotate": "Rotate"}
+
+
+MAX_SPAWN_ORDER = 99
+
+
+@dataclass
+class Spawner:
+    """A place players come into the game at (joining, after being knocked out, after a map reload).
+
+    x, y     position on the map, in cells (the middle of a cell is .5); span is the floor it stands on
+    angle    the way a player there faces, radians (0 faces +x)
+    order    which spawners are used first: every player comes in at a spawner of the lowest order that has
+             one not yet used in this round, picked at random among those; when all have been used the round
+             starts over (see game.SpawnOrder). A map without spawners uses its start instead."""
+    x: float
+    y: float
+    span: int = 0
+    angle: float = 0.0
+    order: int = 0
+
+    @classmethod
+    def from_dict(cls, data):
+        return cls(float(data["x"]), float(data["y"]), max(0, int(data.get("span", 0))),
+                   float(data.get("angle", 0.0)), max(0, min(MAX_SPAWN_ORDER, int(data.get("order", 0)))))
 
 
 @dataclass
@@ -471,6 +505,11 @@ class Entity:
              the effect's own start offset
     light    name of the Light the item gives off while it is there ("" for none); with Scenery and a hidden
              sprite an item is just a light placed in the map
+    wall     "" for an item standing in its cell, or the side of its cell ("n", "e", "s", "w") whose wall it hangs on:
+             it is then a flat picture against that wall, facing into the cell (x, y are just in front of the
+             wall: see mounted_position), at `lift` above the floor
+    elevation  how much higher (or, below 0, lower) this placed item is than its settings put it. It belongs to
+             the place, like x and y: a prefab never sets it, so each copy of a prefab can sit at its own height
     A "scenery" item cannot be touched or picked up: it is only there to look at (a torch, a vent)."""
     x: float
     y: float
@@ -495,6 +534,8 @@ class Entity:
     light: str = ""                 # the light it gives off
     name: str = ""                  # a prefab's name (an item placed in the map has none)
     prefab: str = ""                # the prefab this item is an instance of ("" for a plain item)
+    wall: str = ""                  # the side of its cell whose wall it hangs on ("" for none)
+    elevation: float = 0.0          # this placed item's own height above where its settings put it
 
     def clone(self, **changes):
         """A copy that shares nothing with this entity (its animations are copied too)."""
@@ -524,7 +565,30 @@ class Entity:
                        emits_offset_y=float(data.get("emits_offset_y", 0.0)),
                        emits_offset_z=float(data.get("emits_offset_z", 0.0)),
                        light=str(data.get("light", ""))[:MAX_NAME],
-                       name=str(data.get("name", ""))[:MAX_NAME], prefab=str(data.get("prefab", ""))[:MAX_NAME])
+                       name=str(data.get("name", ""))[:MAX_NAME], prefab=str(data.get("prefab", ""))[:MAX_NAME],
+                       wall=data.get("wall") if data.get("wall") in WALL_LABELS else "",
+                       elevation=max(-MAX_ELEVATION, min(MAX_ELEVATION, float(data.get("elevation", 0.0)))))
+
+
+def mounted_position(cx, cy, wall):
+    """(x, y) of an item in cell (cx, cy) hung on the wall on side `wall` of the cell (its middle for "")."""
+    dx, dy = SIDE_VECTORS.get(wall, (0, 0))
+    return cx + 0.5 + dx * (0.5 - WALL_GAP), cy + 0.5 + dy * (0.5 - WALL_GAP)
+
+
+def wall_facing(wall):
+    """The map angle an item hung on side `wall` of its cell faces: away from the wall, into the cell."""
+    dx, dy = SIDE_VECTORS[wall]
+    return math.atan2(-dy, -dx)
+
+
+def side_band(level, x, y, side):
+    """(from, to): the world heights the own texture on side `side` of the wall at (x, y) covers. A band that
+    starts at 0 reaches down to the wall's foot, and one that ends at 0 up to its top, whatever those are."""
+    low, high = level.get(f"side_{side}_from", x, y), level.get(f"side_{side}_to", x, y)
+    floor = level.wall_floor(x, y)
+    base = level.wall_base(x, y) if floor == 0 else level.get(grid_name("floor_h", floor), x, y)
+    return (base + low if low > 0 else -1e9), (base + high if high > 0 else 1e9)
 
 
 def grid_name(layer, floor):
@@ -561,8 +625,10 @@ def default_floor_name(index):
 
 class Level:
     def __init__(self, grids, start_x=1.5, start_y=1.5, start_angle=0.0, start_span=0, names=None,
-                 entities=None, guns=None, ammo_types=None, prefabs=None, effects=None, lights=None, ambient=1.0):
+                 entities=None, guns=None, ammo_types=None, prefabs=None, effects=None, lights=None, ambient=1.0,
+                 spawners=None):
         self.grids = grids
+        self.spawners = list(spawners or [])        # where players come into the game (see Spawner)
         self.lights = list(lights or [])            # lights defined for this map (see Light)
         self.ambient = ambient                      # how bright the map is without lights: 1 is as before, less is dark
         self.effects = list(effects or [])          # particle effects defined for this map (see Effect)
@@ -583,10 +649,8 @@ class Level:
     @classmethod
     def blank(cls, width, height, border=1, floors=1):
         """An empty map: open space, optionally walled in, with `floors` floors (at least 1)."""
-        level = cls({"walls": [[0] * width for _ in range(height)],
-                     "wall_h": [[0.0] * width for _ in range(height)],
-                     "wall_ceil": [[0.0] * width for _ in range(height)],
-                     "wall_floor": [[0] * width for _ in range(height)]}, names=[])
+        level = cls({name: [[default_for(name)] * width for _ in range(height)] for name in SHARED_LAYERS},
+                    names=[])
         for _ in range(max(1, floors)):
             level.add_floor()
         if border:
@@ -598,7 +662,8 @@ class Level:
                      self.start_x, self.start_y, self.start_angle, self.start_span, self.names,
                      [e.clone() for e in self.entities], [replace(g) for g in self.guns],
                      [replace(a) for a in self.ammo_types], [p.clone() for p in self.prefabs],
-                     [replace(f) for f in self.effects], [replace(light) for light in self.lights], self.ambient)
+                     [replace(f) for f in self.effects], [replace(light) for light in self.lights], self.ambient,
+                     [replace(s) for s in self.spawners])
 
     def prefab_named(self, name):
         for prefab in self.prefabs:
@@ -695,6 +760,8 @@ class Level:
             self.start_span = 0
         elif self.start_span > floor:
             self.start_span -= 1
+        self.spawners = [replace(s, span=s.span - 1 if s.span > floor else s.span)
+                         for s in self.spawners if s.span != floor]
 
     def rename_floor(self, floor, name):
         """Rename a floor; returns the name actually used (trimmed, and made unique)."""
@@ -877,6 +944,7 @@ class Level:
         self.start_x = min(self.start_x, width - 0.5)
         self.start_y = min(self.start_y, height - 0.5)
         self.entities = [e for e in self.entities if e.x < width and e.y < height]
+        self.spawners = [s for s in self.spawners if s.x < width and s.y < height]
 
     def resize_edges(self, left=0, right=0, top=0, bottom=0):
         """Add (positive) or remove (negative) columns and rows along each side, keeping the cells
@@ -898,6 +966,8 @@ class Level:
         self.start_y = min(max(self.start_y + top, 0.5), height - 0.5)
         self.entities = [e.clone(x=e.x + left, y=e.y + top) for e in self.entities
                          if 0 <= e.x + left < width and 0 <= e.y + top < height]
+        self.spawners = [replace(s, x=s.x + left, y=s.y + top) for s in self.spawners
+                         if 0 <= s.x + left < width and 0 <= s.y + top < height]
         return left, top
 
     @staticmethod
@@ -1002,17 +1072,19 @@ class Level:
         """Problems that would break or confuse the game, as (message, cell) pairs. The cell
         is the (x, y) the problem is about, or None."""
         found = []
-        sx, sy = int(self.start_x), int(self.start_y)
-        span = self.start_span
-        if self.is_solid(sx, sy, span):
-            found.append(("start position is inside a wall", (sx, sy)))
-        elif not self.span_present(span, sx, sy):
-            found.append(("start position has no floor here on the chosen floor", (sx, sy)))
-        else:
-            lo = self.grids[grid_name("floor_h", span)][sy][sx]
-            hi = self.grids[grid_name("ceil_h", span)][sy][sx]
-            if hi - lo < PLAYER_HEIGHT:
-                found.append(("start position is too low for the player to fit", (sx, sy)))
+        places = [("start position", self.start_x, self.start_y, self.start_span)]
+        places += [(f"spawner {i + 1} (order {s.order})", s.x, s.y, s.span) for i, s in enumerate(self.spawners)]
+        for what, x, y, span in places:
+            sx, sy = int(x), int(y)
+            if self.is_solid(sx, sy, span):
+                found.append((f"{what} is inside a wall", (sx, sy)))
+            elif not self.span_present(span, sx, sy):
+                found.append((f"{what} has no floor here on the chosen floor", (sx, sy)))
+            else:
+                lo = self.grids[grid_name("floor_h", span)][sy][sx]
+                hi = self.grids[grid_name("ceil_h", span)][sy][sx]
+                if hi - lo < PLAYER_HEIGHT:
+                    found.append((f"{what} is too low for the player to fit", (sx, sy)))
 
         results = [self._floor_planes(s) for s in range(self.floor_count)]
         for y in range(self.height):
@@ -1107,6 +1179,11 @@ def parse_level(data, label="level"):
     level.start_x, level.start_y = float(start.get("x", 1.5)), float(start.get("y", 1.5))
     level.start_angle = float(start.get("angle", 0.0))
     level.start_span = min(int(start.get("span", 0)), count - 1)
+    for item in data.get("spawners", []):
+        if isinstance(item, dict):
+            spawner = Spawner.from_dict(item)
+            if 0 <= spawner.x < w and 0 <= spawner.y < h and spawner.span < count:
+                level.spawners.append(spawner)
     for item in data.get("entities", []):
         entity = Entity.from_dict(item)
         if 0 <= entity.x < w and 0 <= entity.y < h and entity.span < count:
@@ -1165,6 +1242,8 @@ def level_text(level):
     """The map file's JSON as text, with one grid row per line so it is easy to read and diff."""
     blocks = []
     for name in level.grid_names():
+        if name in SIDE_LAYERS + SIDE_BAND_LAYERS and not any(any(row) for row in level.grids[name]):
+            continue                                # (no wall has a texture of its own on that side)
         rows = ",\n".join("      " + json.dumps(row) for row in level.grids[name])
         blocks.append(f'    "{name}": [\n{rows}\n    ]')
     start = {"x": level.start_x, "y": level.start_y, "angle": level.start_angle,
@@ -1174,6 +1253,8 @@ def level_text(level):
         f'  "width": {level.width},\n  "height": {level.height},\n'
         f'  "floors": {json.dumps(level.names)},\n'
         f'  "start": {json.dumps(start)},\n'
+        + ('  "spawners": [\n' + ",\n".join("    " + json.dumps(asdict(s)) for s in level.spawners) + "\n  ],\n"
+           if level.spawners else "")
         + ('  "entities": [\n' + ",\n".join("    " + json.dumps(asdict(e)) for e in level.entities) + "\n  ],\n"
            if level.entities else "")
         + ('  "ammo_types": [\n' + ",\n".join("    " + json.dumps(asdict(a)) for a in level.ammo_types) + "\n  ],\n"
@@ -1190,6 +1271,137 @@ def level_text(level):
         '  "grids": {\n' + ",\n".join(blocks) + "\n  }\n}\n"
     )
     return text
+
+
+# --------------------------------------------------------------------------- bringing things in from another map
+
+IMPORT_KINDS = {"prefabs": "Prefabs", "lights": "Lights", "effects": "Effects", "guns": "Guns",
+                "ammo_types": "Ammo types"}                 # what can be brought in from another map, and its label
+IMPORT_ORDER = ("lights", "effects", "ammo_types", "guns", "prefabs")    # each kind only names kinds before it
+REFERENCES = {                                              # the fields of each kind that name another thing
+    "lights": (),
+    "effects": (("light", "lights"),),
+    "ammo_types": (("trail", "effects"), ("light", "lights"), ("player_hit_effects", "effects"),
+                   ("player_hit_lights", "lights"), ("world_hit_effects", "effects"), ("world_hit_lights", "lights"),
+                   ("explosion_effects", "effects"), ("explosion_lights", "lights")),
+    "guns": (("ammo", "ammo_types"), ("muzzle", "effects"), ("flash", "lights")),
+    "prefabs": (("light", "lights"), ("emits", "effects"), ("gun", "guns"), ("ammo", "ammo_types")),
+}
+TAKEN_CHOICES = ("keep", "replace", "copy")                 # what to do when an imported name is already used
+
+
+def things_named(level, kind):
+    """{name: the thing} of one kind (IMPORT_KINDS) in a level."""
+    return {thing.name: thing for thing in getattr(level, kind)}
+
+
+def references(thing, kind):
+    """[(kind, name)] of the other things `thing` names (empty names left out)."""
+    out = []
+    for field_name, other in REFERENCES[kind]:
+        value = getattr(thing, field_name)
+        for name in (value if isinstance(value, (list, tuple)) else (value,)):
+            if name:
+                out.append((other, name))
+    return out
+
+
+def with_needs(source, picks):
+    """`picks` ({(kind, name)}) and everything they name, and everything those name, as far as `source` has them."""
+    found, todo = set(), list(picks)
+    while todo:
+        kind, name = todo.pop()
+        thing = things_named(source, kind).get(name)
+        if thing is None or (kind, name) in found:
+            continue
+        found.add((kind, name))
+        todo += references(thing, kind)
+    return found
+
+
+@dataclass
+class ImportResult:
+    added: list = field(default_factory=list)       # (kind, name) brought in under their own name
+    replaced: list = field(default_factory=list)    # (kind, name) that replaced this map's thing of that name
+    kept: list = field(default_factory=list)        # (kind, name) left out: this map's thing of that name is used
+    same: list = field(default_factory=list)        # (kind, name) this map already has, just the same
+    renamed: dict = field(default_factory=dict)     # (kind, old name) -> new name, for copies of taken names
+    needed: int = 0                                 # how many came in only because a picked thing names them
+
+    def summary(self):
+        count = len(self.added) + len(self.replaced) + len(self.renamed)
+        parts = [f"Imported {count} thing{'s' if count != 1 else ''}"]
+        if self.same:
+            parts.append(f"{len(self.same)} already here")
+        if self.needed:
+            parts.append(f"{self.needed} of them needed by the ones picked")
+        if self.replaced:
+            parts.append(f"{len(self.replaced)} replaced")
+        if self.renamed:
+            parts.append(f"{len(self.renamed)} added as copies")
+        if self.kept:
+            parts.append(f"{len(self.kept)} kept as they were")
+        return ", ".join(parts)
+
+
+def unique_thing_name(name, taken):
+    """`name` with " 2", " 3"... added until it is not in `taken` (kept within MAX_NAME)."""
+    number = 2
+    while True:
+        suffix = f" {number}"
+        candidate = name[:MAX_NAME - len(suffix)] + suffix
+        if candidate not in taken:
+            return candidate
+        number += 1
+
+
+def import_things(level, source, picks, taken="copy"):
+    """Copy the things in `picks` ({(kind, name)}) from the level `source` into `level`, with everything they name
+    (a prefab's light and effect, a gun's ammo type, an ammo type's effects...). A thing whose name `level` already
+    uses is kept as it is ("keep": the import uses this map's one), replaces it ("replace") or comes in as a copy
+    under a new name ("copy"), and the imported things that name it are changed to name the copy. A thing this map
+    already has exactly the same is left as it is whatever `taken` says, and a copy is not made twice: one already
+    here under another name (from an earlier import) is used instead. Returns what was done (ImportResult)."""
+    result = ImportResult()
+    wanted = with_needs(source, picks)
+    result.needed = len(wanted - set(picks))
+    copies = {}
+    for kind in IMPORT_ORDER:
+        mine = getattr(level, kind)
+        for name in sorted(n for k, n in wanted if k == kind):
+            thing = things_named(source, kind)[name]
+            thing = thing.clone() if kind == "prefabs" else replace(thing)
+            existing = things_named(level, kind)
+            if name in existing and taken == "keep":
+                result.kept.append((kind, name))
+                continue
+            for field_name, other in REFERENCES[kind]:          # name the copies made above, not the originals
+                value = getattr(thing, field_name)
+                if isinstance(value, (list, tuple)):
+                    setattr(thing, field_name, type(value)(copies.get((other, v), v) for v in value))
+                else:
+                    setattr(thing, field_name, copies.get((other, value), value))
+            if name in existing and existing[name] == thing:
+                result.same.append((kind, name))                    # nothing to bring in
+                continue
+            if name in existing and taken == "replace":
+                mine[mine.index(existing[name])] = thing
+                result.replaced.append((kind, name))
+            elif name in existing:
+                twin = next((t for t in mine if replace(t, name=name) == thing), None)
+                if twin is not None:                                    # (an earlier import's copy, just the same)
+                    copies[(kind, name)] = twin.name
+                    result.same.append((kind, name))
+                    continue
+                thing.name = unique_thing_name(name, set(existing))
+                copies[(kind, name)] = thing.name
+                result.renamed[(kind, name)] = thing.name
+                mine.append(thing)
+            else:
+                mine.append(thing)
+                result.added.append((kind, name))
+    level.apply_prefabs()                                       # (copies placed from a replaced prefab follow it)
+    return result
 
 
 def load_or_default(path=MAP_PATH):

@@ -334,3 +334,25 @@ def test_the_preview_draws_a_tinted_effect_in_its_tint(ed):
     white.fill((200, 200, 200))
     assert map_editor.recolored(white, color_matrix(0.0, 0, 255, 255)).get_at((0, 0))[:3] == (0, 200, 200)
     assert white.get_at((0, 0))[:3] == (200, 200, 200)                      # the original is left alone
+
+
+# ------------------------------------------------------------------ the 3D view beside the Effects section
+
+def test_the_3d_view_stays_open_beside_the_effects_section_and_shows_the_effect_changing(ed):
+    ed.level.effects = [Effect("Sparks", count=4)]
+    ed.level.entities = [Entity(4.5, 4.5, emits="Sparks", mode="scenery", effect="none")]
+    ed.set_preview(True)
+    ed.do("effects")
+    ed.effect_selected = 0
+    ed.update(0.0, [0] * 512)
+    ed.draw(pygame.display.get_surface())
+    column, pane, area = ed.preview_column(), ed.details_rect(), ed.map_area()
+    assert column is not None and pane is not None
+    assert area.right <= pane.x and pane.right <= column.x            # effects, their settings, the 3D view
+    assert ed.preview.particles.effects["Sparks"].count == 4
+    ed.set_effect("count", 9)                                          # edited in the Details pane
+    ed.preview.last_build = -1e9                                       # (no wait for the rebuild throttle)
+    ed.update(0.0, [0] * 512)
+    assert ed.preview.particles.effects["Sparks"].count == 9           # the 3D view plays the new one
+    ed.do("lights")
+    assert ed.preview_column() is None                                 # (the Lights section has its own preview)

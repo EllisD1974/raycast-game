@@ -54,7 +54,7 @@ def draw(renderer, world, x, y, angle, span=0, z=0.0):
     render_scene(fb, player.x, player.y, player.eye_z, span, math.cos(angle), math.sin(angle),
                  -math.sin(angle) * renderer.half_fov_tan, math.cos(angle) * renderer.half_fov_tan,
                  HEIGHT / 2, renderer.focal, world.floor_plane, world.ceil_plane, world.span_on,
-                 world.solid_from, world.pane_tex, world.pane_top, world.wall_tex, world.floor_tex, world.ceil_tex, renderer.textures,
+                 world.solid_from, world.pane_tex, world.pane_top, world.wall_tex, world.wall_sides, world.floor_tex, world.ceil_tex, renderer.textures,
                  MAX_DEPTH, FOG_DIST, sentinel)
     return fb, sentinel
 

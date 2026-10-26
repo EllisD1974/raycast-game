@@ -10,8 +10,14 @@ Requires [uv](https://docs.astral.sh/uv/). It installs Python 3.13 and the depen
 
 ## Run
 
-    uv run python main.py            # play (uses maps/map.json)
+    uv run python main.py            # the home screen: host or join a game, or change the settings
+    uv run python main.py --map maps/map.json    # straight into a map, as the editor's Play does
     uv run python map_editor.py      # edit a map (F5 saves and plays)
+
+The home screen's **Host game** picks a map from the `maps` folder, a password (needed) and the most players
+to let in (2 to 16, the host included); **Join game** takes the host's IP address, its port (7777, unless the
+host uses another) and its password. The map and the most players are remembered for next time (passwords
+are not). Leaving a game from its menu, or the host ending it, goes back to the home screen.
 
 ## Particle effects
 
@@ -70,6 +76,17 @@ notices within a second, loads them and sends them to everyone playing, who swit
 rejoining. A reload starts everyone over at the map's start with full health and no guns (scores are
 kept), because the new map may not have the old guns. A map or picture that cannot be read is reported on
 screen and the game carries on with the old one. This works when playing alone too.
+
+The host can also move everyone to another map while playing: Esc opens the menu, and **Host settings >
+Change map** lists the maps in the current map's folder. Everyone switches over the same way, without
+rejoining, and the host's live reload then follows the new map.
+
+In the game, Esc opens a menu: **Resume**, **Settings** (mouse sensitivity and fullscreen, kept between runs),
+**Host settings** (for the host) and **Leave game** (back to the home screen; **Exit game** when the game was
+started straight into a map). Playing alone, the menu pauses the game; in a hosted game
+it carries on for everyone else.
+
+From the command line, without the home screen:
 
     uv run python main.py --host SECRET                      # host (listens on 0.0.0.0:7777)
     uv run python main.py --join 127.0.0.1 SECRET            # join (use the host's address)

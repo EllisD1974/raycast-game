@@ -8,7 +8,7 @@ TILE = 32                       # texture size in pixels
 # view
 WIDTH, HEIGHT = 640, 360        # internal render resolution (16:9)
 FOV_DEG = 66.0
-MAX_DEPTH = 20.0
+MAX_DEPTH = 100.0               # farthest a ray looks: rays stop at the first wall, so this only costs on long open sight lines
 FPS_CAP = 120                   # the game never runs faster than this many frames a second
 FOG_DIST = 12.0                 # distance at which surfaces reach minimum brightness
 

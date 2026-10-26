@@ -1,6 +1,8 @@
 """Map editor for the simple raycaster.
 
 Run:  python map_editor.py [maps/map.json]      (opens maximized)
+      Without a map it opens the one edited last (made, opened or given here), or maps/map.json the first
+      time. Which one that was is kept in %LOCALAPPDATA%/raycast-game/editor.json.
 
 A map has any number of floors stacked on top of each other. The ground floor exists everywhere;
 higher floors have a room only where you paint one. Pick the floor you are editing from the
@@ -18,6 +20,12 @@ A map has several layers; you edit one at a time (keys 1-7 or the Layer buttons)
   5 CeilH      ceiling height of each cell (tall rooms, low tunnels)
   6 Ramps      ramp direction; a run of ramp cells slopes from the floor before it to the floor
                after it. R rotates the direction.
+  8 WallSide   the texture on one side of a wall: the side nearest the mouse in a wall cell is the one
+               painted (Paint, or a Shape: the side picked where the drag starts), right-click / Erase
+               puts the wall's own tile back on it, Fill does that side of the whole wall, Pick takes it.
+               From / To (second toolbar row) limit it to a band of heights above the wall's foot, with
+               the wall's own tile above and below: From 0 starts at the foot, To "top" ends at the top
+               ("Full height" sets both back).
 
 A higher floor starts empty. Painting FloorH or CeilH on it creates the room in that cell, using
 the other brush value for the missing height, and lowers the ceiling of the floor below there to
@@ -47,13 +55,44 @@ Textures: edit textures.png in any image editor and the editor picks the change 
 within a moment (the atlas, the map and the 3D view all update); F6 or the "Reload tex" button
 does it on demand. A file that can't be read leaves the old textures in place.
 
+Rulers along the top and left of the map count the cells (a tick on every grid line, numbers as often as
+they fit), light up the cell under the mouse, and mark the middle of the map on each axis with a triangle,
+as do small triangles on the map's border.
+
 Map size: the Edge buttons add (+) or remove (-) a column or row on one side: L left, R right,
 T top, B bottom. Cells, the start and the 3D camera stay where they are on the map.
 
 Tools: B paint, E erase, F fill, I pick from the map, S set the start (on the floor you are
 editing; click it again to rotate), T stairs (drag a line on the FloorH layer: heights rise by
-the Step each cell, starting at the brush value). Ctrl+Z / Ctrl+Y undo / redo, Ctrl+S save,
+the Step each cell, starting at the brush value), H shapes (drag a line, box or ellipse, outline
+or filled, chosen on the second toolbar row; it paints what the brush paints on the layer you are
+on, right-drag erases the shape, Shift makes a square or circle, Esc cancels).
+Ctrl+Z / Ctrl+Y undo / redo, Ctrl+S save,
 F5 save and play, Home reset view, Tab / Shift+Tab switch floor, F2 rename floor.
+
+New asks for the new map's name and saves a blank map as <name>.json in the folder of the map being
+edited, so every new map is its own file (an existing file is never overwritten). Open (Ctrl+O) lists
+the maps in that folder to switch to another one: click one and Open, double-click it, or pick with the
+arrow keys and Enter. Save, Reload and Play work on the map that was made or opened last.
+Import brings prefabs, lights, effects, guns and ammo types in from another map in that folder: pick the map,
+tick what to bring (a group's heading ticks it all), and choose what happens when a name is already used here:
+keep this map's, replace it, or add the imported one as a copy with a new name. Whatever the picked things use
+comes too (a prefab's light and effect, a gun's ammo type and its effects), and anything this map already has
+exactly the same is left alone. One undo step takes the whole import back.
+
+Items hang on a wall when added with a click near the side of the cell that has the wall (the edge lights
+up): they are then a flat picture against the wall, facing into the cell, at their Lift above the floor.
+The item's "On wall" setting moves it onto another wall of its cell, or off the wall.
+
+Spawn points (the Spawn tool, O): where players come into the game. Click an open cell to put one there
+with the Order shown on the second toolbar row (Order- / Order+, or [ and ]); click one again to give it
+that order, or (if it has it already) to turn it a quarter; right-click removes it. Players come in at the
+lowest order that has a spawn point not yet used, picked at random among those; once all have been used it
+starts over. A map with no spawn points uses the Start (S).
+
+Each placed item has an Elevation of its own ("This copy only" in its pane, or [ and ] with the item
+selected; Shift for bigger steps): how much higher or lower than its settings put it this one copy sits, on
+a wall or not. A prefab never changes it, and changing it moves no other copy.
 
 Items (the Entity tool, N): click an empty cell to add an item there (in the middle of the cell, on
 the floor you are editing), or click an existing item to select it. A selected item opens the
@@ -130,6 +169,7 @@ the small marks drawn on the map: the orange dot for a room on a floor above, th
 ring when the start is on another floor), red outlines on problem cells, faded floors and walls,
 ramp arrows and height colors.
 """
+import json
 import math
 import os
 import subprocess
@@ -145,8 +185,9 @@ from constants import FOV_DEG, HEIGHT, MOUSE_SENSITIVITY, PLAYER_HEIGHT, TILE, W
 from mapfile import (ANIMATION_KINDS, ANIMATION_LABELS, DEFAULTS, EDIT_LAYERS, EFFECT_LABELS, ENTITY_EFFECTS,
                      ENTITY_MODES, GUN_MODE_LABELS, GUN_MODES, MAP_PATH, MAX_HIT_NAMES, MAX_NAME, MAX_NAME_LENGTH, MIN_WALL_GAP,
                      EFFECT_AIM_LABELS, EFFECT_AIMS, EFFECT_COLOR_LABELS, EFFECT_COLORS, EFFECT_KIND_LABELS, EFFECT_KINDS, MIN_AMBIENT, MODE_LABELS, SHOT_LABELS, SHOT_TYPES, Animation, AmmoType, Effect,
-                     Entity, Gun, Level, Light, default_level,
-                     grid_name, load_level, save_level, split_grid_name)
+                     Entity, Gun, Level, Light, MAX_ELEVATION, MAX_SPAWN_ORDER, Spawner, SIDE_VECTORS, SIDES, WALL_LABELS, default_level, mounted_position,
+                     IMPORT_KINDS, TAKEN_CHOICES, grid_name, import_things, load_level, save_level, split_grid_name,
+                     things_named, with_needs)
 import details
 import hud
 from entities import describe
@@ -201,18 +242,37 @@ WARN = (255, 120, 100)
 BUTTON = (62, 65, 76)
 BUTTON_HOT = (88, 92, 108)
 BUTTON_ON = (70, 110, 190)
+SHADE = (0, 0, 0, 150)                          # dims the editor behind a dialog
+MAP_NAME_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -_")
+MAX_MAP_NAME = 40                               # characters in a map's file name (without .json)
+SETTINGS_PATH = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), ".config"),
+                             "raycast-game", "editor.json")    # remembers the map edited last
+OPEN_ROWS, OPEN_ROW_H = 12, 26                  # Open dialog: map names shown at once, and their row height
+DOUBLE_CLICK = 0.4                              # seconds between two clicks on a map that open it
 
 STAMP_LAYERS = ("walls", "floor_tex", "ceil_tex")
 ROOM_HEIGHT_LAYERS = ("floor_h", "ceil_h")                  # heights that make up a floor's rooms
 VALUE_LAYERS = ROOM_HEIGHT_LAYERS + ("wall_h",)             # every layer painted with a number
 LAYER_LABELS = {"walls": "Walls", "floor_tex": "FloorTex", "ceil_tex": "CeilTex",
-                "floor_h": "FloorH", "ceil_h": "CeilH", "ramp": "Ramps", "wall_h": "WallH"}
-LAYER_KEYS = {pygame.K_1 + i: name for i, name in enumerate(EDIT_LAYERS)}
-TOOLS = {"paint": "B", "erase": "E", "fill": "F", "pick": "I", "start": "S", "stairs": "T", "camera": "C",
-         "entity": "N"}
+                "floor_h": "FloorH", "ceil_h": "CeilH", "ramp": "Ramps", "wall_h": "WallH", "sides": "WallSide"}
+EDITOR_LAYERS = EDIT_LAYERS + ("sides",)                    # the stored layers, and the sides of walls
+TILE_LAYERS = STAMP_LAYERS + ("sides",)                     # layers painted with atlas tiles
+LAYER_KEYS = {pygame.K_1 + i: name for i, name in enumerate(EDITOR_LAYERS)}
+SIDE_STEP = 0.1                                 # From- / From+ / To- / To+ change a wall side's band by this
+MAX_SIDE_BAND = 8.0
+PARTIAL_SIDE = (90, 220, 230)                   # outline of a wall side whose own tile covers only a band of it
+RULER = 22                                      # width of the rulers along the map's top and left, in pixels
+RULER_LABEL_STEPS = (1, 2, 5, 10, 20, 50, 100)   # cells between ruler numbers: the first that leaves room
+ELEVATION_STEP = 0.05                           # [ / ] and the Elevation row move a placed item up or down this much
+SPAWN_FILL, SPAWN_EDGE = (90, 170, 255), (15, 40, 90)   # a spawn point on the map
+MOUNT_ZONE = 0.3                                # an item clicked this close (in cells) to a walled side hangs on it
+TOOLS = {"paint": "B", "erase": "E", "fill": "F", "pick": "I", "start": "S", "spawn": "O", "stairs": "T",
+         "shape": "H", "camera": "C", "entity": "N"}
 TOOL_KEYS = {pygame.K_b: "paint", pygame.K_e: "erase", pygame.K_f: "fill",
-             pygame.K_i: "pick", pygame.K_s: "start", pygame.K_t: "stairs", pygame.K_c: "camera",
-             pygame.K_n: "entity"}
+             pygame.K_i: "pick", pygame.K_s: "start", pygame.K_o: "spawn", pygame.K_t: "stairs", pygame.K_h: "shape",
+             pygame.K_c: "camera", pygame.K_n: "entity"}
+SHAPES = {"line": "Line", "box": "Box", "filled_box": "Filled box", "ellipse": "Ellipse",
+          "filled_ellipse": "Filled ellipse"}           # what the Shape tool draws, and its button
 ENTITY_MODE_COLORS = {"once": (255, 255, 255), "respawn": (90, 210, 255), "persistent": (110, 230, 120),
                        "scenery": (200, 150, 255)}
 FX_CELL = 70                                    # pixels a cell is drawn at in an effect's preview
@@ -249,6 +309,41 @@ class PreviewFloor:
 ENTITY_FIRST_TILE = 10                          # the first item sprite in the stock atlas (the gem)
 RAMP_NAMES = {1: "East", 2: "West", 3: "South", 4: "North"}
 RAMP_VECTORS = {1: (1, 0), 2: (-1, 0), 3: (0, 1), 4: (0, -1)}
+
+
+def square_end(a, b):
+    """`b` moved so that the box from `a` to it is square (as big as the longer side), for Shift."""
+    side = max(abs(b[0] - a[0]), abs(b[1] - a[1]))
+    return (a[0] + (side if b[0] >= a[0] else -side), a[1] + (side if b[1] >= a[1] else -side))
+
+
+def shape_cells(kind, a, b):
+    """The grid cells of a shape (one of SHAPES) dragged from cell a to cell b. Boxes and ellipses fill the
+    box with a and b at opposite corners; an ellipse is the cells whose centers are inside it, and its
+    outline the ones of those next to (or diagonal to) the outside. Lines and outlines join cells side to side,
+    never only at a corner, so a wall drawn with them has no diagonal gap for light (or a player) to slip through."""
+    if kind == "line":
+        cells = line_cells(a, b)
+        joined = cells[:1]
+        for (px, py), (x, y) in zip(cells, cells[1:]):
+            if px != x and py != y:
+                joined.append((x, py))                  # a diagonal step: fill the corner
+            joined.append((x, y))
+        return joined
+    x0, x1 = sorted((a[0], b[0]))
+    y0, y1 = sorted((a[1], b[1]))
+    box = [(x, y) for y in range(y0, y1 + 1) for x in range(x0, x1 + 1)]
+    if kind == "filled_box":
+        return box
+    if kind == "box":
+        return [(x, y) for x, y in box if x in (x0, x1) or y in (y0, y1)]
+    rx, ry = (x1 - x0 + 1) / 2, (y1 - y0 + 1) / 2
+    cx, cy = x0 + rx, y0 + ry
+    inside = {(x, y) for x, y in box if ((x + 0.5 - cx) / rx) ** 2 + ((y + 0.5 - cy) / ry) ** 2 <= 1.0}
+    if kind == "filled_ellipse":
+        return [cell for cell in box if cell in inside]
+    return [(x, y) for x, y in box if (x, y) in inside
+            and any((x + dx, y + dy) not in inside for dx in (-1, 0, 1) for dy in (-1, 0, 1))]
 
 
 def line_cells(a, b):
@@ -330,9 +425,34 @@ def default_brush(grid):
     return 1.5 * floor if layer == "floor_h" else 1.5 * floor + 1.5
 
 
+def last_map(settings=SETTINGS_PATH):
+    """The map edited last, as remembered in `settings`, or None if there is none or it is gone."""
+    try:
+        with open(settings, encoding="utf-8") as f:
+            path = json.load(f).get("last_map")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return path if isinstance(path, str) and os.path.isfile(path) else None
+
+
+def remember_map(path, settings=SETTINGS_PATH):
+    """Remember `path` in `settings` as the map edited last. Not being able to write it changes nothing else."""
+    try:
+        os.makedirs(os.path.dirname(settings), exist_ok=True)
+        with open(settings, "w", encoding="utf-8") as f:
+            json.dump({"last_map": os.path.abspath(path)}, f)
+    except OSError:
+        pass
+
+
 class Editor:
-    def __init__(self, path):
+    def __init__(self, path, settings=None):
+        """Edit the map at `path` (a blank one if the file is not there yet). `settings` is the file to remember
+        the map being edited in (see last_map), or None not to remember it."""
         self.path = path
+        self.settings = settings
+        if settings:
+            remember_map(path, settings)
         self._scaled = {}
         self._atlas_stamp = None                # modification time of textures.png when last loaded
         self._atlas_check = 0.0                 # when textures.png was last checked for changes
@@ -356,6 +476,14 @@ class Editor:
         self.dropdown_open = False
         self.show_legend = True                 # the key to the marks on the map (K toggles)
         self.rename = None                      # text being typed while renaming a floor
+        self.new_name = None                    # name being typed in the New map dialog (None: closed)
+        self.new_error = ""                     # why the typed name can't be used, shown in the dialog
+        self.importing = None                   # the Import dialog (an ImportDialog), while it is open
+        self.open_maps = None                   # file names listed in the Open dialog (None: closed)
+        self.open_pick = 0                      # index of the picked one
+        self.open_scroll = 0                    # index of the first one shown
+        self.open_error = ""                    # why the picked map can't be opened, shown in the dialog
+        self.open_click = (None, 0.0)           # (index, time) of the last click on the list, for double-clicks
         self.layer = "walls"
         self.tool = "paint"
         self.entity_brush = Entity(0.0, 0.0, tile=ENTITY_FIRST_TILE)   # settings new items start with
@@ -390,6 +518,13 @@ class Editor:
         self.stair_step = 0.25
         self.atlas_drag = None                  # (start_cell, current_cell) while dragging
         self.stairs_drag = None                 # (start_cell, current_cell) while dragging
+        self.shape = "box"                      # what the Shape tool draws (one of SHAPES)
+        self.shape_drag = None                  # (start_cell, current_cell, erasing) while dragging a shape
+        self.shape_side = None                  # the wall side under the mouse where that drag started
+        self.side_lock = None                   # the wall side a whole shape paints (None: the one at the mouse)
+        self.spawn_order = 0                    # the order the Spawn tool gives the spawn points it places
+        self.side_from = 0.0                    # the band a wall side's own tile covers, above the wall's foot
+        self.side_to = 0.0                      # (0: up to the top)
         self.stroke = None                      # "paint" / "erase" while drawing on the map
         self.last_cell = None
         self.pan_drag = False
@@ -470,8 +605,10 @@ class Editor:
         return pygame.display.get_surface().get_size()
 
     def preview_width(self):
-        """Width of the 3D view's column at the window's right; 0 while the view is hidden."""
-        if not self.show_preview or self.section_open():    # the Guns and Prefabs sections have no use for the 3D view
+        """Width of the 3D view's column at the window's right; 0 while the view is hidden. It stays beside the
+        Prefabs and Effects sections, so editing a prefab or an effect shows it changing in the world (an effect
+        on the items, guns and bullets that use it); the Guns and Lights sections have previews of their own."""
+        if not self.show_preview or (self.section_open() and not (self.prefabs_mode or self.effects_mode)):
             return 0
         return int(min(PREVIEW_MAX_W, max(PREVIEW_MIN_W, (self._size()[0] - PANEL_W) * 0.4)))
 
@@ -590,6 +727,30 @@ class Editor:
                                 action=pick(p.name), icon=p.tile))
         return fields
 
+    def placement_fields(self, e):
+        """The settings that belong to where one placed item is, not to what it is: which wall of its cell it hangs
+        on (when it has walls) and its elevation. Changing them moves this copy only, never a prefab or other copies."""
+        fields = [Field("this_copy", "This copy only", "header", None, None)]
+        cx, cy = math.floor(e.x), math.floor(e.y)
+        walls = tuple(side for side in SIDES
+                      if self.level.is_solid(cx + SIDE_VECTORS[side][0], cy + SIDE_VECTORS[side][1], e.span))
+        if walls or e.wall:
+            fields.append(Field("wall", "On wall", "enum", lambda: e.wall, lambda v: self.mount_entity(e, v),
+                                choices=("",) + tuple(side for side in SIDES if side in walls or side == e.wall),
+                                labels=WALL_LABELS))
+        fields.append(Field("elevation", "Elevation", "num", lambda: e.elevation, lambda v: self.set_elevation(e, v),
+                            step=ELEVATION_STEP, low=-MAX_ELEVATION, high=MAX_ELEVATION))
+        return fields
+
+    def set_elevation(self, e, value):
+        """Raise or lower one placed item (one undo step). Only this item moves: not its prefab, not other copies."""
+        value = round(max(-MAX_ELEVATION, min(MAX_ELEVATION, value)), 4)
+        if value == e.elevation:
+            return
+        self.begin_edit()
+        e.elevation = value
+        self.say(f"Elevation {fmt(value)} (this copy only)")
+
     def linked_fields(self, e):
         """An item placed from a prefab: which prefab it is (change it, or choose none to detach it), buttons to edit
         that prefab or detach this item, and the item's settings, read-only because they come from the prefab."""
@@ -604,6 +765,7 @@ class Editor:
                         text_override=f"Edit {e.prefab} in the Prefabs section"),
                   Field("detach", "Detach", "button", None, None, action=lambda: self.set_instance_prefab(""),
                         text_override="Detach: edit this item on its own"),
+                  *self.placement_fields(e),
                   Field("from_prefab", "This item (set by its prefab)", "header", None, None),
                   info("where", "Where", f"cell {math.floor(e.x)}, {math.floor(e.y)} on {self.level.names[e.span]}"),
                   info("sprite", "Sprite", f"#{e.tile + 1}" + ("" if e.shown else "  (hidden)")),
@@ -644,7 +806,7 @@ class Editor:
             return Field(name, label, kind, (lambda n=name: getattr(e, n)),
                          (lambda v, n=name: self.set_entity(n, v)), **options)
 
-        fields = [field("name", "Name", "text")] if is_prefab else []
+        fields = [field("name", "Name", "text")] if is_prefab else             self.placement_fields(e) + [Field("item_settings", "Item settings", "header", None, None)]
         fields += [field("tile", "Icon" if is_prefab else "Sprite", "tile", low=0, high=len(self.tiles) - 1),
                    field("mode", "Mode", "enum", choices=ENTITY_MODES, labels=MODE_LABELS),
                    field("effect", "Effect", "enum", choices=ENTITY_EFFECTS, labels=EFFECT_LABELS)]
@@ -1389,16 +1551,29 @@ class Editor:
         if self.show_preview:
             row1.append(("btn", "Cam->Start", "camstart"))
         row2 = [("txt", "Layer:", DIM)]
-        row2 += [("btn", f"{LAYER_LABELS[name]}({i + 1})", f"layer:{name}") for i, name in enumerate(EDIT_LAYERS)]
+        row2 += [("btn", f"{LAYER_LABELS[name]}({i + 1})", f"layer:{name}") for i, name in enumerate(EDITOR_LAYERS)]
         row2.append(None)
         if self.layer in VALUE_LAYERS:
             row2 += [("btn", "Val-", "val-"), ("btn", "Val+", "val+"),
                      ("txt", f"value {fmt(self.brush(self.gname()))}", ACCENT)]
         elif self.layer == "ramp":
             row2 += [("btn", "Rotate(R)", "dir"), ("txt", f"rises {RAMP_NAMES[self.ramp_dir]}", ACCENT)]
+        elif self.layer == "sides":
+            row2 += [("btn", "From-", "side_from-"), ("btn", "From+", "side_from+"),
+                     ("txt", f"from {fmt(self.side_from)}", ACCENT),
+                     ("btn", "To-", "side_to-"), ("btn", "To+", "side_to+"),
+                     ("txt", f"to {fmt(self.side_to) if self.side_to else 'top'}", ACCENT),
+                     ("btn", "Full height", "side_full")]
         if self.tool == "stairs":
             row2 += [None, ("btn", "Step-", "step-"), ("btn", "Step+", "step+"),
                      ("txt", f"step {fmt(self.stair_step)}", ACCENT)]
+        if self.tool == "shape":
+            row2 += [None] + [("btn", label, f"shape:{kind}") for kind, label in SHAPES.items()]
+        if self.tool == "spawn":
+            row2 += [None, ("btn", "Order-", "order-"), ("btn", "Order+", "order+"),
+                     ("txt", f"order {self.spawn_order}", ACCENT),
+                     ("txt", f"{len(self.level.spawners)} spawn point{'s' if len(self.level.spawners) != 1 else ''}"
+                             " (0 is used first)", DIM)]
         if self.tool == "entity":
             row2 += [None, ("txt", "Pick what to place in the list on the right, click a cell to place it, or click an item to edit it", DIM)]
         row3 = [("btn", f"{name.capitalize()}({key})", f"tool:{name}") for name, key in TOOLS.items()]
@@ -1406,7 +1581,7 @@ class Editor:
                  ("btn", "Border", "border"), ("txt", "Edge", DIM),
                  *[("btn", f"{side}{sign}", f"edge:{side}{sign}") for side in "LRTB" for sign in "+-"],
                  ("txt", f"{self.level.width}x{self.level.height}".ljust(7), ACCENT), None,
-                 ("btn", "New", "new"), ("btn", "Reload", "reload"), ("btn", "Save", "save"),
+                 ("btn", "New", "new"), ("btn", "Open", "open"), ("btn", "Import", "import"), ("btn", "Reload", "reload"), ("btn", "Save", "save"),
                  ("btn", "Play(F5)", "play")]
         for y, items in zip(ROW_Y, (row1, row2, row3)):
             x = 8
@@ -1463,10 +1638,12 @@ class Editor:
     # ---------------------------------------------------------------- view
 
     def fit_view(self):
+        """Zoom and center the map in the map area, clear of the rulers."""
         area = self.map_area()
-        self.zoom = max(8, min(64, area.w // (self.level.width + 1), area.h // (self.level.height + 1)))
-        self.pan = [(area.w - self.level.width * self.zoom) // 2,
-                    (area.h - self.level.height * self.zoom) // 2]
+        room_w, room_h = area.w - RULER, area.h - RULER
+        self.zoom = max(8, min(64, room_w // (self.level.width + 1), room_h // (self.level.height + 1)))
+        self.pan = [RULER + (room_w - self.level.width * self.zoom) // 2,
+                    RULER + (room_h - self.level.height * self.zoom) // 2]
 
     def cell_at(self, pos):
         area = self.map_area()
@@ -1593,17 +1770,55 @@ class Editor:
         for layer in ROOM_HEIGHT_LAYERS:
             self.level.set(self.gname(layer), x, y, DEFAULTS[self.gname(layer)])
 
+    def side_at(self, pos):
+        """The side ("n", "e", "s" or "w") of the cell under screen point `pos` that the point is nearest to."""
+        cell = self.cell_at(pos)
+        rect = self.cell_rect(*cell)
+        fx = (pos[0] - rect.x) / max(1, rect.w) - 0.5
+        fy = (pos[1] - rect.y) / max(1, rect.h) - 0.5
+        if abs(fx) >= abs(fy):
+            return "e" if fx > 0 else "w"
+        return "s" if fy > 0 else "n"
+
+    def painted_side(self):
+        """The side of a wall that painting on the WallSide layer changes: the one a Shape drag started on,
+        or the one nearest the mouse."""
+        return self.side_lock or self.side_at(self.mouse)
+
+    def step_side_band(self, end, direction):
+        """From- / From+ / To- / To+: move one end of the band a wall side's own tile is painted over. To "top"
+        (0) steps down to just under a standard wall's height; the band never ends where it starts."""
+        if end == "from":
+            self.side_from = round(max(0.0, min(MAX_SIDE_BAND - SIDE_STEP, self.side_from + direction * SIDE_STEP)), 4)
+            if self.side_to and self.side_to <= self.side_from:
+                self.side_to = round(self.side_from + SIDE_STEP, 4)
+        else:
+            to = self.side_to or (1.0 if direction < 0 else 0.0)
+            to = round(to + direction * SIDE_STEP, 4) if to else 0.0
+            if to and to <= self.side_from:
+                to = round(self.side_from + SIDE_STEP, 4)
+            self.side_to = min(MAX_SIDE_BAND, to)
+        self.say(f"Wall side band: from {fmt(self.side_from)} to {fmt(self.side_to) if self.side_to else 'the top'}")
+
+    def set_side(self, cx, cy, side, tile_id):
+        """Give the wall in (cx, cy) tile `tile_id` on one side (0: the wall's own tile), over the band set with
+        From / To. Open cells are left alone."""
+        if self.level.in_bounds(cx, cy) and self.level.walls[cy][cx]:
+            self.level.set(f"side_{side}", cx, cy, tile_id)
+            self.level.set(f"side_{side}_from", cx, cy, self.side_from if tile_id else 0.0)
+            self.level.set(f"side_{side}_to", cx, cy, self.side_to if tile_id else 0.0)
+
+    def side_tile(self, cx, cy, side):
+        """The map id a wall shows on one side: its own for that side, else the wall's."""
+        return self.level.get(f"side_{side}", cx, cy) or self.level.walls[cy][cx]
+
     def paint_at(self, cx, cy):
         layer, level = self.layer, self.level
-        if layer in STAMP_LAYERS:
+        if layer == "sides":
+            self.set_side(cx, cy, self.painted_side(), self.primary_id())
+        elif layer in STAMP_LAYERS:
             for dx, dy, tile_id in self.stamp():
-                x, y = cx + dx, cy + dy
-                if layer == "walls" and level.in_bounds(x, y) and not level.is_solid(x, y, self.floor):
-                    level.set("wall_h", x, y, DEFAULTS["wall_h"])      # a new wall starts full height
-                    level.set("wall_floor", x, y, self.floor)          # ... and on this floor, not the ones below
-                    if self.floor > 0:                                  # its base: this floor's brush height
-                        level.set(self.gname("floor_h"), x, y, self.brush(self.gname("floor_h")))
-                level.set(self.gname(), x, y, tile_id)
+                self.put_tile(cx + dx, cy + dy, tile_id)
         elif layer == "wall_h":
             if level.in_bounds(cx, cy) and level.is_solid(cx, cy, self.floor):   # heights only mean something on walls
                 level.set("wall_h", cx, cy, self.brush_value())
@@ -1618,6 +1833,20 @@ class Editor:
             self.set_height(cx, cy, layer, self.brush_value())
         else:
             level.set(self.gname(), cx, cy, self.brush_value())
+
+    def put_tile(self, x, y, tile_id):
+        """Set one cell of a tile layer (walls, floor or ceiling texture) to `tile_id`."""
+        level = self.level
+        if self.layer == "walls" and level.in_bounds(x, y) and not level.walls[y][x]:
+            for side in SIDES:                                  # a new wall shows its own tile on every side
+                for name in (f"side_{side}", f"side_{side}_from", f"side_{side}_to"):
+                    level.set(name, x, y, DEFAULTS[name])
+        if self.layer == "walls" and level.in_bounds(x, y) and not level.is_solid(x, y, self.floor):
+            level.set("wall_h", x, y, DEFAULTS["wall_h"])      # a new wall starts full height
+            level.set("wall_floor", x, y, self.floor)          # ... and on this floor, not the ones below
+            if self.floor > 0:                                  # its base: this floor's brush height
+                level.set(self.gname("floor_h"), x, y, self.brush(self.gname("floor_h")))
+        level.set(self.gname(), x, y, tile_id)
 
     def edits_upper_wall(self, cx, cy):
         """True when the FloorH / CeilH layers here set the base / top of a wall that starts on the
@@ -1641,7 +1870,12 @@ class Editor:
                 or (explicit_counts and level.has_explicit_wall_ceiling(x, y)))
 
     def erase_at(self, cx, cy):
-        if self.layer == "walls":
+        if self.layer == "sides":
+            self.set_side(cx, cy, self.painted_side(), 0)
+        elif self.layer == "walls":
+            for side in SIDES:                                          # ... and its sides' own tiles
+                for name in (f"side_{side}", f"side_{side}_from", f"side_{side}_to"):
+                    self.level.set(name, cx, cy, DEFAULTS[name])
             self.level.set("wall_h", cx, cy, DEFAULTS["wall_h"])       # an erased wall forgets its height
             self.level.set("wall_ceil", cx, cy, DEFAULTS["wall_ceil"])  # ... and its ceiling
             self.level.set("wall_floor", cx, cy, DEFAULTS["wall_floor"])
@@ -1659,6 +1893,18 @@ class Editor:
         (self.erase_at if self.stroke == "erase" else self.paint_at)(*cell)
 
     def fill(self, cell):
+        if self.layer == "sides":                       # that side of the whole wall, where it faces open space
+            side = self.side_at(self.mouse)
+            dx, dy = SIDE_VECTORS[side]
+            group = [(x, y) for x, y in self.level.wall_region(*cell)
+                     if not (self.level.in_bounds(x + dx, y + dy) and self.level.walls[y + dy][x + dx])]
+            if not group:
+                self.say("Click a wall to give one side of the whole wall the selected tile")
+                return
+            self.begin_edit()
+            for x, y in group:
+                self.set_side(x, y, side, self.primary_id())
+            return
         level, grid, value = self.level, self.gname(), self.brush_value()
         if self.layer == "wall_h":                      # sets the height of the whole wall you click
             group = level.wall_region(*cell)
@@ -1683,6 +1929,13 @@ class Editor:
         """Start of a click on the map: left uses the active tool, right always erases."""
         if button == 3 and self.tool == "entity":
             self.remove_entities(cell)
+            return
+        if self.tool == "spawn":
+            (self.remove_spawners if button == 3 else self.place_spawner)(cell)
+            return
+        if self.tool == "shape":
+            self.shape_drag = (cell, cell, button == 3)
+            self.shape_side = self.side_at(self.mouse)  # (the WallSide layer paints the side picked here)
             return
         if button == 3:
             self.begin_edit()
@@ -1715,6 +1968,30 @@ class Editor:
         return [e for e in self.level.entities
                 if (math.floor(e.x), math.floor(e.y)) == tuple(cell) and e.span == self.floor]
 
+    def mount_side(self, cell):
+        """The side of open cell `cell` that the mouse is near and that has a wall on the floor being edited
+        (an item added there hangs on that wall), or None."""
+        level = self.level
+        if not level.in_bounds(*cell) or not level.span_present(self.floor, *cell) or level.is_solid(*cell, self.floor):
+            return None
+        rect = self.cell_rect(*cell)
+        fx = (self.mouse[0] - rect.x) / max(1, rect.w)
+        fy = (self.mouse[1] - rect.y) / max(1, rect.h)
+        near = {"w": fx, "e": 1.0 - fx, "n": fy, "s": 1.0 - fy}
+        side = min(near, key=near.get)
+        dx, dy = SIDE_VECTORS[side]
+        if near[side] > MOUNT_ZONE or not level.is_solid(cell[0] + dx, cell[1] + dy, self.floor):
+            return None
+        return side
+
+    def mount_entity(self, e, wall):
+        """Hang an item on the wall on side `wall` of its cell, or ("") stand it in the middle of the cell."""
+        if e.wall == wall:
+            return
+        self.begin_edit()
+        e.wall = wall
+        e.x, e.y = mounted_position(math.floor(e.x), math.floor(e.y), wall)
+
     def place_entity(self, cell):
         """Entity tool: clicking an item selects it (its settings appear in the Details pane);
         clicking an empty cell adds an item there, in the middle of the cell on the floor being
@@ -1731,13 +2008,13 @@ class Editor:
             self.say("An item needs an open floor or the top of a wall to stand on: no room in this cell on this floor")
             return
         self.begin_edit()
+        wall = self.mount_side(cell) or ""             # (near a walled side: hung on that wall)
+        x, y = mounted_position(*cell, wall)
         prefab = level.prefab_named(self.place_prefab) if self.place_prefab else None
         if prefab is not None:                      # an instance of the chosen prefab: it follows the prefab
-            level.entities.append(prefab.clone(x=cell[0] + 0.5, y=cell[1] + 0.5, span=self.floor, name="",
-                                               prefab=prefab.name))
+            level.entities.append(prefab.clone(x=x, y=y, span=self.floor, name="", prefab=prefab.name, wall=wall))
         else:
-            level.entities.append(self.entity_brush.clone(x=cell[0] + 0.5, y=cell[1] + 0.5, span=self.floor,
-                                                          animations=[]))
+            level.entities.append(self.entity_brush.clone(x=x, y=y, span=self.floor, animations=[], wall=wall))
         self.select_entity(level.entities[-1])
         self.say("Added an item: change its settings in the Details pane" if prefab is None
                  else f"Placed {prefab.name}: edit it in the Prefabs section")
@@ -1760,6 +2037,39 @@ class Editor:
         else:
             self.say("The camera can't stand there (wall, no room, or too low)")
 
+    def spawners_in(self, cell):
+        """The spawn points in this cell on the floor being edited."""
+        return [s for s in self.level.spawners
+                if (math.floor(s.x), math.floor(s.y)) == tuple(cell) and s.span == self.floor]
+
+    def place_spawner(self, cell):
+        """Spawn tool: add a spawn point in the middle of an open cell, with the chosen order. Clicking one gives
+        it the chosen order, or turns it a quarter if it has that order already."""
+        level = self.level
+        if not level.in_bounds(*cell):
+            return
+        found = self.spawners_in(cell)
+        if not found and not level.span_present(self.floor, *cell):
+            self.say("A spawn point needs open floor: no room in this cell on this floor")
+            return
+        self.begin_edit()
+        if not found:
+            level.spawners.append(Spawner(cell[0] + 0.5, cell[1] + 0.5, self.floor, 0.0, self.spawn_order))
+            self.say(f"Spawn point {len(level.spawners)}, order {self.spawn_order} (click it again to turn it)")
+        elif found[0].order != self.spawn_order:
+            found[0].order = self.spawn_order
+            self.say(f"Spawn point now has order {self.spawn_order}")
+        else:
+            found[0].angle = (found[0].angle + math.pi / 2) % math.tau
+            self.say(f"Spawn point faces {math.degrees(found[0].angle):.0f} deg")
+
+    def remove_spawners(self, cell):
+        found = self.spawners_in(cell)
+        if found:
+            self.begin_edit()
+            self.level.spawners = [s for s in self.level.spawners if s not in found]
+            self.say(f"Removed a spawn point ({len(self.level.spawners)} left)")
+
     def place_start(self, cell):
         level = self.level
         if not level.in_bounds(*cell):
@@ -1777,6 +2087,16 @@ class Editor:
 
     def pick(self, cell):
         if not self.level.in_bounds(*cell):
+            return
+        if self.layer == "sides":
+            if self.level.walls[cell[1]][cell[0]]:
+                side = self.side_at(self.mouse)
+                self.selection = {self.side_tile(*cell, side) - 1}
+                if self.level.get(f"side_{side}", *cell):           # ... and the band it covers
+                    self.side_from = self.level.get(f"side_{side}_from", *cell)
+                    self.side_to = self.level.get(f"side_{side}_to", *cell)
+                self.tool = "paint"
+                self.say(f"Picked tile #{min(self.selection) + 1}")
             return
         value = self.level.get(self.gname(), *cell)
         if self.edits_wall_ceiling(*cell):
@@ -1807,6 +2127,42 @@ class Editor:
         for (x, y), height in steps:
             self.set_height(x, y, "floor_h", height)
         self.say(f"Stairs: {len(steps)} cells, {fmt(steps[0][1])} to {fmt(steps[-1][1])}")
+
+    def shape_drag_cells(self):
+        """The cells the shape being dragged covers now (Shift: a square box or a circle)."""
+        start, end, _erasing = self.shape_drag
+        if self.shape != "line" and self.mods() & pygame.KMOD_SHIFT:
+            end = square_end(start, end)
+        return [cell for cell in shape_cells(self.shape, start, end) if self.level.in_bounds(*cell)]
+
+    def shape_tile(self, cell):
+        """The tile a shape puts in `cell` on a tile layer: one per cell, the selected tiles repeating as a
+        pattern from where the drag started (a single tile just fills the shape)."""
+        stamp = self.stamp()
+        width, height = max(t[0] for t in stamp) + 1, max(t[1] for t in stamp) + 1
+        pattern = {(dx, dy): tile_id for dx, dy, tile_id in stamp}
+        start = self.shape_drag[0]
+        return pattern.get(((cell[0] - start[0]) % width, (cell[1] - start[1]) % height), stamp[0][2])
+
+    def finish_shape(self):
+        """Paint (or erase) every cell of the dragged shape, as the brush would, as one undo step."""
+        cells, erasing = self.shape_drag_cells(), self.shape_drag[2]
+        tiles = {cell: self.shape_tile(cell) for cell in cells} \
+            if not erasing and self.layer in STAMP_LAYERS and self.stamp() else None
+        self.shape_drag = None
+        if not cells:
+            return
+        self.begin_edit()
+        self.side_lock = self.shape_side
+        for cell in cells:
+            if erasing:
+                self.erase_at(*cell)
+            elif tiles is not None:
+                self.put_tile(*cell, tiles[cell])
+            else:
+                self.paint_at(*cell)
+        self.side_lock = None
+        self.say(f"{'Erased' if erasing else 'Drew'} {SHAPES[self.shape].lower()}: {len(cells)} cells")
 
     def finish_atlas_drag(self):
         picked, ctrl = self.drag_indices(), bool(self.mods() & pygame.KMOD_CTRL)
@@ -1862,7 +2218,7 @@ class Editor:
             return
         if self.tool in ("erase", "pick", "start", "stairs"):
             self.tool = "paint"
-        if self.layer not in STAMP_LAYERS:
+        if self.layer not in TILE_LAYERS:
             self.layer = "walls"                        # choosing a tile means you want to paint tiles
             self.say("Switched to the Walls layer (tile selection applies to the texture layers)")
 
@@ -1870,7 +2226,7 @@ class Editor:
 
     def select_floor(self, floor):
         self.floor = max(0, min(floor, self.level.floor_count - 1))
-        self.stairs_drag = None
+        self.stairs_drag = self.shape_drag = None
         e = self.selected_entity()
         if e is not None and e.span != self.floor:
             self.deselect()                             # the item is on another floor
@@ -1956,8 +2312,12 @@ class Editor:
             self.deselect()
             self.say("Prefabs: add one, set its icon and settings, then place it with the Entity tool"
                      if self.prefabs_mode else "Back to the map")
+        elif action.startswith("shape:"):
+            self.shape = action[6:]
+            self.say(f"Shape: {SHAPES[self.shape]} (drag on the map; right-drag erases, Shift: square / circle)")
         elif action.startswith("tool:"):
             self.tool = action[5:]
+            self.shape_drag = None
             self.guns_mode = self.prefabs_mode = self.effects_mode = self.lights_mode = False
             if self.tool != "entity":
                 self.deselect()
@@ -1986,10 +2346,20 @@ class Editor:
             self.delete_floor()
         elif action == "rename":
             self.start_rename()
+        elif action in ("order-", "order+"):
+            self.spawn_order = max(0, min(MAX_SPAWN_ORDER, self.spawn_order + (1 if action == "order+" else -1)))
+            self.say(f"New spawn points get order {self.spawn_order} (click one to give it this order)")
+        elif action in ("val-", "val+") and self.tool == "spawn":
+            self.do("order-" if action == "val-" else "order+")        # [ and ] step the order too
         elif action in ("val-", "val+"):
             self.adjust_value(-VALUE_STEP if action == "val-" else VALUE_STEP)
         elif action == "dir":
             self.ramp_dir = self.ramp_dir % 4 + 1
+        elif action == "side_full":
+            self.side_from = self.side_to = 0.0
+            self.say("Wall side band: the whole height of the side")
+        elif action.startswith("side_"):
+            self.step_side_band(action[5:-1], 1 if action.endswith("+") else -1)
         elif action in ("step-", "step+"):
             delta = -VALUE_STEP if action == "step-" else VALUE_STEP
             self.stair_step = max(-1.0, min(1.0, round(self.stair_step + delta, 4)))
@@ -2002,13 +2372,15 @@ class Editor:
             self.level.fill_border(self.primary_id())
         elif action.startswith("edge:"):
             self.resize_side(action[5], 1 if action[6] == "+" else -1)
-        elif action in ("new", "reload"):
+        elif action in ("new", "open", "reload"):
             if self.dirty and self.confirm != action:
                 self.confirm = action
                 self.say(f"Unsaved changes: click {action.capitalize()} again to discard them", 6)
                 return
             self.confirm = None
-            self.new_map() if action == "new" else self.reload()
+            {"new": self.start_new_map, "open": self.start_open, "reload": self.reload}[action]()
+        elif action == "import":
+            self.start_import()
         elif action == "save":
             self.save()
         elif action == "play":
@@ -2125,28 +2497,137 @@ class Editor:
             name = self.gname()
             self.value[name] = max(low, min(high, round(self.brush(name) + delta, 4)))
 
-    def new_map(self):
+    def start_new_map(self):
+        """Open the New map dialog, offering a name no map in the folder has yet."""
+        name, number = "new_map", 1
+        while os.path.exists(self.map_file(name)):
+            number += 1
+            name = f"new_map_{number}"
+        self.new_name, self.new_error = name, ""
+
+    def map_file(self, name):
+        """Where the map called `name` is saved: <name>.json next to the map being edited."""
+        return os.path.join(self.map_folder(), name + ".json")
+
+    def finish_new_map(self, commit=True):
+        """Make the blank map under the typed name and save it, so the editor works on that file from now
+        on. A name that is empty or already a file keeps the dialog open with the reason."""
+        if not commit:
+            self.new_name, self.new_error = None, ""
+            self.say("No new map made")
+            return
+        name = (self.new_name or "").strip()
+        path = self.map_file(name)
+        if not name:
+            self.new_error = "Type a name for the map"
+            return
+        if os.path.exists(path):
+            self.new_error = f"{name}.json already exists: pick another name"
+            return
+        level = self.blank_map()
+        try:
+            save_level(path, level)
+        except OSError as e:
+            self.new_error = f"Can't save {name}.json: {e.strerror or e}"
+            return
+        self.new_name, self.new_error = None, ""
+        self.switch_to(path)
+        self.start_over(level)
+        self.say(f"New blank map (16x16), saved as {name}.json")
+
+    @staticmethod
+    def blank_map():
+        level = Level.blank(16, 16)
+        level.start_x = level.start_y = 1.5
+        return level
+
+    def start_over(self, level):
+        """Edit `level` from here on (a new, opened or reloaded map), with no undo history."""
         self.undo.clear()
         self.redo.clear()
-        self.level = Level.blank(16, 16)
-        self.level.start_x = self.level.start_y = 1.5
+        self.level = level
         self.clamp_floor()
         self.dirty = False
         self.revision += 1
         self.fit_view()
-        self.say("New blank map (16x16)")
+
+    def switch_to(self, path):
+        """Work on the map file at `path` from now on (and remember it, if remembering)."""
+        self.path = path
+        if self.settings:
+            remember_map(path, self.settings)
+
+    def map_folder(self):
+        return os.path.dirname(os.path.abspath(self.path))
+
+    def start_import(self):
+        """Open the Import dialog on the maps in this map's folder (not this one)."""
+        names = [n for n in map_files(self.map_folder()) if n != os.path.basename(self.path)]
+        if not names:
+            self.say("There are no other maps in this folder to import from")
+            return
+        self.importing = ImportDialog(self.map_folder(), names, self.level, self.font, self.small, self.tiles)
+
+    def after_import(self, outcome):
+        """What the Import dialog asked for: None (carry on), "close", or ("import", source level, picks, taken)."""
+        if outcome == "close":
+            self.importing = None
+            self.say("Nothing imported")
+        elif isinstance(outcome, tuple):
+            _, source, picks, taken = outcome
+            self.importing = None
+            self.begin_edit()                                   # (one undo step takes it all back)
+            self.say(import_things(self.level, source, picks, taken).summary(), 8)
+
+    def start_open(self):
+        """Open the Open dialog: the maps in the folder of the map being edited, that one picked."""
+        try:
+            names = sorted((n for n in os.listdir(self.map_folder()) if n.lower().endswith(".json")), key=str.lower)
+        except OSError as e:
+            self.say(f"Can't list the maps: {e.strerror or e}")
+            return
+        if not names:
+            self.say("No maps in this folder yet")
+            return
+        current = os.path.basename(self.path)
+        self.open_maps, self.open_error = names, ""
+        self.open_pick = names.index(current) if current in names else 0
+        self.open_scroll = 0
+        self.open_click = (None, 0.0)
+        self.pick_map(self.open_pick)
+
+    def pick_map(self, index):
+        """Pick the map at `index` in the Open dialog, scrolling the list to show it."""
+        self.open_pick = max(0, min(len(self.open_maps) - 1, index))
+        self.open_error = ""
+        if self.open_pick < self.open_scroll:
+            self.open_scroll = self.open_pick
+        elif self.open_pick >= self.open_scroll + OPEN_ROWS:
+            self.open_scroll = self.open_pick - OPEN_ROWS + 1
+
+    def finish_open(self, commit=True):
+        """Edit the picked map from now on. One that can't be read keeps the dialog open with the reason."""
+        if not commit:
+            self.open_maps, self.open_error = None, ""
+            self.say("Kept the map that was open")
+            return
+        name = self.open_maps[self.open_pick]
+        path = os.path.join(self.map_folder(), name)
+        try:
+            level = load_level(path)
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
+            self.open_error = f"Can't open {name}: {e}"[:90]
+            return
+        self.open_maps, self.open_error = None, ""
+        self.switch_to(path)
+        self.start_over(level)
+        self.say(f"Opened {name}")
 
     def reload(self):
         if not os.path.exists(self.path):
             self.say("Nothing saved yet to reload")
             return
-        self.level = load_level(self.path)
-        self.clamp_floor()
-        self.undo.clear()
-        self.redo.clear()
-        self.dirty = False
-        self.revision += 1
-        self.fit_view()
+        self.start_over(load_level(self.path))
         self.say(f"Reloaded {os.path.basename(self.path)}")
 
     def save(self):
@@ -2211,6 +2692,31 @@ class Editor:
             self.on_wheel(e)
 
     def on_key(self, e):
+        if self.importing is not None:                  # the Import dialog takes every key
+            self.after_import(self.importing.key(e))
+            return
+        if self.open_maps is not None:                  # the Open dialog takes every key
+            if e.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                self.finish_open(True)
+            elif e.key == pygame.K_ESCAPE:
+                self.finish_open(False)
+            elif e.key in (pygame.K_UP, pygame.K_DOWN, pygame.K_PAGEUP, pygame.K_PAGEDOWN):
+                step = {pygame.K_UP: -1, pygame.K_DOWN: 1, pygame.K_PAGEUP: -OPEN_ROWS, pygame.K_PAGEDOWN: OPEN_ROWS}
+                self.pick_map(self.open_pick + step[e.key])
+            elif e.key in (pygame.K_HOME, pygame.K_END):
+                self.pick_map(0 if e.key == pygame.K_HOME else len(self.open_maps) - 1)
+            return
+        if self.new_name is not None:                   # the New map dialog takes every key
+            char = getattr(e, "unicode", "")
+            if e.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                self.finish_new_map(True)
+            elif e.key == pygame.K_ESCAPE:
+                self.finish_new_map(False)
+            elif e.key == pygame.K_BACKSPACE:
+                self.new_name, self.new_error = self.new_name[:-1], ""
+            elif char and char in MAP_NAME_CHARS and len(self.new_name) < MAX_MAP_NAME:
+                self.new_name, self.new_error = self.new_name + char, ""
+            return
         if self.rename is not None:                     # typing a floor name takes every key
             char = getattr(e, "unicode", "")
             if e.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
@@ -2237,7 +2743,10 @@ class Editor:
             return
         ctrl = bool(e.mod & pygame.KMOD_CTRL)
         if e.key == pygame.K_ESCAPE:
-            if self.dropdown_open:
+            if self.shape_drag:
+                self.shape_drag = None
+                self.say("Shape cancelled")
+            elif self.dropdown_open:
                 self.dropdown_open = False
             elif self.menu_open is not None:
                 self.menu_open = None
@@ -2247,6 +2756,8 @@ class Editor:
             self.delete_selected()
         elif ctrl and e.key == pygame.K_s:
             self.do("save")
+        elif ctrl and e.key == pygame.K_o:
+            self.do("open")
         elif ctrl and e.key == pygame.K_z:
             self.do("redo" if e.mod & pygame.KMOD_SHIFT else "undo")
         elif ctrl and e.key == pygame.K_y:
@@ -2283,6 +2794,10 @@ class Editor:
             self.do("layer:" + LAYER_KEYS[e.key])
         elif e.key in TOOL_KEYS:
             self.do("tool:" + TOOL_KEYS[e.key])
+        elif e.key in (pygame.K_LEFTBRACKET, pygame.K_RIGHTBRACKET) and self.selected_entity() is not None:
+            item = self.selected_entity()                   # raise / lower the selected item
+            step = ELEVATION_STEP * (5 if e.mod & pygame.KMOD_SHIFT else 1)
+            self.set_elevation(item, item.elevation + (step if e.key == pygame.K_RIGHTBRACKET else -step))
         elif e.key == pygame.K_LEFTBRACKET:
             self.do("val-")
         elif e.key == pygame.K_RIGHTBRACKET:
@@ -2292,6 +2807,21 @@ class Editor:
 
     def on_mouse_down(self, e):
         self.mouse = e.pos
+        if self.importing is not None:                  # the Import dialog takes every click
+            if e.button == 1:
+                self.after_import(self.importing.click(e.pos, self._size()))
+            return
+        if self.open_maps is not None:                  # the Open dialog takes every click
+            if e.button == 1:
+                self.open_dialog_click(e.pos)
+            return
+        if self.new_name is not None:                   # the New map dialog takes every click
+            _box, _field, create, cancel = self.new_map_rects()
+            if e.button == 1 and create.collidepoint(e.pos):
+                self.finish_new_map(True)
+            elif e.button == 1 and cancel.collidepoint(e.pos):
+                self.finish_new_map(False)
+            return
         if self.rename is not None:                     # clicking away keeps the typed name
             self.finish_rename(True)
             return
@@ -2347,7 +2877,7 @@ class Editor:
             elif self.lights_mode:
                 if e.button == 1:
                     self.lights_click(e.pos)
-            elif e.button in (1, 3):
+            elif e.button in (1, 3) and not self.over_ruler(e.pos):
                 self.confirm = None
                 self.map_click(self.cell_at(e.pos), e.button)
 
@@ -2357,6 +2887,8 @@ class Editor:
             self.finish_atlas_drag()
         if e.button == 1 and self.stairs_drag:
             self.finish_stairs()
+        if self.shape_drag and e.button == (3 if self.shape_drag[2] else 1):
+            self.finish_shape()
         if e.button in (1, 3):
             self.stroke = self.last_cell = None
         if e.button == 1:
@@ -2381,6 +2913,8 @@ class Editor:
             self.atlas_drag = (self.atlas_drag[0], ((x - rect.x) // TILE, (y - rect.y) // TILE))
         elif self.stairs_drag:
             self.stairs_drag = (self.stairs_drag[0], self.cell_at(e.pos))
+        elif self.shape_drag:
+            self.shape_drag = (self.shape_drag[0], self.cell_at(e.pos), self.shape_drag[2])
         elif self.pan_drag:
             self.pan[0] += e.rel[0]
             self.pan[1] += e.rel[1]
@@ -2392,6 +2926,15 @@ class Editor:
             self.revision += 1
 
     def on_wheel(self, e):
+        if self.importing is not None:                  # the wheel scrolls the Import dialog's list
+            self.importing.wheel(e.y)
+            return
+        if self.open_maps is not None:                  # the wheel scrolls the Open dialog's list
+            most = max(0, len(self.open_maps) - OPEN_ROWS)
+            self.open_scroll = max(0, min(most, self.open_scroll - e.y))
+            return
+        if self.new_name is not None:
+            return
         pane = self.details_rect()
         if pane is not None and pane.collidepoint(self.mouse):      # the wheel steps the value under it
             self.details_wheel(self.mouse, e.y)
@@ -2438,6 +2981,11 @@ class Editor:
         self.draw_status(screen)
         self.draw_toolbar(screen)
         self.draw_dropdown(screen)
+        self.draw_new_map_dialog(screen)
+        self.draw_open_dialog(screen)
+        if self.importing is not None:
+            self.draw_shade(screen)
+            self.importing.draw(screen, self._size(), self.mouse)
         title = f"Map editor - {os.path.basename(self.path)}{' *' if self.dirty else ''}"
         if pygame.display.get_caption()[0] != title:
             pygame.display.set_caption(title)
@@ -2464,6 +3012,12 @@ class Editor:
             screen.blit(self.tile_surface(wall - 1, dim=layer != "walls"), rect)
             if level.short_wall_top(x, y) is not None:
                 draw_short_wall_mark(screen, rect)
+            if layer == "sides":
+                for side in SIDES:
+                    if level.get(f"side_{side}", x, y):
+                        partial = level.get(f"side_{side}_from", x, y) or level.get(f"side_{side}_to", x, y)
+                        self.draw_side(screen, rect, side, level.get(f"side_{side}", x, y),
+                                       outline=PARTIAL_SIDE if partial else ACCENT)
             return
         if layer == "wall_h":                           # heights live on walls: open cells are just context
             pygame.draw.rect(screen, EMPTY_CELL, rect)
@@ -2475,7 +3029,7 @@ class Editor:
             screen.blit(self.tile_surface(grids[grid_name("floor_tex", below)][y][x] - 1, dim=True), rect)
             return
         g = self.gname
-        if layer == "walls":
+        if layer in ("walls", "sides"):
             pygame.draw.rect(screen, EMPTY_CELL, rect)
         elif layer in ("floor_tex", "ceil_tex"):
             screen.blit(self.tile_surface(grids[g()][y][x] - 1), rect)
@@ -2493,6 +3047,22 @@ class Editor:
             self.draw_arrow(screen, rect, grids[g("ramp")][y][x], ACCENT)
         if self.zoom >= 16 and any(level.span_present(s, x, y) for s in range(floor + 1, level.floor_count)):
             draw_upper_mark(screen, rect)
+
+    @staticmethod
+    def side_rect(rect, side):
+        """The strip along one side of a cell's rectangle on the map, a quarter of the cell deep."""
+        depth = max(3, rect.w // 4)
+        return {"n": pygame.Rect(rect.x, rect.y, rect.w, depth), "s": pygame.Rect(rect.x, rect.bottom - depth, rect.w, depth),
+                "w": pygame.Rect(rect.x, rect.y, depth, rect.h), "e": pygame.Rect(rect.right - depth, rect.y, depth, rect.h)}[side]
+
+    def draw_side(self, screen, rect, side, tile_id, alpha=255, outline=ACCENT):
+        """A wall side's own tile, as a strip along that side of the wall's cell (outlined in PARTIAL_SIDE when
+        it covers only a band of the side)."""
+        strip = self.side_rect(rect, side)
+        picture = pygame.transform.scale(self.tile_surface(tile_id - 1), strip.size)
+        picture.set_alpha(alpha)
+        screen.blit(picture, strip)
+        pygame.draw.rect(screen, outline, strip, 1)
 
     def draw_wall_ceiling(self, screen, x, y, rect):
         """A wall on the CeilH layer where the ceiling over it matters: colored like a ceiling, with
@@ -2552,10 +3122,78 @@ class Editor:
             if x0 <= cx < x1 and y0 <= cy < y1:
                 draw_problem_outline(screen, self.cell_rect(cx, cy))
         self.draw_entities(screen)
+        self.draw_spawners(screen)
         self.draw_start(screen)
         self.draw_camera(screen)
         self.draw_cursor(screen, area)
+        self.draw_center_marks(screen)
+        self.draw_rulers(screen, area)
         screen.set_clip(None)
+
+    def ruler_label_step(self):
+        """Cells between the numbers on the rulers: the smallest step that leaves room for the widest number."""
+        room = self.small.size(str(max(self.level.width, self.level.height)))[0] + 10
+        return next((step for step in RULER_LABEL_STEPS if step * self.zoom >= room), RULER_LABEL_STEPS[-1])
+
+    def map_center(self):
+        """The middle of the map on the screen (x, y), in pixels."""
+        origin = self.cell_rect(0, 0)
+        return origin.x + self.level.width * self.zoom / 2, origin.y + self.level.height * self.zoom / 2
+
+    def draw_center_marks(self, screen):
+        """Small triangles on the map's border at the middle of each axis, pointing in (the rulers mark it too)."""
+        origin, z = self.cell_rect(0, 0), self.zoom
+        mx, my = self.map_center()
+        right, bottom = origin.x + self.level.width * z, origin.y + self.level.height * z
+        size = max(4, min(8, z // 3))
+        for edge, inward in ((origin.y - 1, 1), (bottom + 1, -1)):            # top and bottom: the middle column
+            pygame.draw.polygon(screen, ACCENT, [(mx - size, edge - inward * size), (mx + size, edge - inward * size),
+                                                 (mx, edge)])
+        for edge, inward in ((origin.x - 1, 1), (right + 1, -1)):             # left and right: the middle row
+            pygame.draw.polygon(screen, ACCENT, [(edge - inward * size, my - size), (edge - inward * size, my + size),
+                                                 (edge, my)])
+
+    def draw_rulers(self, screen, area):
+        """The rulers along the top and left of the map area: a tick on every grid line, a number every
+        ruler_label_step() cells, the cell under the mouse lit up, and a triangle at the middle of each axis."""
+        z, level = self.zoom, self.level
+        origin = self.cell_rect(0, 0)
+        top = pygame.Rect(area.x, area.y, area.w, RULER)
+        left = pygame.Rect(area.x, area.y, RULER, area.h)
+        pygame.draw.rect(screen, PANEL_BG, top)
+        pygame.draw.rect(screen, PANEL_BG, left)
+        hover = self.cell_at(self.mouse) if area.collidepoint(self.mouse) else None
+        if hover is not None and level.in_bounds(*hover):           # where the mouse is, on both rulers
+            pygame.draw.rect(screen, BUTTON_HOT, (origin.x + hover[0] * z, top.y, z, RULER))
+            pygame.draw.rect(screen, BUTTON_HOT, (left.x, origin.y + hover[1] * z, RULER, z))
+        step = self.ruler_label_step()
+        for x in range(level.width + 1):
+            px = origin.x + x * z
+            if area.x + RULER <= px <= area.right:
+                long = x % step == 0
+                pygame.draw.line(screen, TEXT if long else DIM, (px, top.bottom - (10 if long else 4)), (px, top.bottom - 1))
+                if long:
+                    screen.blit(self.small.render(str(x), True, TEXT), (px + 2, top.y + 1))
+        for y in range(level.height + 1):
+            py = origin.y + y * z
+            if area.y + RULER <= py <= area.bottom:
+                long = y % step == 0
+                pygame.draw.line(screen, TEXT if long else DIM, (left.right - (10 if long else 4), py), (left.right - 1, py))
+                if long:
+                    screen.blit(self.small.render(str(y), True, TEXT), (left.x + 2, py + 1))
+        mx, my = self.map_center()
+        if area.x + RULER <= mx <= area.right:                      # the middle of each axis
+            pygame.draw.polygon(screen, ACCENT, [(mx - 5, top.bottom - 9), (mx + 5, top.bottom - 9), (mx, top.bottom - 1)])
+        if area.y + RULER <= my <= area.bottom:
+            pygame.draw.polygon(screen, ACCENT, [(left.right - 9, my - 5), (left.right - 9, my + 5), (left.right - 1, my)])
+        pygame.draw.line(screen, GRID, (top.x, top.bottom - 1), (top.right, top.bottom - 1))
+        pygame.draw.line(screen, GRID, (left.right - 1, left.y), (left.right - 1, left.bottom))
+        pygame.draw.rect(screen, PANEL_BG, (area.x, area.y, RULER - 1, RULER - 1))   # the corner where they meet
+
+    def over_ruler(self, pos):
+        """True if `pos` is on one of the rulers (clicks there do not paint the map under them)."""
+        area = self.map_area()
+        return area.collidepoint(pos) and (pos[0] < area.x + RULER or pos[1] < area.y + RULER)
 
     # ---------------------------------------------------------------- the Guns section
 
@@ -3485,12 +4123,39 @@ class Editor:
             if e.span != self.floor:
                 continue
             cx, cy = round(origin.x + e.x * z), round(origin.y + e.y * z)
+            if e.wall:                                   # hung on a wall: a bar on the wall, the icon in front of it
+                dx, dy = SIDE_VECTORS[e.wall]
+                half = int(z * 0.3)
+                pygame.draw.line(screen, ENTITY_MODE_COLORS[e.mode], (cx - abs(dy) * half, cy - abs(dx) * half),
+                                 (cx + abs(dy) * half, cy + abs(dx) * half), max(2, z // 10))
+                cx, cy = cx - round(dx * size * 0.6), cy - round(dy * size * 0.6)
             sprite = pygame.transform.scale(self.tiles[max(0, min(e.tile, len(self.tiles) - 1))], (size, size))
             pygame.draw.circle(screen, (20, 20, 30), (cx, cy), size // 2 + 2)
             screen.blit(sprite, sprite.get_rect(center=(cx, cy)))
             pygame.draw.circle(screen, ENTITY_MODE_COLORS[e.mode], (cx, cy), size // 2 + 2, 2)
             if e is chosen:                              # the selected item gets a bright outer ring
                 pygame.draw.circle(screen, ACCENT, (cx, cy), size // 2 + 6, 3)
+            if e.elevation and z >= 24:                  # raised or lowered: by how much
+                label = self.small.render(f"{e.elevation:+g}", True, ACCENT)
+                screen.blit(label, (cx + size // 2 + 2, cy - size // 2 - label.get_height() // 2))
+
+    def draw_spawners(self, screen):
+        """Spawn points: a blue disc with a facing line and its order, or a hollow ring on another floor."""
+        z = self.zoom
+        origin = self.cell_rect(0, 0)
+        radius = max(4, z * 0.3)
+        for s in self.level.spawners:
+            cx, cy = origin.x + s.x * z, origin.y + s.y * z
+            if s.span != self.floor:
+                pygame.draw.circle(screen, SPAWN_FILL, (cx, cy), radius, 2)
+                continue
+            tip = (cx + math.cos(s.angle) * z * 0.45, cy + math.sin(s.angle) * z * 0.45)
+            pygame.draw.circle(screen, SPAWN_FILL, (cx, cy), radius)
+            pygame.draw.circle(screen, SPAWN_EDGE, (cx, cy), radius, 2)
+            pygame.draw.line(screen, (255, 255, 255), (cx, cy), tip, max(2, z // 12))
+            if z >= 16:
+                label = self.small.render(str(s.order), True, SPAWN_EDGE)
+                screen.blit(label, label.get_rect(center=(cx, cy)))
 
     def draw_start(self, screen):
         z, level = self.zoom, self.level
@@ -3697,6 +4362,17 @@ class Editor:
             screen.set_clip(None)
 
     def draw_cursor(self, screen, area):
+        if self.shape_drag:
+            erasing = self.shape_drag[2]
+            tiles = not erasing and self.layer in STAMP_LAYERS and self.stamp()
+            for cell in self.shape_drag_cells():
+                rect = self.cell_rect(*cell)
+                if tiles:
+                    ghost = self.tile_surface(self.shape_tile(cell) - 1).copy()
+                    ghost.set_alpha(150)
+                    screen.blit(ghost, rect)
+                pygame.draw.rect(screen, WARN if erasing else ACCENT, rect, 1 if tiles else 2)
+            return
         if self.stairs_drag:
             for cell, height in self.stairs_heights():
                 rect = self.cell_rect(*cell)
@@ -3708,6 +4384,17 @@ class Editor:
         if not area.collidepoint(self.mouse) or self.pan_drag:
             return
         cell = self.cell_at(self.mouse)
+        if self.layer == "sides" and self.tool in ("paint", "erase", "fill", "pick", "shape") \
+                and self.level.in_bounds(*cell) and self.level.walls[cell[1]][cell[0]]:
+            side, rect = self.side_at(self.mouse), self.cell_rect(*cell)
+            if self.tool in ("paint", "shape", "fill") and self.stroke != "erase" and self.selection:
+                self.draw_side(screen, rect, side, self.primary_id(), alpha=170)
+            pygame.draw.rect(screen, WARN if self.tool == "erase" or self.stroke == "erase" else ACCENT,
+                             self.side_rect(rect, side), 2)
+            return
+        if self.tool == "entity" and self.mount_side(cell) and self.selected_entity() is None:
+            pygame.draw.rect(screen, ACCENT, self.side_rect(self.cell_rect(*cell), self.mount_side(cell)), 2)
+            return
         if self.tool == "paint" and self.stroke != "erase" and self.layer in STAMP_LAYERS:
             for dx, dy, tile_id in self.stamp():
                 ghost = self.tile_surface(tile_id - 1).copy()
@@ -3721,7 +4408,8 @@ class Editor:
             self.draw_arrow(screen, rect, self.ramp_dir, TEXT)
         else:
             color = {"erase": WARN, "fill": (120, 200, 255), "pick": (200, 120, 255),
-                      "start": (60, 220, 110), "stairs": (120, 200, 255)}.get(self.tool, ACCENT)
+                      "start": (60, 220, 110), "spawn": SPAWN_FILL, "stairs": (120, 200, 255),
+                      "shape": ACCENT}.get(self.tool, ACCENT)
             pygame.draw.rect(screen, color, self.cell_rect(*cell), 2)
 
     def draw_panel(self, screen):
@@ -3741,7 +4429,7 @@ class Editor:
         hover = self.tile_index_at(self.mouse)
         if hover is not None:
             pygame.draw.rect(screen, TEXT, self.tile_rect(hover), 1)
-        if self.layer not in STAMP_LAYERS:              # the atlas is not what this layer paints with
+        if self.layer not in TILE_LAYERS:               # the atlas is not what this layer paints with
             shade = pygame.Surface(self.atlas_img.get_size(), pygame.SRCALPHA)
             shade.fill((20, 20, 26, 150))
             screen.blit(shade, self.atlas_rect())
@@ -3754,7 +4442,7 @@ class Editor:
             screen.blit(small, (ATLAS_X + dx * cell, y + 22 + dy * cell))
         hints = ("Atlas: click / drag = select, Ctrl = add/remove",
                  "Map: L-drag paint, R-drag erase, wheel zoom, Space+drag pan",
-                 "Tab floor, layers 1-7, tools B E F I S T C, [ ] value, R ramp, K key")
+                 "Tab floor, layers 1-8, tools B E F I S O T H C N, [ ] value, R ramp, K key")
         for i, text in enumerate(hints):
             screen.blit(self.small.render(text, True, DIM), (ATLAS_X, hints_y + i * 16))
 
@@ -3784,7 +4472,7 @@ class Editor:
             if action == "dropdown":
                 self.draw_dropdown_button(screen, rect, label)
                 continue
-            active = action in (f"tool:{self.tool}", f"layer:{self.layer}") \
+            active = action in (f"tool:{self.tool}", f"layer:{self.layer}", f"shape:{self.shape}") \
                 or (action == "legend" and self.show_legend) or (action == "guns" and self.guns_mode) \
                 or (action == "prefabs" and self.prefabs_mode) or (action == "effects" and self.effects_mode) or (action == "lights" and self.lights_mode)
             color = BUTTON_ON if active else (BUTTON_HOT if rect.collidepoint(self.mouse) else BUTTON)
@@ -3808,6 +4496,108 @@ class Editor:
         cx, cy = rect.right - 16, rect.centery
         arrow = [(cx - 6, cy - 3), (cx + 6, cy - 3), (cx, cy + 4)]
         pygame.draw.polygon(screen, TEXT, arrow)
+
+    def new_map_rects(self):
+        """(box, name field, Create button, Cancel button) of the New map dialog, in the middle of the window."""
+        w, h = self._size()
+        box = pygame.Rect(0, 0, min(520, w - 20), 178)
+        box.center = (w // 2, h // 2)
+        field = pygame.Rect(box.x + 20, box.y + 62, box.w - 40, 32)
+        cancel = pygame.Rect(box.right - 20 - 100, box.bottom - 16 - 32, 100, 32)
+        create = pygame.Rect(cancel.x - 12 - 100, cancel.y, 100, 32)
+        return box, field, create, cancel
+
+    @staticmethod
+    def draw_shade(screen):
+        """Dim everything drawn so far, under a dialog."""
+        shade = pygame.Surface(screen.get_size(), pygame.SRCALPHA)
+        shade.fill(SHADE)
+        screen.blit(shade, (0, 0))
+
+    def open_rects(self):
+        """(box, list, Open button, Cancel button, [(row rect, map index)] of the rows shown) of the Open dialog."""
+        w, h = self._size()
+        rows = min(OPEN_ROWS, max(1, len(self.open_maps)))
+        box = pygame.Rect(0, 0, min(520, w - 20), 62 + rows * OPEN_ROW_H + 34 + 16 + 32 + 16)
+        box.center = (w // 2, h // 2)
+        listing = pygame.Rect(box.x + 20, box.y + 62, box.w - 40, rows * OPEN_ROW_H)
+        cancel = pygame.Rect(box.right - 20 - 100, box.bottom - 16 - 32, 100, 32)
+        opener = pygame.Rect(cancel.x - 12 - 100, cancel.y, 100, 32)
+        shown = [(pygame.Rect(listing.x, listing.y + i * OPEN_ROW_H, listing.w, OPEN_ROW_H), self.open_scroll + i)
+                 for i in range(rows) if self.open_scroll + i < len(self.open_maps)]
+        return box, listing, opener, cancel, shown
+
+    def open_dialog_click(self, pos):
+        _box, _listing, opener, cancel, shown = self.open_rects()
+        if opener.collidepoint(pos) or cancel.collidepoint(pos):
+            self.finish_open(opener.collidepoint(pos))
+            return
+        for rect, index in shown:
+            if rect.collidepoint(pos):
+                again = self.open_click[0] == index and time.time() - self.open_click[1] < DOUBLE_CLICK
+                self.pick_map(index)
+                self.open_click = (index, time.time())
+                if again:
+                    self.finish_open(True)
+                return
+
+    def draw_open_dialog(self, screen):
+        """The Open dialog over a dimmed editor: the maps in the folder, the picked one highlighted."""
+        if self.open_maps is None:
+            return
+        self.draw_shade(screen)
+        box, listing, opener, cancel, shown = self.open_rects()
+        pygame.draw.rect(screen, PANEL_BG, box, border_radius=6)
+        pygame.draw.rect(screen, GRID, box, 1, border_radius=6)
+        folder = os.path.basename(self.map_folder())
+        screen.blit(self.font.render(f"Open map ({folder}/)", True, ACCENT), (box.x + 20, box.y + 14))
+        screen.blit(self.small.render("Double-click or Enter opens it, Esc cancels", True, DIM), (box.x + 20, box.y + 40))
+        pygame.draw.rect(screen, (24, 26, 32), listing)
+        current = os.path.basename(self.path)
+        for rect, index in shown:
+            name = self.open_maps[index]
+            if index == self.open_pick:
+                pygame.draw.rect(screen, BUTTON_ON, rect)
+            elif rect.collidepoint(self.mouse):
+                pygame.draw.rect(screen, BUTTON_HOT, rect)
+            screen.blit(self.font.render(name[:-5], True, TEXT), (rect.x + 8, rect.y + 4))
+            if name == current:
+                note = self.small.render("open now", True, DIM)
+                screen.blit(note, (rect.right - note.get_width() - 8, rect.y + 6))
+        pygame.draw.rect(screen, GRID, listing, 1)
+        if len(self.open_maps) > OPEN_ROWS:                 # where the rows shown are in the whole list
+            track = listing.h * OPEN_ROWS // len(self.open_maps)
+            top = listing.y + (listing.h - track) * self.open_scroll // (len(self.open_maps) - OPEN_ROWS)
+            pygame.draw.rect(screen, DIM, (listing.right - 4, top, 3, track))
+        if self.open_error:
+            screen.blit(self.small.render(self.open_error, True, WARN), (box.x + 20, listing.bottom + 8))
+        for rect, label in ((opener, "Open"), (cancel, "Cancel")):
+            pygame.draw.rect(screen, BUTTON_HOT if rect.collidepoint(self.mouse) else BUTTON, rect, border_radius=4)
+            text = self.font.render(label, True, TEXT)
+            screen.blit(text, text.get_rect(center=rect.center))
+
+    def draw_new_map_dialog(self, screen):
+        """The New map dialog over a dimmed editor: the name being typed and where it will be saved."""
+        if self.new_name is None:
+            return
+        self.draw_shade(screen)
+        box, field, create, cancel = self.new_map_rects()
+        pygame.draw.rect(screen, PANEL_BG, box, border_radius=6)
+        pygame.draw.rect(screen, GRID, box, 1, border_radius=6)
+        screen.blit(self.font.render("New map", True, ACCENT), (box.x + 20, box.y + 14))
+        screen.blit(self.small.render("Name (Enter to create, Esc to cancel):", True, DIM), (box.x + 20, box.y + 40))
+        pygame.draw.rect(screen, (24, 26, 32), field, border_radius=4)
+        pygame.draw.rect(screen, ACCENT, field, 2, border_radius=4)
+        caret = "|" if int(time.time() * 2) % 2 == 0 else " "
+        screen.blit(self.font.render(self.new_name + caret, True, TEXT), (field.x + 8, field.y + 8))
+        folder = os.path.basename(self.map_folder())
+        note, color = (self.new_error, WARN) if self.new_error else \
+            (f"Saved as {folder}/{self.new_name.strip() or '...'}.json", DIM)
+        screen.blit(self.small.render(note, True, color), (box.x + 20, field.bottom + 8))
+        for rect, label in ((create, "Create"), (cancel, "Cancel")):
+            pygame.draw.rect(screen, BUTTON_HOT if rect.collidepoint(self.mouse) else BUTTON, rect, border_radius=4)
+            text = self.font.render(label, True, TEXT)
+            screen.blit(text, text.get_rect(center=rect.center))
 
     def draw_dropdown(self, screen):
         """The open floor list, drawn last so it sits on top of everything."""
@@ -3854,6 +4644,13 @@ class Editor:
                     if self.wall_ceiling_matters(x, y):
                         kind = "set" if self.level.has_explicit_wall_ceiling(x, y) else "automatic"
                         how += f", ceiling over it {fmt(self.level.wall_ceiling(x, y))} ({kind})"
+                    if self.layer == "sides":
+                        side = self.side_at(self.mouse)
+                        own = g[f"side_{side}"][y][x]
+                        how += f"   {WALL_LABELS[side].split()[0]} side: " + (f"tile #{own}" if own else "the wall's own")
+                        low, high = g[f"side_{side}_from"][y][x], g[f"side_{side}_to"][y][x]
+                        if own and (low or high):
+                            how += f" from {fmt(low)} to {fmt(high) if high else 'the top'}"
                     return f"Cell ({x}, {y}): wall id {g['walls'][y][x]}{how}"
                 parts = [f"Cell ({x}, {y})"]
                 for s in self.level.rooms_at(x, y):
@@ -3866,13 +4663,248 @@ class Editor:
                 f"   Tool: {self.tool}")
 
 
+def starting_map(args, settings=SETTINGS_PATH):
+    """The map to open: the one named on the command line, else the one edited last, else maps/map.json."""
+    return os.path.abspath(args[0]) if args else (last_map(settings) or MAP_PATH)
+
+
+def map_files(folder):
+    """The map files in `folder`, by name (none if it cannot be read)."""
+    try:
+        return sorted((n for n in os.listdir(folder) if n.lower().endswith(".json")), key=str.lower)
+    except OSError:
+        return []
+
+
+TAKEN_LABELS = {"keep": "Keep mine", "replace": "Replace", "copy": "Add a copy"}
+COMING = (90, 170, 255)                         # Import dialog: the box of a thing coming in with a ticked one
+IMPORT_ICON = 20                                # Import dialog: the picture beside each thing, in pixels
+IMPORT_ROWS, IMPORT_ROW_H = 12, 26              # Import dialog: list rows shown at once, and their height
+
+
+class ImportDialog:
+    """The editor's Import dialog: first the other maps in the folder, then what one of them has (prefabs, lights,
+    effects, guns, ammo types) to tick, and what to do with names this map already uses. It changes nothing
+    itself: click() and key() say what to do - None (carry on), "close", or ("import", source, picks, taken)."""
+
+    def __init__(self, folder, names, level, font, small, tiles=()):
+        """`tiles` are the atlas's pictures (the maps in a folder share one atlas), to show what each thing looks
+        like."""
+        self.folder, self.names, self.level = folder, names, level
+        self.font, self.small = font, small
+        self.tiles = list(tiles)
+        self._icons = {}                        # (kind, name) -> the small picture drawn beside it
+        self.source = self.source_name = None   # the map picked to import from, once picked
+        self.chosen = set()                     # (kind, name) ticked
+        self.taken = "copy"                     # what to do with a name already used here (TAKEN_CHOICES)
+        self.scroll = 0
+        self.error = ""
+
+    # ------------------------------------------------------------------ what is listed
+
+    def rows(self):
+        """The list's rows: ("map", name) to pick from, or ("kind", kind) headings and ("thing", (kind, name))."""
+        if self.source is None:
+            return [("map", n) for n in self.names]
+        out = []
+        for kind, _label in IMPORT_KINDS.items():
+            names = sorted(things_named(self.source, kind), key=str.lower)
+            if names:
+                out.append(("kind", kind))
+                out += [("thing", (kind, n)) for n in names]
+        return out
+
+    def icon(self, kind, name):
+        """The small picture of a thing in the map imported from: its tile (a prefab's icon, a gun's picture, an
+        ammo type's bullet, an effect's particle) cropped to what is drawn in it and made to fit, or for a light a
+        swatch of its color at full strength. None when there is nothing to show."""
+        key = (kind, name)
+        if key not in self._icons:
+            thing = things_named(self.source, kind)[name]
+            picture = None
+            if kind == "lights":
+                bright = max(thing.r, thing.g, thing.b, 1)
+                picture = pygame.Surface((IMPORT_ICON, IMPORT_ICON))
+                picture.fill(tuple(round(c * 255 / bright) for c in (thing.r, thing.g, thing.b)))
+                pygame.draw.rect(picture, GRID, picture.get_rect(), 1)
+            elif self.tiles:
+                tile = self.tiles[max(0, min(thing.tile, len(self.tiles) - 1))]
+                box = tile.get_bounding_rect()                  # just what is drawn in the tile, made to fit
+                if box.w and box.h:
+                    scale = IMPORT_ICON / max(box.w, box.h)
+                    part = pygame.transform.scale(tile.subsurface(box), (max(1, round(box.w * scale)),
+                                                                         max(1, round(box.h * scale))))
+                    picture = pygame.Surface((IMPORT_ICON, IMPORT_ICON), pygame.SRCALPHA)
+                    picture.blit(part, part.get_rect(center=picture.get_rect().center))
+            self._icons[key] = picture
+        return self._icons[key]
+
+    def coming(self):
+        """{(kind, name): name of a ticked thing that uses it} for what is not ticked but will come in with what is
+        (a prefab's light, a gun's ammo type and that ammo's effects...)."""
+        out = {}
+        for picked in sorted(self.chosen):
+            for needed in sorted(with_needs(self.source, {picked}) - self.chosen):
+                out.setdefault(needed, picked[1])
+        return out
+
+    def state(self, kind, name):
+        """How a thing of the source stands here: "new", "same" (this map has it just the same) or "taken"."""
+        mine = things_named(self.level, kind).get(name)
+        theirs = things_named(self.source, kind)[name]
+        return "new" if mine is None else ("same" if mine == theirs else "taken")
+
+    def rects(self, size):
+        """(box, list, [(row rect, row)], {button: rect}) laid out in the middle of a window of `size`."""
+        w, h = size
+        shown_rows = min(IMPORT_ROWS, max(1, len(self.rows())))
+        extra = 0 if self.source is None else 30 + 26          # (the "name taken" choice and the count)
+        box = pygame.Rect(0, 0, min(600, w - 20), 66 + shown_rows * IMPORT_ROW_H + 16 + extra + 30 + 48)
+        box.center = (w // 2, h // 2)
+        listing = pygame.Rect(box.x + 20, box.y + 66, box.w - 40, shown_rows * IMPORT_ROW_H)
+        rows = self.rows()
+        self.scroll = max(0, min(self.scroll, len(rows) - IMPORT_ROWS))
+        shown = [(pygame.Rect(listing.x, listing.y + i * IMPORT_ROW_H, listing.w, IMPORT_ROW_H), rows[self.scroll + i])
+                 for i in range(shown_rows) if self.scroll + i < len(rows)]
+        buttons = {"cancel": pygame.Rect(box.right - 20 - 100, box.bottom - 16 - 32, 100, 32)}
+        if self.source is not None:
+            buttons["back"] = buttons["cancel"].move(-112, 0)
+            buttons["import"] = buttons["back"].move(-112, 0)
+            y = listing.bottom + 14
+            for i, choice in enumerate(TAKEN_CHOICES):
+                buttons[f"taken:{choice}"] = pygame.Rect(listing.x + 170 + i * 122, y, 114, 28)
+        return box, listing, shown, buttons
+
+    # ------------------------------------------------------------------ input
+
+    def click(self, pos, size):
+        _box, _listing, shown, buttons = self.rects(size)
+        for name, rect in buttons.items():
+            if rect.collidepoint(pos):
+                return self.press(name)
+        for rect, (kind, value) in shown:
+            if not rect.collidepoint(pos):
+                continue
+            if kind == "map":
+                self.pick(value)
+            elif kind == "kind":
+                group = {(value, n) for n in things_named(self.source, value)}
+                self.chosen = self.chosen - group if group <= self.chosen else self.chosen | group
+            else:
+                self.chosen ^= {value}
+            return None
+        return None
+
+    def press(self, button):
+        if button == "cancel":
+            return "close"
+        if button == "back":
+            self.source = self.source_name = None
+            self.chosen, self.scroll, self.error = set(), 0, ""
+            return None
+        if button.startswith("taken:"):
+            self.taken = button[6:]
+            return None
+        if button == "import":
+            if not self.chosen:
+                self.error = "Tick something to import first"
+                return None
+            return ("import", self.source, set(self.chosen), self.taken)
+        return None
+
+    def pick(self, name):
+        """Read the map to import from; one that cannot be read says why and stays on the list of maps."""
+        try:
+            self.source = load_level(os.path.join(self.folder, name))
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
+            self.error = f"Can't read {name}: {e}"[:80]
+            return
+        self.source_name, self.chosen, self.scroll, self.error = name, set(), 0, ""
+        if not self.rows():
+            self.error = f"{name[:-5]} has no prefabs, lights, effects, guns or ammo types"
+
+    def key(self, e):
+        if e.key == pygame.K_ESCAPE:
+            return "close" if self.source is None else self.press("back")
+        if e.key in (pygame.K_RETURN, pygame.K_KP_ENTER) and self.source is not None:
+            return self.press("import")
+        return None
+
+    def wheel(self, y):
+        self.scroll = max(0, self.scroll - y)
+
+    # ------------------------------------------------------------------ drawing
+
+    def draw(self, screen, size, mouse):
+        box, listing, shown, buttons = self.rects(size)
+        coming = self.coming() if self.source is not None else {}
+        pygame.draw.rect(screen, PANEL_BG, box, border_radius=6)
+        pygame.draw.rect(screen, GRID, box, 1, border_radius=6)
+        if self.source is None:
+            title, hint = "Import from a map", "Pick the map to bring prefabs, lights, effects, guns or ammo from"
+        else:
+            title, hint = (f"Import from {self.source_name[:-5]}",
+                           "Tick what to bring in (a heading ticks its group); what they use comes too")
+        screen.blit(self.font.render(title, True, ACCENT), (box.x + 20, box.y + 14))
+        screen.blit(self.small.render(hint, True, DIM), (box.x + 20, box.y + 42))
+        pygame.draw.rect(screen, (24, 26, 32), listing)
+        for rect, (kind, value) in shown:
+            if rect.collidepoint(mouse):
+                pygame.draw.rect(screen, BUTTON_HOT, rect)
+            if kind == "map":
+                screen.blit(self.font.render(value[:-5], True, TEXT), (rect.x + 8, rect.y + 4))
+            elif kind == "kind":
+                group = {(value, n) for n in things_named(self.source, value)}
+                ticked, along = len(group & self.chosen), len(group & set(coming))
+                count = f"{ticked} of {len(group)}" + (f", {along} coming with them" if along else "")
+                screen.blit(self.font.render(f"{IMPORT_KINDS[value]}  ({count})", True, ACCENT), (rect.x + 8, rect.y + 4))
+            else:
+                ticked, along = value in self.chosen, value in coming
+                tick = pygame.Rect(rect.x + 18, rect.y + 6, 14, 14)
+                if ticked or along:                         # yellow: ticked; blue: comes in with a ticked thing
+                    pygame.draw.rect(screen, ACCENT if ticked else COMING, tick, border_radius=2)
+                else:
+                    pygame.draw.rect(screen, DIM, tick, 1, border_radius=2)
+                picture = self.icon(*value)
+                if picture is not None:
+                    screen.blit(picture, (tick.right + 10, rect.y + (IMPORT_ROW_H - IMPORT_ICON) // 2))
+                screen.blit(self.font.render(value[1], True, TEXT), (tick.right + 18 + IMPORT_ICON, rect.y + 4))
+                notes = [(f"comes with {coming[value]}", COMING)] if along else []
+                notes += {"same": [("already here", DIM)], "taken": [("name used here", WARN)]}.get(self.state(*value), [])
+                right = rect.right - 8
+                for text, color in reversed(notes):
+                    label = self.small.render(text, True, color)
+                    right -= label.get_width()
+                    screen.blit(label, (right, rect.y + 6))
+                    right -= 14
+        pygame.draw.rect(screen, GRID, listing, 1)
+        if len(self.rows()) > IMPORT_ROWS:                  # where the rows shown are in the whole list
+            track = listing.h * IMPORT_ROWS // len(self.rows())
+            top = listing.y + (listing.h - track) * self.scroll // (len(self.rows()) - IMPORT_ROWS)
+            pygame.draw.rect(screen, DIM, (listing.right - 4, top, 3, track))
+        if self.source is not None:
+            screen.blit(self.small.render("If a name is used here:", True, TEXT), (listing.x, listing.bottom + 20))
+            needs = len(with_needs(self.source, self.chosen)) - len(self.chosen)
+            count = f"{len(self.chosen)} ticked" + (f", and {needs} more they use (blue)" if needs else "")
+            screen.blit(self.small.render(count, True, DIM), (listing.x, listing.bottom + 52))
+        for name, rect in buttons.items():
+            on = name == f"taken:{self.taken}"
+            hot = rect.collidepoint(mouse)
+            pygame.draw.rect(screen, BUTTON_ON if on else (BUTTON_HOT if hot else BUTTON), rect, border_radius=4)
+            label = TAKEN_LABELS[name[6:]] if name.startswith("taken:") else name.capitalize()
+            text = (self.small if name.startswith("taken:") else self.font).render(label, True, TEXT)
+            screen.blit(text, text.get_rect(center=rect.center))
+        if self.error:
+            screen.blit(self.small.render(self.error, True, WARN), (box.x + 20, box.bottom - 40))
+
+
 def main():
-    path = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else MAP_PATH
+    path = starting_map(sys.argv[1:])
     pygame.init()
     pygame.display.set_mode((1280, 860), pygame.RESIZABLE)
     if not os.path.exists(ATLAS_PATH):
         sys.exit("textures.png not found - run `python make_atlas.py` first")
-    editor = Editor(path)
+    editor = Editor(path, SETTINGS_PATH)
     editor.start_maximized()                    # the editor opens maximized
     clock = pygame.time.Clock()
     while editor.running:

@@ -222,7 +222,7 @@ def test_an_item_that_goes_in_the_inventory_has_a_name_and_a_count(ed):
     e = select_new_item(ed)
     choose(ed, "effect", "item")
     assert e.effect == "item" and e.amount == 1.0
-    assert keys(ed)[:5] == ["tile", "mode", "effect", "item", "amount"]
+    assert keys(ed)[3:8] == ["tile", "mode", "effect", "item", "amount"]           # (after the "This copy only" group)
     click(ed, row(ed, "item").value.center)
     for _ in range(10):
         key(ed, pygame.K_BACKSPACE)

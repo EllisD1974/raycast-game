@@ -17,9 +17,10 @@ import time
 from collections import deque
 
 import net
-from constants import PLAYER_HEIGHT
 from entities import Entities, PlayerStats
-from game import MAX_STEP_DT, Events, Inputs, PlayerState, character_tile_for, move_body
+from constants import PLAYER_HEIGHT
+from game import (MAX_STEP_DT, NO_TEAM, Events, Inputs, PlayerState, character_sprite, character_tile_for, clean_name,
+                  move_body, shown_name)
 from inventory import GunState, Inventory
 from lighting import LightSystem, follow as follow_lights, item_lights
 from mapfile import level_text, parse_level
@@ -40,10 +41,11 @@ MAX_FX = 32                                     # particle effects sent to joine
 class LocalSession:
     """Playing alone: the game and the one player in it."""
 
-    def __init__(self, game):
+    def __init__(self, game, name=""):
         self.game = game
         self.world = game.world
         self.me = game.add_player(LOCAL_ID)
+        self.me.name = clean_name(name)
         self.ended = None
         self.particles = ParticleSystem(game.level.effects, game.world)     # looks only; worked out on this machine
         self.lights = LightSystem(game.level, game.world)                   # likewise
@@ -84,6 +86,10 @@ class LocalSession:
     def sprites(self):
         return self.game.sprites(LOCAL_ID) + self.particles.sprites()
 
+    def labels(self):
+        """The other players' names over their heads: (x, y, z, name, team) each."""
+        return self.game.labels(LOCAL_ID)
+
     def lighting(self):
         """The Lighting to draw this player's view with (None when the map has no lights and is fully lit)."""
         body = self.me.body
@@ -105,8 +111,8 @@ class HostSession(LocalSession):
     numbers the joiner predicted it with, so the two agree. The host only lets a joiner use as much
     time as has really passed, so sending extra or long steps does not make them faster."""
 
-    def __init__(self, game, host, atlas_png=None):
-        super().__init__(game)
+    def __init__(self, game, host, atlas_png=None, name=""):
+        super().__init__(game, name)
         self.host = host
         self.level_text = level_text(game.level)
         self.atlas = base64.b64encode(atlas_png).decode() if atlas_png else None    # the textures joiners draw with
@@ -133,6 +139,8 @@ class HostSession(LocalSession):
                     table.pop(peer, None)
             elif kind == "message" and payload.get("type") == "input" and peer in self.queue:
                 self.accept(peer, payload)
+            elif kind == "message" and payload.get("type") == "hello" and peer in self.game.players:
+                self.game.players[peer].name = clean_name(payload.get("name"))     # what they want to be called
         events = Events(fired=self.game.move_player(LOCAL_ID, wish, dt))
         for peer, queue in self.queue.items():
             self.credit[peer] = min(self.credit[peer] + elapsed, MAX_CREDIT)     # real time, not the capped dt
@@ -143,6 +151,9 @@ class HostSession(LocalSession):
                 self.acked[peer] = seq
         for pid, picked in self.game.advance_world(dt).items():
             (events if pid == LOCAL_ID else self.owed[pid]).picked += picked
+        for pid, damage in self.game.take_hurts().items():
+            if pid == LOCAL_ID or pid in self.owed:
+                (events if pid == LOCAL_ID else self.owed[pid]).hurt += damage
         effects, flashes = self.game.take_fx(), self.game.take_flashes()
         self.fx_out += effects
         self.flashes_out += flashes
@@ -183,13 +194,15 @@ class HostSession(LocalSession):
     def send_snapshots(self):
         common = {
             "type": "state", "time": self.time,
-            "players": {str(pid): body_fields(state.body) for pid, state in self.game.players.items()},
+            "players": {str(pid): body_fields(state.body) + [round(state.hit, 3)]       # (+ the red flash left)
+                        for pid, state in self.game.players.items()},
             "bullets": [[b.x, b.y, b.z, b.vx, b.vy, b.vz, b.size, b.tile, b.ident, b.trail, b.light,
                          list(b.trail_offset) if b.trail_offset else None]
                         for b in self.game.projectiles.bullets],
             "fx": [list(e) for e in self.fx_out[-MAX_FX:]],
             "flashes": [list(f) for f in self.flashes_out[-MAX_FX:]],
             "items": "".join("1" if item.present else "0" for item in self.game.items.items),
+            "names": {str(pid): [state.name, state.team] for pid, state in self.game.players.items()},
         }
         for peer, owed in self.owed.items():
             state = self.game.players[peer]
@@ -221,7 +234,7 @@ class ClientSession:
     built, and returns the tile where the character pictures start (it must raise ValueError for a picture
     it cannot use). Without it, or with a host that sent none, we draw with the textures we already have."""
 
-    def __init__(self, client, make_world, character_tile=None, use_atlas=None):
+    def __init__(self, client, make_world, character_tile=None, use_atlas=None, name=""):
         self.client = client
         self.make_world = make_world
         self.use_atlas = use_atlas
@@ -233,6 +246,9 @@ class ClientSession:
         self.pending = []                       # (seq, Inputs, dt) sent and not yet carried out by the host
         self.seq = 0
         self.history = {}                       # other player id -> [(game time, x, y, z, angle)], oldest first
+        self.hits = {}                          # other player id -> (game time, red flash it had left then)
+        self.name = clean_name(name)            # what we want to be called (told to the host on joining)
+        self.names = {}                         # player id -> (name, team), from the snapshots
         self.game_time = None                   # our estimate of the host's game time
         self.bullets = []                       # as sent: [x, y, z, vx, vy, vz, size, tile, id, trail, light]
         self.lights = None                      # looks only, like the particles
@@ -295,6 +311,7 @@ class ClientSession:
         if kind == "welcome":
             self.id = message.get("id")
             self.load(message)
+            self.client.send(net.HOST_ID, {"type": "hello", "name": self.name})
         elif kind == "reload" and self.level is not None:
             self.load(message)
         elif kind == "state" and self.level is not None:
@@ -344,6 +361,8 @@ class ClientSession:
                 samples = self.history.setdefault(pid, [])
                 samples.append((now, fields[0], fields[1], fields[2], fields[3]))
                 del samples[:-MAX_SAMPLES]
+                hit = fields[len(BODY_FIELDS)] if len(fields) > len(BODY_FIELDS) else 0.0
+                self.hits[pid] = (now, float(hit) if isinstance(hit, (int, float)) else 0.0)
         self.bullets, self.bullet_age = message["bullets"], 0.0
         for event in message.get("fx", [])[:MAX_FX]:
             if (isinstance(event, list) and len(event) in (7, 10) and isinstance(event[0], str)
@@ -355,8 +374,17 @@ class ClientSession:
                 self.lights.flash(*flash)
         for item, present in zip(self.items.items, message["items"]):
             item.present = present == "1"
+        names = message.get("names")
+        if isinstance(names, dict):
+            self.names = {}
+            for pid, entry in names.items():
+                if str(pid).isdigit() and isinstance(entry, list) and len(entry) == 2 and isinstance(entry[1], int):
+                    self.names[int(pid)] = (clean_name(entry[0]), entry[1])
+            self.me.name, self.me.team = self.names.get(self.id, (self.name, NO_TEAM))
         self.owed.fired += mine["fired"]
         self.owed.picked += mine["picked"]
+        hurt = mine.get("hurt", 0.0)
+        self.owed.hurt += float(hurt) if isinstance(hurt, (int, float)) else 0.0
         self.ready = True
 
     def sprites(self):
@@ -367,12 +395,27 @@ class ClientSession:
             sprites.append((x, y, z - bullet[6] / 2, bullet[6], bullet[7], 0.0, 1.0, 1.0 if bullet[10] else 0.0))
         if self.character_tile is not None and self.game_time is not None:
             for pid, samples in self.history.items():
-                x, y, z, *angle = interpolate(samples, self.game_time - INTERP_DELAY)
+                shown_at = self.game_time - INTERP_DELAY
+                x, y, z, *angle = interpolate(samples, shown_at)
+                body = Player(x, y, z, angle[0] if angle else 0.0)
                 tile = character_tile_for(self.character_tile, pid, self.me.body.angle, angle[0] if angle else None)
-                sprites.append((x, y, z, PLAYER_HEIGHT, tile))
+                since, hit = self.hits.get(pid, (shown_at, 0.0))
+                sprite = character_sprite(body, self.character_tile, pid, hit=hit - max(0.0, shown_at - since))
+                sprites.append(sprite[:4] + (tile,) + sprite[5:])
         if self.particles is not None:
             sprites += self.particles.sprites()
         return sprites
+
+    def labels(self):
+        """The other players' names over their heads: (x, y, z, name, team) each, where they are drawn."""
+        if self.game_time is None:
+            return []
+        out = []
+        for pid, samples in self.history.items():
+            x, y, z, *_angle = interpolate(samples, self.game_time - INTERP_DELAY)
+            name, team = self.names.get(pid, ("", NO_TEAM))
+            out.append((x, y, z + PLAYER_HEIGHT, shown_name(name, pid), team))
+        return out
 
     def lighting(self):
         """The Lighting to draw our view with (None until the map is known, or when it has no lights and is fully lit)."""
@@ -425,7 +468,7 @@ def private_fields(state, owed, ack):
         "score": state.stats.score, "health": state.stats.health, "max_health": state.stats.max_health,
         "items": dict(inventory.items), "ammo": dict(inventory.ammo), "equipped": inventory.equipped,
         "guns": [{"name": g.gun.name, "mag": g.mag, "reload_left": g.reload_left} for g in inventory.guns],
-        "fired": owed.fired, "picked": owed.picked, "ack": ack,
+        "fired": owed.fired, "picked": owed.picked, "hurt": owed.hurt, "ack": ack,
     }
 
 
