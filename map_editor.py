@@ -606,9 +606,9 @@ class Editor:
 
     def preview_width(self):
         """Width of the 3D view's column at the window's right; 0 while the view is hidden. It stays beside the
-        Prefabs section, so editing a prefab shows the items made from it changing in the world; the Guns, Effects
-        and Lights sections have previews of their own instead."""
-        if not self.show_preview or (self.section_open() and not self.prefabs_mode):
+        Prefabs and Effects sections, so editing a prefab or an effect shows it changing in the world (an effect
+        on the items, guns and bullets that use it); the Guns and Lights sections have previews of their own."""
+        if not self.show_preview or (self.section_open() and not (self.prefabs_mode or self.effects_mode)):
             return 0
         return int(min(PREVIEW_MAX_W, max(PREVIEW_MIN_W, (self._size()[0] - PANEL_W) * 0.4)))
 
