@@ -17,9 +17,8 @@ import time
 from collections import deque
 
 import net
-from constants import PLAYER_HEIGHT
 from entities import Entities, PlayerStats
-from game import MAX_STEP_DT, Events, Inputs, PlayerState, character_tile_for, move_body
+from game import MAX_STEP_DT, Events, Inputs, PlayerState, character_sprite, character_tile_for, move_body
 from inventory import GunState, Inventory
 from lighting import LightSystem, follow as follow_lights, item_lights
 from mapfile import level_text, parse_level
@@ -143,6 +142,9 @@ class HostSession(LocalSession):
                 self.acked[peer] = seq
         for pid, picked in self.game.advance_world(dt).items():
             (events if pid == LOCAL_ID else self.owed[pid]).picked += picked
+        for pid, damage in self.game.take_hurts().items():
+            if pid == LOCAL_ID or pid in self.owed:
+                (events if pid == LOCAL_ID else self.owed[pid]).hurt += damage
         effects, flashes = self.game.take_fx(), self.game.take_flashes()
         self.fx_out += effects
         self.flashes_out += flashes
@@ -183,7 +185,8 @@ class HostSession(LocalSession):
     def send_snapshots(self):
         common = {
             "type": "state", "time": self.time,
-            "players": {str(pid): body_fields(state.body) for pid, state in self.game.players.items()},
+            "players": {str(pid): body_fields(state.body) + [round(state.hit, 3)]       # (+ the red flash left)
+                        for pid, state in self.game.players.items()},
             "bullets": [[b.x, b.y, b.z, b.vx, b.vy, b.vz, b.size, b.tile, b.ident, b.trail, b.light,
                          list(b.trail_offset) if b.trail_offset else None]
                         for b in self.game.projectiles.bullets],
@@ -233,6 +236,7 @@ class ClientSession:
         self.pending = []                       # (seq, Inputs, dt) sent and not yet carried out by the host
         self.seq = 0
         self.history = {}                       # other player id -> [(game time, x, y, z, angle)], oldest first
+        self.hits = {}                          # other player id -> (game time, red flash it had left then)
         self.game_time = None                   # our estimate of the host's game time
         self.bullets = []                       # as sent: [x, y, z, vx, vy, vz, size, tile, id, trail, light]
         self.lights = None                      # looks only, like the particles
@@ -344,6 +348,8 @@ class ClientSession:
                 samples = self.history.setdefault(pid, [])
                 samples.append((now, fields[0], fields[1], fields[2], fields[3]))
                 del samples[:-MAX_SAMPLES]
+                hit = fields[len(BODY_FIELDS)] if len(fields) > len(BODY_FIELDS) else 0.0
+                self.hits[pid] = (now, float(hit) if isinstance(hit, (int, float)) else 0.0)
         self.bullets, self.bullet_age = message["bullets"], 0.0
         for event in message.get("fx", [])[:MAX_FX]:
             if (isinstance(event, list) and len(event) in (7, 10) and isinstance(event[0], str)
@@ -357,6 +363,8 @@ class ClientSession:
             item.present = present == "1"
         self.owed.fired += mine["fired"]
         self.owed.picked += mine["picked"]
+        hurt = mine.get("hurt", 0.0)
+        self.owed.hurt += float(hurt) if isinstance(hurt, (int, float)) else 0.0
         self.ready = True
 
     def sprites(self):
@@ -367,9 +375,13 @@ class ClientSession:
             sprites.append((x, y, z - bullet[6] / 2, bullet[6], bullet[7], 0.0, 1.0, 1.0 if bullet[10] else 0.0))
         if self.character_tile is not None and self.game_time is not None:
             for pid, samples in self.history.items():
-                x, y, z, *angle = interpolate(samples, self.game_time - INTERP_DELAY)
+                shown_at = self.game_time - INTERP_DELAY
+                x, y, z, *angle = interpolate(samples, shown_at)
+                body = Player(x, y, z, angle[0] if angle else 0.0)
                 tile = character_tile_for(self.character_tile, pid, self.me.body.angle, angle[0] if angle else None)
-                sprites.append((x, y, z, PLAYER_HEIGHT, tile))
+                since, hit = self.hits.get(pid, (shown_at, 0.0))
+                sprite = character_sprite(body, self.character_tile, pid, hit=hit - max(0.0, shown_at - since))
+                sprites.append(sprite[:4] + (tile,) + sprite[5:])
         if self.particles is not None:
             sprites += self.particles.sprites()
         return sprites
@@ -425,7 +437,7 @@ def private_fields(state, owed, ack):
         "score": state.stats.score, "health": state.stats.health, "max_health": state.stats.max_health,
         "items": dict(inventory.items), "ammo": dict(inventory.ammo), "equipped": inventory.equipped,
         "guns": [{"name": g.gun.name, "mag": g.mag, "reload_left": g.reload_left} for g in inventory.guns],
-        "fired": owed.fired, "picked": owed.picked, "ack": ack,
+        "fired": owed.fired, "picked": owed.picked, "hurt": owed.hurt, "ack": ack,
     }
 
 

@@ -18,6 +18,9 @@ from projectiles import MUZZLE, Projectiles, muzzle_shift
 
 
 MAX_STEP_DT = 0.05              # longest time one player's step may cover (main.py caps frames at this too)
+HIT_FLASH = 0.25                # seconds a player who was hurt shows red to the others
+HIT_TINT = (1.0, 0.45, 0.45, 0.0, 0.35, 0.0, 0.0, 0.0, 0.35)   # the color matrix of a player just hurt (red)
+IDENTITY = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
 
 
 @dataclass
@@ -80,9 +83,20 @@ def character_tile_for(first_tile, player_id, viewer_angle=None, angle=None):
     return first_tile + (player_id % len(SHIRTS)) * VIEWS + view
 
 
-def character_sprite(body, first_tile, player_id, viewer_angle=None):
-    """(x, y, z, size, tile) of a player seen by someone else."""
-    return (body.x, body.y, body.z, PLAYER_HEIGHT, character_tile_for(first_tile, player_id, viewer_angle, body.angle))
+def hit_tint(hit):
+    """The color matrix of a player hurt `hit` seconds of HIT_FLASH ago from the end: red, fading back to their own
+    colors as hit runs out (None when it has)."""
+    if hit <= 0.0:
+        return None
+    k = min(1.0, hit / HIT_FLASH)
+    return tuple(i + (t - i) * k for i, t in zip(IDENTITY, HIT_TINT))
+
+
+def character_sprite(body, first_tile, player_id, viewer_angle=None, hit=0.0):
+    """(x, y, z, size, tile) of a player seen by someone else, tinted red while `hit` (see hit_tint) lasts."""
+    sprite = (body.x, body.y, body.z, PLAYER_HEIGHT, character_tile_for(first_tile, player_id, viewer_angle, body.angle))
+    tint = hit_tint(hit)
+    return sprite if tint is None else sprite + (0.0, 1.0, 0.0, tint)
 
 
 class SpawnOrder:
@@ -123,10 +137,12 @@ class SpawnOrder:
 
 @dataclass
 class PlayerState:
-    """One player: where they are (body), what pickups changed (stats) and what they carry."""
+    """One player: where they are (body), what pickups changed (stats) and what they carry, and how much longer
+    they show red to the others after being hurt (hit, seconds)."""
     body: object
     stats: PlayerStats = field(default_factory=PlayerStats)
     inventory: Inventory = field(default_factory=Inventory)
+    hit: float = 0.0
 
 
 @dataclass
@@ -134,6 +150,7 @@ class Events:
     """What happened to one player during a step, for the screen (recoil, pickup text)."""
     fired: int = 0                  # shots fired
     picked: list = field(default_factory=list)      # messages of the pickups made
+    hurt: float = 0.0               # damage taken (the screen flashes red)
 
 
 class Game:
@@ -149,6 +166,7 @@ class Game:
         self.spawns = SpawnOrder(level, self.rng)       # where players come in
         self.players = {}           # player id -> PlayerState
         self.fx = []                # particle effects to play, (name, x, y, z, dx, dy, dz[, ox, oy, oz]), until take_fx()
+        self.hurts = {}             # player id -> damage taken, until take_hurts()
         self.flashes = []           # lights to flash, (name, x, y, z), until take_flashes()
 
     def load_level(self, level, world, character_tile=None):
@@ -201,6 +219,9 @@ class Game:
         """Take `damage` off a player's health. At zero they are out: back in at the next spawner (or the level's
         start), with full health and only what a new player carries (their score stays)."""
         state = self.players[player_id]
+        if damage > 0:
+            self.hurts[player_id] = self.hurts.get(player_id, 0.0) + damage
+            state.hit = HIT_FLASH
         state.stats.health = max(0.0, state.stats.health - damage)
         if state.stats.health <= 0.0:
             state.body = self.spawns.body(self.world)               # in place: sessions hold on to this PlayerState
@@ -230,6 +251,11 @@ class Game:
         out, self.fx = self.fx, []
         return out
 
+    def take_hurts(self):
+        """{player id: damage taken} since the last call (a hit that knocked them out counts too)."""
+        out, self.hurts = self.hurts, {}
+        return out
+
     def take_flashes(self):
         """The lights to flash since the last call (a muzzle flash for each shot fired)."""
         out, self.flashes = self.flashes, []
@@ -238,6 +264,8 @@ class Game:
     def advance_world(self, dt):
         """The shared part of dt seconds: bullets fly (and hurt the players they strike), items come back,
         players pick up what they touch. Returns {player id: pickup messages}."""
+        for state in self.players.values():
+            state.hit = max(0.0, state.hit - dt)
         targets = [(pid, state.body.x, state.body.y, state.body.z) for pid, state in self.players.items()]
         for hit in self.projectiles.update(self.world, dt, targets):
             for effect in hit.effects:                  # sprays back the way the bullet came
@@ -259,6 +287,9 @@ class Game:
                   for pid in self.players}
         for pid, picked in self.advance_world(dt).items():
             events[pid].picked = picked
+        for pid, damage in self.take_hurts().items():
+            if pid in events:
+                events[pid].hurt = damage
         return events
 
     def sprites(self, viewer=None):
@@ -269,5 +300,5 @@ class Game:
         if self.character_tile is None:
             return []
         looking = self.players[viewer].body.angle if viewer in self.players else None
-        return [character_sprite(state.body, self.character_tile, pid, looking)
+        return [character_sprite(state.body, self.character_tile, pid, looking, state.hit)
                 for pid, state in self.players.items() if pid != viewer]

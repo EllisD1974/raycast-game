@@ -33,7 +33,7 @@ from atlas import ATLAS_PATH, atlas_array, transparent_tiles, unpack_atlas
 from character import character_tiles
 from constants import FPS_CAP, HEIGHT, MOUSE_SENSITIVITY, TURN_SPEED, WIDTH
 from game import Events, Game, Inputs
-from hud import draw_hud
+from hud import draw_hud, draw_hurt, hurt_flash
 from home import Home
 from mapfile import MAP_PATH, load_or_default
 from menu import GameSettings, Menu
@@ -374,6 +374,7 @@ def play(screen, clock, graphics, settings, session, map_path, from_home=False):
     ended, if not by the player's choice (the host left, the connection dropped)."""
     watcher = FileWatcher([map_path, ATLAS_PATH]) if map_path else None    # a joiner is sent new maps instead
     kick = 0.0                                   # 1 right after a shot, fading to 0 (the gun's recoil)
+    hurt = 0.0                                   # the red flash after being hurt, 1 fading to 0
     font = pygame.font.Font(None, 22)
     message, message_left = "", 0.0
     mouse = MouseLook(screen.window, MOUSE_SENSITIVITY * settings.sensitivity)
@@ -458,12 +459,14 @@ def play(screen, clock, graphics, settings, session, map_path, from_home=False):
         if happened.fired:
             kick = 1.0
         kick = max(0.0, kick - dt * 8.0)
+        hurt = hurt_flash(hurt, happened.hurt, dt)
         if happened.picked:
             message, message_left = ", ".join(happened.picked), 1.5
         message_left = max(0.0, message_left - dt)
 
         me = session.me
         picture = graphics.renderer.draw(session.world, me.body, session.sprites(), session.lighting())
+        draw_hurt(picture, hurt)                            # (under the HUD, which stays easy to read)
         draw_hud(picture, font, me.stats, message if message_left > 0 else "", me.inventory, graphics.tiles, kick)
         overlay = None
         if menu.open:

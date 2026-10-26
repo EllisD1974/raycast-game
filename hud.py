@@ -1,4 +1,5 @@
-"""What is drawn over the game picture: health and score, the inventory, and the equipped gun."""
+"""What is drawn over the game picture: health and score, the inventory, the equipped gun, and the red flash of
+being hurt."""
 import pygame
 
 from constants import HEIGHT, WIDTH
@@ -8,6 +9,26 @@ SHADOW = (0, 0, 0)
 HIGHLIGHT = (255, 240, 120)
 DIM = (170, 170, 180)
 UNIT = HEIGHT / 8                      # a gun's size of 1.0 draws its 32 pixel tile this many pixels tall
+HURT_COLOR = (220, 20, 20)
+HURT_ALPHA = 64                        # how strong the red over the picture is just after a hit (of 255)
+HURT_FADE = 3.0                        # the flash fades out in 1 / HURT_FADE seconds
+
+
+def hurt_flash(flash, damage, dt):
+    """How strong the red flash is now (0 to 1): a hit (`damage` taken this frame) brings it up - more for a bigger
+    hit - and it fades over a third of a second."""
+    if damage > 0:
+        flash = max(flash, min(1.0, 0.5 + damage / 50.0))
+    return max(0.0, flash - dt * HURT_FADE)
+
+
+def draw_hurt(picture, flash):
+    """Lay a see-through red over the picture, `flash` (0 to 1) of HURT_ALPHA strong."""
+    if flash <= 0.0:
+        return
+    veil = pygame.Surface(picture.get_size(), pygame.SRCALPHA)
+    veil.fill((*HURT_COLOR, round(HURT_ALPHA * flash)))
+    picture.blit(veil, (0, 0))
 
 
 def shadowed(picture, font, text, pos, color=TEXT, center=False):
