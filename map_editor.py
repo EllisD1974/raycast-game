@@ -163,6 +163,16 @@ it. The first row, "Map ambient light", sets how bright the map is without light
 dark so lights show. Walls stop light. Lights only change how things look and are worked out on each player's
 own machine.
 
+The Map settings section (J or the Map settings button) says how this map is played, and holds its buy menu.
+"Game rules": the Game mode (Free for all; Two teams, which splits the players as they join; Co-op, everyone on one
+team), Friendly fire (whether bullets and blasts hurt teammates), Max health, Start money, what knocking out an
+opponent earns (Score / kill, Money / kill) and a Starting gun every player comes in with. "Buy menu": turn it on
+(players then open it with B in the game) and choose what it costs: Free, Money or Score. "+ Add to buy menu" (or the
+pane's "+ Add" list of the map's guns and ammo) adds an entry: what it gives (a gun, ammo rounds, an inventory item or
+health), how much, its price and its icon (none: a gun shows its own picture); Move up / down orders the menu. On the
+right is the menu as a player who just joined sees it (entries they cannot afford yet are greyed out). In the game,
+clicking an entry gives it to the player when they have enough money or score, and takes the price off it.
+
 The 3D view (V or the 3D button shows and hides it) is a live picture of the level at the right of
 the window, drawn by the game's own renderer, and it follows every edit as you make it, even
 mid-stroke. Drag inside it to look around; with the mouse over it, W A S D / arrows walk and turn
@@ -194,7 +204,10 @@ from mapfile import (ANIMATION_KINDS, ANIMATION_LABELS, DEFAULTS, EDIT_LAYERS, E
                      EFFECT_AIM_LABELS, EFFECT_AIMS, EFFECT_COLOR_LABELS, EFFECT_COLORS, EFFECT_KIND_LABELS, EFFECT_KINDS, MIN_AMBIENT, MODE_LABELS, SHOT_LABELS, SHOT_TYPES, Animation, AmmoType, Effect,
                      Entity, Gun, Level, Light, MAX_ELEVATION, MAX_SPAWN_ORDER, Spawner, SIDE_VECTORS, SIDES, WALL_LABELS, default_level, mounted_position,
                      IMPORT_KINDS, TAKEN_CHOICES, grid_name, import_things, load_level, save_level, split_grid_name,
-                     things_named, with_needs, area_rect, clear_area, copy_area, paste_area)
+                     things_named, with_needs, area_rect, clear_area, copy_area, paste_area,
+                     BUY_COST_LABELS, BUY_COSTS, BUY_KIND_LABELS, BUY_KINDS, GAME_MODE_LABELS, GAME_MODES, MAX_BUY_ITEMS,
+                     MAX_MONEY, BuyItem)
+from buymenu import entry_tile, price_text
 import details
 import hud
 from entities import describe
@@ -294,6 +307,8 @@ GIZMO_HIT = 13                                  # how close (pixels) a click mus
 GIZMO_COLORS = {"bullet": (255, 170, 60), "effect": (80, 220, 255)}
 GIZMO_NAMES = {"bullet": "Bullets", "effect": "Effect"}
 AMBIENT_ROW = -1                                # light_selected value for the map's ambient light, listed first
+RULES_ROW, BUY_ROW = -1, -2                     # settings_selected values for the game rules and the buy menu's own
+BUY_AMOUNTS = {"gun": 1.0, "ammo": 30.0, "item": 1.0, "health": 50.0}   # what an entry gives when its kind is chosen
 
 
 def recolored(picture, matrix):
@@ -514,6 +529,9 @@ class Editor:
         self.light_selected = None              # index in level.lights of the light being edited, or AMBIENT_ROW
         self.light_clock = 0.0                  # time for the flicker in a light's preview
         self.effects_mode = False               # the Effects section is showing instead of the map
+        self.settings_mode = False              # the Map settings section is showing instead of the map
+        self.settings_selected = None           # RULES_ROW, BUY_ROW or the index of a buy menu entry being edited
+        self.settings_scroll = 0                # how far the Map settings section is scrolled up, in pixels
         self.effect_selected = None             # index in level.effects of the effect being edited
         self.fx_sim = None                      # [ParticleSystem, settings it was made from, time to next burst]
         self.fx_scaled = {}                     # (tile, pixels) -> a particle picture at that size
@@ -643,8 +661,8 @@ class Editor:
         return None
 
     def section_open(self):
-        """True while a section (Guns, Prefabs, Effects) is showing in place of the map."""
-        return self.guns_mode or self.prefabs_mode or self.effects_mode or self.lights_mode
+        """True while a section (Guns, Prefabs, Effects, Lights, Map settings) is showing in place of the map."""
+        return self.guns_mode or self.prefabs_mode or self.effects_mode or self.lights_mode or self.settings_mode
 
     def selected_prefab(self):
         """The prefab being edited in the Prefabs section, or None."""
@@ -690,7 +708,8 @@ class Editor:
 
     def details_width(self):
         chosen = (self.selected_entity() or self.selected_gun() or self.selected_ammo() or self.selected_prefab()
-                  or self.selected_effect() or self.selected_light() or (self.ambient_chosen() or None))
+                  or self.selected_effect() or self.selected_light() or (self.ambient_chosen() or None)
+                  or self.selected_buy_item() or (self.settings_row() or None))
         return PANE_WIDTH if chosen is not None or self.palette_active() else 0
 
     def details_rect(self):
@@ -703,6 +722,13 @@ class Editor:
 
     def details_fields(self):
         """Fields describing the selected thing: a gun in the Guns section, else an item."""
+        if self.settings_row() == RULES_ROW:
+            return self.rules_fields()
+        if self.settings_row() == BUY_ROW:
+            return self.buy_menu_fields()
+        entry = self.selected_buy_item()
+        if entry is not None:
+            return self.buy_item_fields(entry)
         light = self.selected_light()
         if light is not None:
             return self.light_fields(light)
@@ -803,7 +829,7 @@ class Editor:
         """Open the Prefabs section with the named prefab selected, to change what every copy of it looks like."""
         for i, prefab in enumerate(self.level.prefabs):
             if prefab.name == name:
-                self.guns_mode = self.effects_mode = self.lights_mode = False
+                self.guns_mode = self.effects_mode = self.lights_mode = self.settings_mode = False
                 self.prefabs_mode = True
                 self.deselect()
                 self.prefab_selected = i
@@ -1018,9 +1044,11 @@ class Editor:
                 return
         self.begin_edit()
         if name == "name":
-            for e in self.level.entities + self.level.prefabs:
+            for e in self.level.entities + self.level.prefabs + self.level.settings.buy_items:
                 if e.gun == g.name:
                     e.gun = value
+            if self.level.settings.start_gun == g.name:
+                self.level.settings.start_gun = value
         setattr(g, name, value)
 
     def new_ammo_name(self, base="Ammo", skip=None):
@@ -1056,7 +1084,7 @@ class Editor:
             for g in self.level.guns:
                 if g.ammo == a.name:
                     g.ammo = value
-            for e in self.level.entities + self.level.prefabs:
+            for e in self.level.entities + self.level.prefabs + self.level.settings.buy_items:
                 if e.ammo == a.name:
                     e.ammo = value
         setattr(a, name, value)
@@ -1068,7 +1096,7 @@ class Editor:
             for g in self.level.guns:                    # guns that used it fall back to the default bullet
                 if g.ammo == a.name:
                     g.ammo = ""
-            for e in self.level.entities + self.level.prefabs:
+            for e in self.level.entities + self.level.prefabs + self.level.settings.buy_items:
                 if e.ammo == a.name:
                     e.ammo = ""
             self.level.ammo_types.remove(a)
@@ -1079,6 +1107,10 @@ class Editor:
         if g is not None:
             self.begin_edit()
             self.level.guns.remove(g)
+            settings = self.level.settings              # it is no longer handed out at the start or sold
+            if settings.start_gun == g.name:
+                settings.start_gun = ""
+            settings.buy_items = [b for b in settings.buy_items if not (b.kind == "gun" and b.gun == g.name)]
             self.gun_selected = None
 
     def add_animation(self, kind):
@@ -1396,6 +1428,162 @@ class Editor:
         self.level.lights.remove(light)
         self.light_selected = None
 
+    # ---------------------------------------------------------------- map settings and the buy menu
+
+    def settings_row(self):
+        """RULES_ROW or BUY_ROW while one of those is chosen in the Map settings section, else None."""
+        if self.settings_mode and self.settings_selected in (RULES_ROW, BUY_ROW):
+            return self.settings_selected
+        return None
+
+    def selected_buy_item(self):
+        """The buy menu entry being edited in the Map settings section, or None."""
+        items = self.level.settings.buy_items
+        if self.settings_mode and self.settings_selected is not None and 0 <= self.settings_selected < len(items):
+            return items[self.settings_selected]
+        return None
+
+    def rules_fields(self):
+        """How the map is played, for the Details pane in the Map settings section."""
+        rules = self.level.settings
+
+        def field(name, label, kind, **options):
+            return Field(name, label, kind, (lambda n=name: getattr(rules, n)),
+                         (lambda v, n=name: self.set_rule(n, v)), **options)
+
+        guns = ("",) + tuple(g.name for g in self.level.guns)
+        fields = [field("mode", "Game mode", "enum", choices=GAME_MODES, labels=GAME_MODE_LABELS)]
+        if rules.mode != "ffa":
+            fields.append(field("friendly_fire", "Friendly fire", "enum", choices=(False, True),
+                                labels={False: "Off", True: "On"}))
+        fields += [field("max_health", "Max health", "num", step=10.0, low=1.0, high=10000.0),
+                   field("start_money", "Start money", "num", step=50.0, low=0.0, high=MAX_MONEY),
+                   field("kill_score", "Score / kill", "num", step=1.0, low=0.0, high=MAX_MONEY),
+                   field("kill_money", "Money / kill", "num", step=50.0, low=0.0, high=MAX_MONEY),
+                   field("start_gun", "Starting gun", "enum", choices=guns,
+                         labels={"": "(none)", **{n: n for n in guns if n}})]
+        return fields
+
+    def buy_menu_fields(self):
+        """Whether the map has a buy menu and what it costs, for the Details pane in the Map settings section, and a
+        list to add one of the map's guns, ammo types, health or an item to it."""
+        rules = self.level.settings
+
+        def field(name, label, kind, **options):
+            return Field(name, label, kind, (lambda n=name: getattr(rules, n)),
+                         (lambda v, n=name: self.set_rule(n, v)), **options)
+
+        choices = (tuple(f"gun:{g.name}" for g in self.level.guns) + tuple(f"ammo:{a.name}" for a in self.level.ammo_types)
+                   + ("health:", "item:"))
+        labels = {c: {"gun": "Gun: ", "ammo": "Ammo: ", "health": "Health", "item": "Inventory item"}[c.split(":")[0]]
+                  + c.split(":", 1)[1] for c in choices}
+        fields = [field("buy_menu", "Buy menu", "enum", choices=(False, True),
+                        labels={False: "Off", True: "On (B in the game)"}),
+                  field("buy_cost", "Costs", "enum", choices=BUY_COSTS, labels=BUY_COST_LABELS)]
+        if len(rules.buy_items) < MAX_BUY_ITEMS:
+            fields.append(Field("add_buy", "Add", "menu", None, self.add_buy_choice, choices=choices, labels=labels,
+                                text_override="+ Add to the buy menu"))
+        return fields
+
+    def buy_item_fields(self, entry):
+        """One entry of the buy menu, for the Details pane in the Map settings section."""
+        def field(name, label, kind, **options):
+            return Field(name, label, kind, (lambda n=name: getattr(entry, n)),
+                         (lambda v, n=name: self.set_buy_item(n, v)), **options)
+
+        fields = [field("name", "Button text", "text"),
+                  field("kind", "Gives", "enum", choices=BUY_KINDS, labels=BUY_KIND_LABELS)]
+        if entry.kind == "gun":
+            names = tuple(g.name for g in self.level.guns) or ("",)
+            fields.append(field("gun", "Gun", "enum", choices=names, labels={"": "(no guns yet)", **{n: n for n in names}}))
+        elif entry.kind == "ammo":
+            names = ("",) + tuple(a.name for a in self.level.ammo_types)
+            fields += [field("ammo", "Ammo type", "enum", choices=names,
+                             labels={"": "(default bullet)", **{n: n for n in names}}),
+                       field("amount", "Rounds", "num", step=6.0, low=0.0, high=100000.0)]
+        elif entry.kind == "item":
+            fields += [field("item", "Item name", "text"), field("amount", "How many", "num", step=1.0, low=0.0, high=1000.0)]
+        else:
+            fields.append(field("amount", "Health", "num", step=5.0, low=0.0, high=10000.0))
+        fields += [field("price", "Price", "num", step=50.0 if self.level.settings.buy_cost == "money" else 5.0,
+                         low=0.0, high=MAX_MONEY),
+                   field("tile", "Icon", "tile", low=-1, high=len(self.tiles) - 1),
+                   Field("move_up", "Move up", "button", None, None, action=lambda: self.move_buy_item(-1),
+                         text_override="Move up the menu"),
+                   Field("move_down", "Move down", "button", None, None, action=lambda: self.move_buy_item(1),
+                         text_override="Move down the menu")]
+        return fields
+
+    def set_rule(self, name, value):
+        """Change one of the map's settings (one undo step)."""
+        rules = self.level.settings
+        if getattr(rules, name) == value:
+            return
+        self.begin_edit()
+        setattr(rules, name, value)
+        if name == "buy_menu" and value and not rules.buy_items:
+            self.say("Buy menu on: add entries with + Add to buy menu (players open it with B)")
+
+    def set_buy_item(self, name, value):
+        """Change one setting of the selected buy menu entry (one undo step). Choosing what it gives fills in a
+        sensible amount and the first gun."""
+        entry = self.selected_buy_item()
+        if entry is None or getattr(entry, name) == value:
+            return
+        self.begin_edit()
+        if name in ("name", "item"):
+            value = str(value).strip()[:MAX_NAME]
+        setattr(entry, name, value)
+        if name == "kind":
+            entry.amount = BUY_AMOUNTS[value]
+            if value == "gun" and not entry.gun and self.level.guns:
+                entry.gun = self.level.guns[0].name
+
+    def add_buy_item(self, entry=None):
+        """Add an entry to the buy menu (by default the first of the map's guns not in it yet, or health) and select
+        it. Adding the first entry turns the buy menu on."""
+        rules = self.level.settings
+        if len(rules.buy_items) >= MAX_BUY_ITEMS:
+            self.say(f"A buy menu holds at most {MAX_BUY_ITEMS} entries")
+            return
+        if entry is None:
+            sold = {b.gun for b in rules.buy_items if b.kind == "gun"}
+            gun = next((g.name for g in self.level.guns if g.name not in sold), None)
+            entry = BuyItem(kind="gun", gun=gun) if gun else BuyItem(kind="health", amount=BUY_AMOUNTS["health"])
+        self.begin_edit()
+        rules.buy_items.append(entry)
+        if len(rules.buy_items) == 1:
+            rules.buy_menu = True
+        self.settings_selected = len(rules.buy_items) - 1
+        self.tile_target = "tile"
+        self.field_edit = self.menu_open = None
+        self.say(f"Added {entry.label()} to the buy menu: set its price in the Details pane")
+
+    def add_buy_choice(self, choice):
+        """An entry picked from the pane's "+ Add" list: "gun:<name>", "ammo:<name>", "health:" or "item:"."""
+        kind, name = choice.split(":", 1)
+        entry = BuyItem(kind=kind, amount=BUY_AMOUNTS[kind])
+        if kind in ("gun", "ammo"):
+            setattr(entry, kind, name)
+        self.add_buy_item(entry)
+
+    def move_buy_item(self, step):
+        """Move the selected entry up (-1) or down (1) the buy menu."""
+        items, i = self.level.settings.buy_items, self.settings_selected
+        if self.selected_buy_item() is None or not 0 <= i + step < len(items):
+            return
+        self.begin_edit()
+        items[i], items[i + step] = items[i + step], items[i]
+        self.settings_selected = i + step
+
+    def delete_buy_item(self):
+        entry = self.selected_buy_item()
+        if entry is None:
+            return
+        self.begin_edit()
+        self.level.settings.buy_items.remove(entry)
+        self.settings_selected = None
+
     def select_entity(self, entity):
         self.field_edit = None
         self.selected = None
@@ -1406,9 +1594,12 @@ class Editor:
     def deselect(self):
         self.selected, self.field_edit, self.menu_open = None, None, None
         self.gun_selected = self.ammo_selected = self.prefab_selected = self.effect_selected = None
-        self.light_selected = None
+        self.light_selected = self.settings_selected = None
 
     def delete_selected(self):
+        if self.selected_buy_item() is not None:
+            self.delete_buy_item()
+            return
         if self.selected_light() is not None:
             self.delete_light()
             return
@@ -1467,6 +1658,10 @@ class Editor:
 
     def details_delete_label(self):
         """Text of the Details pane's delete button for what is selected ('' for none: the palette)."""
+        if self.selected_buy_item() is not None:
+            return "Remove from the buy menu"
+        if self.settings_row() is not None:
+            return ""
         if self.selected_light() is not None:
             return "Delete light"
         if self.selected_effect() is not None:
@@ -1557,6 +1752,7 @@ class Editor:
             row1.append(("btn", "Del", "delfloor"))
         row1.append(("txt", f"floor {self.floor + 1} of {count}", DIM))
         row1 += [None, ("btn", "Guns(G)", "guns"), ("btn", "Prefabs(P)", "prefabs"), ("btn", "Effects(X)", "effects"), ("btn", "Lights(L)", "lights"),
+                 ("btn", "Map settings(J)", "mapsettings"),
                  ("btn", "Key(K)", "legend"), ("btn", "3D(V)", "preview"),
                  ("btn", "Reload tex(F6)", "textures")]
         if self.show_preview:
@@ -2247,6 +2443,13 @@ class Editor:
             else:
                 self.say("Select a prefab first (or add one), then click a tile")
             return
+        if self.settings_mode:                          # the Map settings section: a buy menu entry's icon
+            if self.selected_buy_item() is not None:
+                self.set_buy_item("tile", min(picked))
+                self.say(f"Buy menu icon: tile {min(picked) + 1}")
+            else:
+                self.say("Select an entry of the buy menu first (or add one), then click a tile for its icon")
+            return
         if self.lights_mode:                            # the Lights section: the wall tile that glows with the light
             if self.selected_light() is not None:
                 self.set_light("wall_tile", min(picked))
@@ -2356,7 +2559,17 @@ class Editor:
             self.confirm = None
         if action != "dropdown":
             self.dropdown_open = False
-        if action == "lights":
+        if action in ("lights", "effects", "guns", "prefabs"):
+            self.settings_mode = False
+        if action == "mapsettings":
+            self.settings_mode = not self.settings_mode
+            self.guns_mode = self.prefabs_mode = self.effects_mode = self.lights_mode = False
+            self.deselect()
+            self.settings_scroll = 0
+            if self.settings_mode:
+                self.settings_selected = RULES_ROW
+            self.say("Map settings: the game mode and rules, and the buy menu" if self.settings_mode else "Back to the map")
+        elif action == "lights":
             self.lights_mode, self.effects_mode, self.guns_mode, self.prefabs_mode = not self.lights_mode, False, False, False
             self.deselect()
             self.say("Lights: add one, set its color and reach, then give it to a gun, item, ammo or effect"
@@ -2387,7 +2600,7 @@ class Editor:
             self.tool = action[5:]
             self.shape_drag = self.area_drag = None
             self.pasting = False
-            self.guns_mode = self.prefabs_mode = self.effects_mode = self.lights_mode = False
+            self.guns_mode = self.prefabs_mode = self.effects_mode = self.lights_mode = self.settings_mode = False
             if self.tool != "entity":
                 self.deselect()
             if self.tool == "camera" and not self.show_preview:
@@ -2866,6 +3079,8 @@ class Editor:
             self.do("effects")
         elif e.key == pygame.K_l:
             self.do("lights")
+        elif e.key == pygame.K_j:
+            self.do("mapsettings")
         elif e.key == pygame.K_v:
             self.do("preview")
         elif e.key in LAYER_KEYS:
@@ -2955,6 +3170,9 @@ class Editor:
             elif self.lights_mode:
                 if e.button == 1:
                     self.lights_click(e.pos)
+            elif self.settings_mode:
+                if e.button == 1:
+                    self.settings_click(e.pos)
             elif e.button in (1, 3) and not self.over_ruler(e.pos):
                 self.confirm = None
                 self.map_click(self.cell_at(e.pos), e.button)
@@ -3033,6 +3251,10 @@ class Editor:
             self.guns_scroll = max(0, self.guns_scroll - e.y * 48)
             self.clamp_guns_scroll()
             return
+        if self.settings_mode and area.collidepoint(self.mouse):    # ... and the Map settings section
+            self.settings_scroll = max(0, self.settings_scroll - e.y * 48)
+            self.clamp_settings_scroll()
+            return
         if not area.collidepoint(self.mouse) or self.section_open():
             return
         if self.mods() & pygame.KMOD_CTRL:      # Ctrl + wheel changes the value under the cursor, no zoom
@@ -3057,6 +3279,8 @@ class Editor:
             self.draw_effects(screen)
         elif self.lights_mode:
             self.draw_lights(screen)
+        elif self.settings_mode:
+            self.draw_settings(screen)
         else:
             self.draw_map(screen)
         self.draw_panel(screen)
@@ -4136,6 +4360,140 @@ class Editor:
                                card.x, card.bottom + 12, card.w)
         screen.set_clip(None)
 
+    SETTINGS_ROW_H = 46
+
+    def settings_rows(self):
+        """(rules row rect, buy menu row rect, [(rect, entry index)], Add button rect) for the Map settings section."""
+        area = self.map_area()
+        width = min(area.w - 40, 440)
+        top = area.y + 74 - self.settings_scroll
+        rules = pygame.Rect(area.x + 20, top, width, self.SETTINGS_ROW_H - 4)
+        buy = pygame.Rect(area.x + 20, top + self.SETTINGS_ROW_H, width, self.SETTINGS_ROW_H - 4)
+        first = top + 2 * self.SETTINGS_ROW_H + 30
+        rows = [(pygame.Rect(area.x + 20, first + i * self.SETTINGS_ROW_H, width, self.SETTINGS_ROW_H - 4), i)
+                for i in range(len(self.level.settings.buy_items))]
+        add = pygame.Rect(area.x + 20, first + len(rows) * self.SETTINGS_ROW_H, 220, 34)
+        return rules, buy, rows, add
+
+    def clamp_settings_scroll(self):
+        _rules, _buy, _rows, add = self.settings_rows()
+        bottom = add.bottom + self.settings_scroll + 20
+        self.settings_scroll = max(0, min(self.settings_scroll, bottom - self.map_area().bottom))
+
+    def settings_click(self, pos):
+        rules, buy, rows, add = self.settings_rows()
+        if add.collidepoint(pos):
+            self.add_buy_item()
+            return
+        for rect, choice in [(rules, RULES_ROW), (buy, BUY_ROW)] + rows:
+            if rect.collidepoint(pos):
+                self.settings_selected = choice
+                self.tile_target = "tile"
+                self.field_edit = self.menu_open = None
+                return
+
+    def rules_summary(self):
+        rules = self.level.settings
+        text = GAME_MODE_LABELS[rules.mode] + (", friendly fire" if rules.mode != "ffa" and rules.friendly_fire else "")
+        text += f"   health {rules.max_health:g}"
+        if rules.start_money or rules.kill_money:
+            text += f"   start ${rules.start_money:g}"
+        if rules.kill_score or rules.kill_money:
+            text += f"   kill +{rules.kill_score:g} score +${rules.kill_money:g}"
+        return text + (f"   starts with {rules.start_gun}" if rules.start_gun else "")
+
+    def buy_summary(self):
+        rules = self.level.settings
+        if not rules.buy_menu:
+            return "Off" + (f" ({len(rules.buy_items)} entries kept)" if rules.buy_items else "")
+        count = len(rules.buy_items)
+        return f"On   costs {BUY_COST_LABELS[rules.buy_cost].lower()}   {count} entr{'y' if count == 1 else 'ies'}"
+
+    def draw_settings_row(self, screen, rect, title, summary, on, icon=-1):
+        pygame.draw.rect(screen, BUTTON_ON if on else (BUTTON_HOT if rect.collidepoint(self.mouse) else BUTTON),
+                         rect, border_radius=4)
+        x = rect.x + 10
+        if 0 <= icon < len(self.tiles):
+            screen.blit(pygame.transform.scale(self.tiles[icon], (32, 32)), (rect.x + 6, rect.y + 5))
+            x = rect.x + 48
+        clip = screen.get_clip()
+        screen.set_clip(rect.clip(clip))
+        screen.blit(self.font.render(title, True, TEXT), (x, rect.y + 5))
+        screen.blit(self.small.render(summary, True, TEXT if on else DIM), (x, rect.y + 24))
+        screen.set_clip(clip)
+
+    def draw_settings(self, screen):
+        """The Map settings section: the game rules, the buy menu and its entries as a list, and the buy menu as a
+        player who just joined sees it."""
+        area = self.map_area()
+        screen.set_clip(area)
+        pygame.draw.rect(screen, BG, area)
+        self.clamp_settings_scroll()
+        rules = self.level.settings
+        top = area.y - self.settings_scroll
+        screen.blit(self.font.render("Map settings", True, ACCENT), (area.x + 20, top + 14))
+        screen.blit(self.small.render("How this map is played: its game mode and rules, and the buy menu players open",
+                                      True, DIM), (area.x + 20, top + 36))
+        screen.blit(self.small.render("with B. Select a row to change it in the Details pane.", True, DIM),
+                    (area.x + 20, top + 52))
+        rules_rect, buy_rect, rows, add = self.settings_rows()
+        self.draw_settings_row(screen, rules_rect, "Game rules", self.rules_summary(), self.settings_selected == RULES_ROW)
+        self.draw_settings_row(screen, buy_rect, "Buy menu", self.buy_summary(), self.settings_selected == BUY_ROW)
+        screen.blit(self.font.render("In the buy menu", True, ACCENT if rules.buy_menu else DIM),
+                    (buy_rect.x, buy_rect.bottom + 12))
+        for rect, i in rows:
+            entry = rules.buy_items[i]
+            what = BUY_KIND_LABELS[entry.kind] + ("" if entry.kind != "gun" or entry.gun in self.gun_names()
+                                                   else "  (no such gun: not sold)")
+            self.draw_settings_row(screen, rect, f"{entry.label()}   {price_text(rules.buy_cost, entry.price)}", what,
+                                   i == self.settings_selected, entry_tile(entry, self.level.guns))
+        self._draw_add_button(screen, add, "+ Add to buy menu")
+        right = area.x + 20 + min(area.w - 40, 440) + 24
+        width = min(380, area.right - right - 20)
+        card = pygame.Rect(right, area.y + 74, width, 0)
+        if width < 240:
+            card = pygame.Rect(add.x, add.bottom + 24, min(380, max(200, area.w - 40)), 0)
+        self.draw_buy_preview(screen, card)
+        screen.set_clip(None)
+
+    def draw_buy_preview(self, screen, card):
+        """The buy menu as a player who has just joined sees it in the game: entries they cannot afford with the
+        start money (or no score) are greyed out."""
+        rules = self.level.settings
+        entries = rules.buy_items[:10]
+        card.h = 72 + max(1, len(entries)) * 36 + (18 if len(rules.buy_items) > len(entries) else 0)
+        pygame.draw.rect(screen, (32, 34, 42), card, border_radius=8)
+        pygame.draw.rect(screen, (90, 94, 110), card, 1, border_radius=8)
+        title = self.font.render("Buy menu" + ("" if rules.buy_menu else "  (off)"), True, ACCENT)
+        screen.blit(title, title.get_rect(midtop=(card.centerx, card.y + 10)))
+        have = {"free": None, "money": rules.start_money, "score": 0.0}[rules.buy_cost]
+        wallet = ("Everything here is free" if have is None else
+                  f"A new player has ${have:g}" if rules.buy_cost == "money" else "A new player has 0 score")
+        line = self.small.render(wallet, True, DIM)
+        screen.blit(line, line.get_rect(midtop=(card.centerx, card.y + 34)))
+        y = card.y + 58
+        if not entries:
+            line = self.small.render("Nothing for sale yet", True, DIM)
+            screen.blit(line, line.get_rect(midtop=(card.centerx, y + 8)))
+        for entry in entries:
+            button = pygame.Rect(card.x + 14, y, card.w - 28, 30)
+            can = have is None or entry.price <= 0 or have >= entry.price
+            pygame.draw.rect(screen, BUTTON if can else (46, 48, 56), button, border_radius=5)
+            tile = entry_tile(entry, self.level.guns)
+            if 0 <= tile < len(self.tiles):
+                picture = pygame.transform.scale(self.tiles[tile], (24, 24))
+                if not can:
+                    picture.set_alpha(110)
+                screen.blit(picture, (button.x + 4, button.y + 3))
+            text = self.font.render(f"{entry.label()}   {price_text(rules.buy_cost, entry.price)}", True,
+                                    TEXT if can else DIM)
+            screen.blit(text, text.get_rect(center=button.center))
+            y += 36
+        if len(rules.buy_items) > len(entries):
+            more = self.small.render(f"... and {len(rules.buy_items) - len(entries)} more (the wheel scrolls in the game)",
+                                     True, DIM)
+            screen.blit(more, more.get_rect(midtop=(card.centerx, y)))
+
     def draw_details(self, screen):
         """The docked Details pane (only while something is selected)."""
         rect = self.details_rect()
@@ -4144,10 +4502,26 @@ class Editor:
         e, gun, ammo = self.selected_entity(), self.selected_gun(), self.selected_ammo()
         prefab, effect = self.selected_prefab(), self.selected_effect()
         light, ambient = self.selected_light(), self.ambient_chosen()
+        entry, rules_row = self.selected_buy_item(), self.settings_row()
         theme = {"panel": PANEL_BG, "grid": GRID, "text": TEXT, "dim": DIM, "accent": ACCENT, "button": BUTTON,
                  "button_hot": BUTTON_HOT, "field": (28, 29, 34), "field_edit": (50, 52, 64),
                  "danger": (120, 50, 55), "danger_hot": (160, 64, 70), "button_on": BUTTON_ON}
-        if ambient:
+        if rules_row == RULES_ROW:
+            notes = ("Two teams: players are split as they", "join; a teammate's name shows white.",
+                     "Co-op: everyone is on one team.", "Friendly fire off: teammates' bullets",
+                     "and blasts do not hurt (your own do).", "Knocking out an opponent earns the",
+                     "Score / Money per kill. Score and money", "stay when a player is knocked out.")
+        elif rules_row == BUY_ROW:
+            notes = ("Players open the buy menu with B.", "Free: every entry is free. Money or",
+                     "Score: an entry is only given to a", "player who has its price, which is",
+                     "taken off. Money comes from Start", "money and Money / kill (Game rules).")
+        elif entry is not None:
+            cost = self.level.settings.buy_cost
+            notes = (("The menu is free: the price is not used." if cost == "free"
+                      else f"Costs {price_text(cost, entry.price)} ({BUY_COST_LABELS[cost].lower()})."),
+                     "Button text blank: named after", "what it gives.", "Icon none: a gun shows its own picture.",
+                     "Click an atlas tile to set the icon.")
+        elif ambient:
             notes = ("How bright the map is without any", "light: 1 is fully lit, as maps were",
                      "before lights; lower is darker, so", "lights show. Walls, items and the",
                      "player are all dimmed by it.")
@@ -4190,7 +4564,8 @@ class Editor:
             notes = (f"Cell ({math.floor(e.x)}, {math.floor(e.y)}) on {self.level.names[e.span]}",
                      "Wheel over a row steps it.", "Click a number to type one.",
                      "Click an atlas tile: sets the sprite.", "Esc closes this; Del removes the item.")
-        title = ("Ambient light" if ambient else "Light" if light is not None else "Effect" if effect is not None else "Gun" if gun is not None else "Ammo type" if ammo is not None
+        title = ("Game rules" if rules_row == RULES_ROW else "Buy menu" if rules_row == BUY_ROW
+                 else "Buy menu entry" if entry is not None else "Ambient light" if ambient else "Light" if light is not None else "Effect" if effect is not None else "Gun" if gun is not None else "Ammo type" if ammo is not None
                  else "Prefab" if prefab is not None else "Prefab to place" if e is None else "Item")
         details.draw(screen, rect, title, self.details_rows(), theme, (self.font, self.small), focus=self.tile_target,
                      button_label=self.details_delete_label(),

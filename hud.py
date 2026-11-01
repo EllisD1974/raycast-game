@@ -1,4 +1,4 @@
-"""What is drawn over the game picture: health and score, the inventory, the equipped gun, and the red flash of
+"""What is drawn over the game picture: health, score and money, the inventory, the equipped gun, and the red flash of
 being hurt."""
 import pygame
 
@@ -93,9 +93,20 @@ def draw_weapon(picture, tiles, state, kick=0.0):
     picture.blit(art, (x, y))
 
 
-def draw_hud(picture, font, stats, message, inventory=None, tiles=None, kick=0.0):
+def draw_hud(picture, font, stats, message, inventory=None, tiles=None, kick=0.0, money=False, team=None, buy_key=False):
+    """`money` shows the player's money (on maps where it means something), `team` their team (None: not on one),
+    and `buy_key` a reminder that B opens the buy menu."""
     shadowed(picture, font, f"Health {stats.health:g}", (8, 8))
     shadowed(picture, font, f"Score {stats.score:g}", (8, 26))
+    y = 44
+    if money:
+        shadowed(picture, font, f"Money ${stats.money:g}", (8, y), HIGHLIGHT)
+        y += 18
+    if team is not None:
+        shadowed(picture, font, f"Team {team}", (8, y), DIM)
+        y += 18
+    if buy_key:
+        shadowed(picture, font, "B: buy menu", (8, y), DIM)
     if message:
         shadowed(picture, font, message, (picture.get_width() // 2, picture.get_height() // 2 + 40),
                  HIGHLIGHT, center=True)

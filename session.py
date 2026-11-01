@@ -50,6 +50,11 @@ class LocalSession:
         self.particles = ParticleSystem(game.level.effects, game.world)     # looks only; worked out on this machine
         self.lights = LightSystem(game.level, game.world)                   # likewise
 
+    @property
+    def level(self):
+        """The map being played (its settings say whether there is a buy menu, and what is in it)."""
+        return self.game.level
+
     def step(self, wish, dt, elapsed=None):
         """`dt` is the frame time the game runs by (capped); `elapsed` the real time since the last frame,
         which a network session paces itself by (it is dt if not given)."""
@@ -349,7 +354,9 @@ class ClientSession:
         for _, wish, dt in self.pending:
             move_body(self.world, body, wish, dt)
         self.me.body = body
-        self.me.stats = PlayerStats(mine["score"], mine["health"], mine["max_health"])
+        money = mine.get("money", 0.0)
+        self.me.stats = PlayerStats(mine["score"], mine["health"], mine["max_health"],
+                                    float(money) if isinstance(money, (int, float)) else 0.0)
         self.me.inventory = inventory_from(mine, self.level)
         now = message["time"]
         self.game_time = now if self.game_time is None else self.game_time + (now - self.game_time) * CLOCK_BLEND
@@ -466,6 +473,7 @@ def private_fields(state, owed, ack):
     return {
         "body": body_fields(state.body),
         "score": state.stats.score, "health": state.stats.health, "max_health": state.stats.max_health,
+        "money": state.stats.money,
         "items": dict(inventory.items), "ammo": dict(inventory.ammo), "equipped": inventory.equipped,
         "guns": [{"name": g.gun.name, "mag": g.mag, "reload_left": g.reload_left} for g in inventory.guns],
         "fired": owed.fired, "picked": owed.picked, "hurt": owed.hurt, "ack": ack,

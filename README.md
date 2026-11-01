@@ -199,6 +199,31 @@ Bullets fly where you look (up and down included) and stop at walls, floors, cei
 Nothing takes damage yet, so damage is stored on the bullet for when something can. `maps/guns.json`
 has three example guns and pickups.
 
+## Map settings and the buy menu
+
+The editor's **Map settings** section (`J`) says how a map is played; the settings are saved in the map.
+
+**Game rules**:
+
+| Setting | |
+| --- | --- |
+| Game mode | **Free for all** (everyone against everyone), **Two teams** (players are split between team 1 and team 2 as they join; a teammate's name shows white) or **Co-op** (everyone on one team) |
+| Friendly fire | whether bullets and blasts hurt teammates (your own blast always hurts you) |
+| Max health | the health every player starts and comes back with |
+| Start money | money a player has when they join |
+| Score / kill, Money / kill | what knocking out an opponent earns |
+| Starting gun | a gun every player comes in (and back) with |
+
+Score and money are kept when a player is knocked out. The HUD shows money on maps where it means something.
+
+**Buy menu**: turn it on and players open it with `B` in the game. **Costs** is **Free** (everything is free),
+**Money** or **Score**: an entry is only given to a player who has its price, which is then taken off. Add entries
+with "+ Add to buy menu" (or the buy menu row's "+ Add" list of the map's guns and ammo types). An entry gives
+**a gun**, **ammo** (rounds of an ammo type), an **inventory item** or **health**, and has a price, an optional
+button text and an icon (a gun shows its own picture when it has none); "Move up / down" orders the menu. Beside the
+list is the menu as a player who just joined sees it. In the game, entries a player cannot afford are greyed out.
+When you join someone, the host decides what each purchase gives, as with pickups.
+
 ## Layout
 
     main.py, map_editor.py, ...   game and editor source

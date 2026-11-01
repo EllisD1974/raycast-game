@@ -13,6 +13,7 @@ from constants import PLAYER_HEIGHT
 from entities import Entities, PlayerStats
 from explosions import blast_results
 from inventory import Inventory
+from mapfile import MAX_BUY_ITEMS, MAX_MONEY
 from physics import look, spawn, spawn_at, step
 from projectiles import MUZZLE, Projectiles, muzzle_shift
 
@@ -38,11 +39,12 @@ class Inputs:
     reload: bool = False
     equip: tuple = ()               # gun slots (0 based) to take out, in order
     cycle: int = 0                  # steps through the guns, as with the mouse wheel
+    buy: tuple = ()                 # entries of the map's buy menu (0 based) to buy, in order
 
     def to_dict(self):
         return {"forward": self.forward, "strafe": self.strafe, "turn": self.turn, "tilt": self.tilt,
                 "jump": self.jump, "sprint": self.sprint, "fire": self.fire, "reload": self.reload,
-                "equip": list(self.equip), "cycle": self.cycle}
+                "equip": list(self.equip), "cycle": self.cycle, "buy": list(self.buy)}
 
     @classmethod
     def from_dict(cls, data):
@@ -50,14 +52,16 @@ class Inputs:
         def number(key, kind, low, high):
             value = data.get(key, 0)
             return kind(max(low, min(high, value))) if isinstance(value, (int, float)) else kind(0)
-        equip = data.get("equip", ())
+        equip, buy = data.get("equip", ()), data.get("buy", ())
         return cls(number("forward", int, -1, 1), number("strafe", int, -1, 1),
                    number("turn", float, -3.2, 3.2), number("tilt", float, -3.2, 3.2),
                    bool(data.get("jump")), bool(data.get("sprint")), bool(data.get("fire")),
                    bool(data.get("reload")),
                    tuple(i for i in equip if isinstance(i, int) and 0 <= i < 9)[:9]
                    if isinstance(equip, (list, tuple)) else (),
-                   number("cycle", int, -9, 9))
+                   number("cycle", int, -9, 9),
+                   tuple(i for i in buy if isinstance(i, int) and not isinstance(i, bool)
+                         and 0 <= i < MAX_BUY_ITEMS)[:8] if isinstance(buy, (list, tuple)) else ())
 
 
 def move_body(world, body, wish, dt):
@@ -190,11 +194,13 @@ class Game:
         self.fx = []                # particle effects to play, (name, x, y, z, dx, dy, dz[, ox, oy, oz]), until take_fx()
         self.hurts = {}             # player id -> damage taken, until take_hurts()
         self.flashes = []           # lights to flash, (name, x, y, z), until take_flashes()
+        self.notes = {}             # player id -> messages for them (what they bought), until advance_world()
 
     def load_level(self, level, world, character_tile=None):
         """Swap in a new map while the game runs. Everything in flight is dropped and every player is back at
-        the new start with full health and only what a new player carries (their score stays): the old
-        inventories name guns and ammo the new map may no longer have."""
+        the new start with full health and only what a new player carries (their score and money stay): the old
+        inventories name guns and ammo the new map may no longer have. Teams are dealt out again, as the new map
+        may be played in another mode."""
         self.level, self.world = level, world
         if character_tile is not None:
             self.character_tile = character_tile
@@ -202,16 +208,86 @@ class Game:
         self.projectiles.bullets = []
         self.fx, self.flashes = [], []
         self.spawns = SpawnOrder(level, self.rng)       # a new round of the new map's spawners
+        self.notes = {}
         for state in self.players.values():             # in place: sessions hold on to these PlayerStates
-            state.body = self.spawns.body(world)
-            state.stats = PlayerStats(score=state.stats.score)
-            state.inventory = Inventory()
+            state.team = NO_TEAM
+        for pid, state in sorted(self.players.items()):
+            state.team = self.team_for(pid)
+            self.respawn(state)
 
     def add_player(self, player_id):
-        """Put a new player in the game, at the next spawner (or the level's start)."""
+        """Put a new player in the game, at the next spawner (or the level's start), on a team if the map's mode
+        has them, with the map's starting money and gun."""
         state = PlayerState(self.spawns.body(self.world))
+        state.team = self.team_for(player_id)
+        state.stats.money = self.level.settings.start_money
+        self.respawn(state, body=state.body)
         self.players[player_id] = state
         return state
+
+    def team_for(self, player_id):
+        """The team a player joining now goes on: none in free for all, team 1 for everyone in co-op, and in two
+        teams the one with fewer players (team 1 when they are even)."""
+        mode = self.level.settings.mode
+        if mode == "coop":
+            return 1
+        if mode != "teams":
+            return NO_TEAM
+        counts = {1: 0, 2: 0}
+        for pid, state in self.players.items():
+            if pid != player_id and state.team in counts:
+                counts[state.team] += 1
+        return 1 if counts[1] <= counts[2] else 2
+
+    def respawn(self, state, body=None):
+        """Bring a player (back) in, at the next spawner unless `body` is given, with the map's full health and only
+        what a new player carries: the map's starting gun, if it has one. Their score and money stay."""
+        settings = self.level.settings
+        state.body = body or self.spawns.body(self.world)
+        state.stats = PlayerStats(score=state.stats.score, health=settings.max_health, max_health=settings.max_health,
+                                  money=state.stats.money)
+        state.inventory = Inventory()
+        gun = next((g for g in self.level.guns if g.name == settings.start_gun), None) if settings.start_gun else None
+        if gun is not None:
+            state.inventory.give_gun(gun)
+
+    def can_hurt(self, attacker, target):
+        """Whether `attacker`'s bullets and blasts hurt `target`: always themselves and opponents, teammates only
+        with the map's friendly fire on."""
+        if attacker is None or attacker == target or self.level.settings.friendly_fire:
+            return True
+        a, b = self.players.get(attacker), self.players.get(target)
+        return a is None or b is None or not same_team(a.team, b.team)
+
+    def buy(self, player_id, index):
+        """Buy entry `index` of the map's buy menu for a player: they get what it gives if the menu is on and they
+        have enough money or score for it (which it then costs them). Returns the message to show them."""
+        settings, state = self.level.settings, self.players[player_id]
+        if not settings.buy_menu or not 0 <= index < len(settings.buy_items):
+            return "Nothing to buy"
+        entry = settings.buy_items[index]
+        price = 0.0 if settings.buy_cost == "free" else entry.price
+        have = state.stats.money if settings.buy_cost == "money" else state.stats.score
+        if price > 0 and have < price:
+            return f"Not enough {settings.buy_cost} for {entry.label()} ({price:g})"
+        if entry.kind == "gun":
+            gun = next((g for g in self.level.guns if g.name == entry.gun), None)
+            if gun is None:
+                return f"{entry.label()} is not for sale"
+            state.inventory.give_gun(gun)
+        elif entry.kind == "ammo":
+            state.inventory.add_ammo(entry.ammo, entry.amount)
+        elif entry.kind == "item":
+            state.inventory.add_item(entry.item, entry.amount)
+        elif entry.kind == "health":
+            if state.stats.health >= state.stats.max_health:
+                return "Health is already full"
+            state.stats.health = min(state.stats.max_health, state.stats.health + entry.amount)
+        if price > 0 and settings.buy_cost == "money":
+            state.stats.money -= price
+        elif price > 0:
+            state.stats.score -= price
+        return f"Bought {entry.label()}" + (f" for {price:g}" if price > 0 else "")
 
     def remove_player(self, player_id):
         self.players.pop(player_id, None)
@@ -220,6 +296,8 @@ class Game:
         """One player's part of dt seconds: switching guns, moving, looking and firing. Returns how many
         shots they fired. A host calls this for each of a joiner's steps, each with that step's own dt."""
         state = self.players[player_id]
+        for index in wish.buy:
+            self.notes.setdefault(player_id, []).append(self.buy(player_id, index))
         body, inventory = state.body, state.inventory
         for slot in wish.equip:
             inventory.equip(slot)
@@ -237,18 +315,21 @@ class Game:
                 self.flashes.append(muzzle_event(gun.flash, body, None, shift)[:4])
         return len(fired)
 
-    def hurt(self, player_id, damage):
+    def hurt(self, player_id, damage, attacker=None):
         """Take `damage` off a player's health. At zero they are out: back in at the next spawner (or the level's
-        start), with full health and only what a new player carries (their score stays)."""
+        start), with full health and only what a new player carries (their score and money stay), and `attacker`,
+        if that was an opponent, earns the map's score and money for knocking someone out."""
         state = self.players[player_id]
         if damage > 0:
             self.hurts[player_id] = self.hurts.get(player_id, 0.0) + damage
             state.hit = HIT_FLASH
         state.stats.health = max(0.0, state.stats.health - damage)
         if state.stats.health <= 0.0:
-            state.body = self.spawns.body(self.world)               # in place: sessions hold on to this PlayerState
-            state.stats = PlayerStats(score=state.stats.score)
-            state.inventory = Inventory()
+            winner = self.players.get(attacker)
+            if winner is not None and attacker != player_id and not same_team(winner.team, state.team):
+                winner.stats.score += self.level.settings.kill_score
+                winner.stats.money = min(MAX_MONEY, winner.stats.money + self.level.settings.kill_money)
+            self.respawn(state)                         # in place: sessions hold on to this PlayerState
 
     def explode(self, hit):
         """A bullet that explodes struck at `hit`: play its explosion, then hurt and throw every player it reaches.
@@ -259,9 +340,11 @@ class Game:
             self.flashes.append((light, hit.x, hit.y, hit.z))
         bodies = [(pid, state.body) for pid, state in self.players.items()]
         for pid, damage, (vx, vy, vz) in blast_results(self.world, hit.blast, hit.x, hit.y, hit.z, hit.owner, bodies):
+            if not self.can_hurt(hit.owner, pid):
+                continue                                # a teammate's blast, without friendly fire
             state = self.players[pid]
             body = state.body
-            self.hurt(pid, damage)
+            self.hurt(pid, damage, hit.owner)
             if state.body is body:                      # (not sent back to the start by it)
                 body.vx += vx
                 body.vy += vy
@@ -294,12 +377,13 @@ class Game:
                 self.fx.append((effect, hit.x, hit.y, hit.z, -hit.dx, -hit.dy, -hit.dz))
             for light in hit.lights:
                 self.flashes.append((light, hit.x, hit.y, hit.z))
-            if hit.target in self.players:
-                self.hurt(hit.target, hit.damage)
+            if hit.target in self.players and self.can_hurt(hit.owner, hit.target):
+                self.hurt(hit.target, hit.damage, hit.owner)
             if hit.blast is not None:
                 self.explode(hit)
         self.items.advance(dt)
-        return {pid: self.items.touch(state.body, state.stats, state.inventory, who=pid)
+        notes, self.notes = self.notes, {}
+        return {pid: notes.get(pid, []) + self.items.touch(state.body, state.stats, state.inventory, who=pid)
                 for pid, state in self.players.items()}
 
     def tick(self, inputs, dt):

@@ -570,6 +570,122 @@ class Entity:
                        elevation=max(-MAX_ELEVATION, min(MAX_ELEVATION, float(data.get("elevation", 0.0)))))
 
 
+GAME_MODES = ("ffa", "teams", "coop")
+GAME_MODE_LABELS = {"ffa": "Free for all", "teams": "Two teams", "coop": "Co-op"}
+BUY_COSTS = ("free", "money", "score")
+BUY_COST_LABELS = {"free": "Free", "money": "Money", "score": "Score"}
+BUY_KINDS = ("gun", "ammo", "item", "health")
+BUY_KIND_LABELS = {"gun": "A gun", "ammo": "Ammo", "item": "Inventory item", "health": "Health"}
+MAX_BUY_ITEMS = 40                              # entries a buy menu may have
+MAX_MONEY = 1000000.0
+
+
+@dataclass
+class BuyItem:
+    """One entry of a map's buy menu (MapSettings.buy_items): what clicking it gives and what it costs.
+
+    name     what the button says ("" names it after what it gives)
+    kind     gun: hands out the gun named `gun` (as a "Give a gun" item does); ammo: `amount` rounds of the ammo
+             type `ammo`; item: `amount` of the inventory item `item`; health: +`amount` health (up to the most)
+    price    what it costs, in the menu's currency (MapSettings.buy_cost); nothing when the menu is free
+    tile     the atlas tile shown beside it (-1: the gun's own picture, or none)"""
+    name: str = ""
+    kind: str = "gun"
+    gun: str = ""
+    ammo: str = ""
+    item: str = ""
+    amount: float = 1.0
+    price: float = 100.0
+    tile: int = -1
+
+    def label(self):
+        """What the button says: its name, or what it gives."""
+        if self.name:
+            return self.name
+        if self.kind == "gun":
+            return self.gun or "(no gun)"
+        if self.kind == "ammo":
+            return f"{self.amount:g} {self.ammo or 'default'} rounds"
+        if self.kind == "item":
+            return f"{self.amount:g} x {self.item or 'Item'}"
+        return f"+{self.amount:g} health"
+
+    @classmethod
+    def from_dict(cls, data):
+        base = cls()
+
+        def number(key, low, high):
+            try:
+                return max(low, min(high, float(data.get(key, getattr(base, key)))))
+            except (TypeError, ValueError):
+                return getattr(base, key)
+        return cls(name=str(data.get("name", ""))[:MAX_NAME],
+                   kind=data.get("kind") if data.get("kind") in BUY_KINDS else base.kind,
+                   gun=str(data.get("gun", ""))[:MAX_NAME], ammo=str(data.get("ammo", ""))[:MAX_NAME],
+                   item=str(data.get("item", ""))[:MAX_NAME], amount=number("amount", 0.0, 100000.0),
+                   price=number("price", 0.0, MAX_MONEY), tile=int(number("tile", -1, 255)))
+
+
+@dataclass
+class MapSettings:
+    """How a map is played, set in the editor's Map settings section and saved with the map.
+
+    mode           ffa: everyone against everyone; teams: players are split into two teams as they join (a
+                   teammate's name shows white); coop: everyone on one team
+    friendly_fire  whether bullets and blasts hurt teammates (a player's own blast always hurts them)
+    max_health     the health every player starts and comes back with
+    start_money    money a player has when they first join (money, like score, is kept when knocked out)
+    kill_score, kill_money   what knocking out an opponent earns
+    start_gun      the gun every player starts and comes back with ("" for none)
+    buy_menu       whether players can open the buy menu (B in the game)
+    buy_cost       free: everything in it is free; money / score: each entry costs its price in that, and is
+                   only given when the player has enough (score spent on buying goes down)
+    buy_items      the menu's entries (BuyItem), in the order they are listed"""
+    mode: str = "ffa"
+    friendly_fire: bool = False
+    max_health: float = 100.0
+    start_money: float = 0.0
+    kill_score: float = 0.0
+    kill_money: float = 0.0
+    start_gun: str = ""
+    buy_menu: bool = False
+    buy_cost: str = "money"
+    buy_items: list = field(default_factory=list)
+
+    def copy(self):
+        return replace(self, buy_items=[replace(b) for b in self.buy_items])
+
+    def uses_money(self):
+        """True if money means anything on this map (so the HUD shows it)."""
+        return (self.buy_menu and self.buy_cost == "money") or self.start_money > 0 or self.kill_money > 0
+
+    def to_dict(self):
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data):
+        """Map settings from a file, replacing anything unusable with the default."""
+        base = cls()
+        if not isinstance(data, dict):
+            return base
+
+        def number(key, low, high):
+            try:
+                return max(low, min(high, float(data.get(key, getattr(base, key)))))
+            except (TypeError, ValueError):
+                return getattr(base, key)
+        items = data.get("buy_items", [])
+        return cls(mode=data.get("mode") if data.get("mode") in GAME_MODES else base.mode,
+                   friendly_fire=bool(data.get("friendly_fire", base.friendly_fire)),
+                   max_health=number("max_health", 1.0, 10000.0), start_money=number("start_money", 0.0, MAX_MONEY),
+                   kill_score=number("kill_score", 0.0, MAX_MONEY), kill_money=number("kill_money", 0.0, MAX_MONEY),
+                   start_gun=str(data.get("start_gun", ""))[:MAX_NAME],
+                   buy_menu=bool(data.get("buy_menu", base.buy_menu)),
+                   buy_cost=data.get("buy_cost") if data.get("buy_cost") in BUY_COSTS else base.buy_cost,
+                   buy_items=[BuyItem.from_dict(b) for b in items if isinstance(b, dict)][:MAX_BUY_ITEMS]
+                   if isinstance(items, list) else [])
+
+
 def mounted_position(cx, cy, wall):
     """(x, y) of an item in cell (cx, cy) hung on the wall on side `wall` of the cell (its middle for "")."""
     dx, dy = SIDE_VECTORS.get(wall, (0, 0))
@@ -626,8 +742,9 @@ def default_floor_name(index):
 class Level:
     def __init__(self, grids, start_x=1.5, start_y=1.5, start_angle=0.0, start_span=0, names=None,
                  entities=None, guns=None, ammo_types=None, prefabs=None, effects=None, lights=None, ambient=1.0,
-                 spawners=None):
+                 spawners=None, settings=None):
         self.grids = grids
+        self.settings = settings or MapSettings()   # how the map is played (see MapSettings)
         self.spawners = list(spawners or [])        # where players come into the game (see Spawner)
         self.lights = list(lights or [])            # lights defined for this map (see Light)
         self.ambient = ambient                      # how bright the map is without lights: 1 is as before, less is dark
@@ -663,7 +780,7 @@ class Level:
                      [e.clone() for e in self.entities], [replace(g) for g in self.guns],
                      [replace(a) for a in self.ammo_types], [p.clone() for p in self.prefabs],
                      [replace(f) for f in self.effects], [replace(light) for light in self.lights], self.ambient,
-                     [replace(s) for s in self.spawners])
+                     [replace(s) for s in self.spawners], self.settings.copy())
 
     def prefab_named(self, name):
         for prefab in self.prefabs:
@@ -1229,6 +1346,7 @@ def parse_level(data, label="level"):
     for entity in level.entities:                   # ammo pickups used to name a gun, not an ammo type
         if entity.effect == "ammo" and not entity.ammo and entity.gun:
             entity.ammo = next((g.ammo for g in level.guns if g.name == entity.gun), "")
+    level.settings = MapSettings.from_dict(data.get("settings", {}))
     level.apply_prefabs()
     return level
 
@@ -1253,6 +1371,7 @@ def level_text(level):
         f'  "width": {level.width},\n  "height": {level.height},\n'
         f'  "floors": {json.dumps(level.names)},\n'
         f'  "start": {json.dumps(start)},\n'
+        + (f'  "settings": {json.dumps(level.settings.to_dict())},\n' if level.settings != MapSettings() else "")
         + ('  "spawners": [\n' + ",\n".join("    " + json.dumps(asdict(s)) for s in level.spawners) + "\n  ],\n"
            if level.spawners else "")
         + ('  "entities": [\n' + ",\n".join("    " + json.dumps(asdict(e)) for e in level.entities) + "\n  ],\n"
