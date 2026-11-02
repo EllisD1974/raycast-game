@@ -1,8 +1,10 @@
-"""What is drawn over the game picture: health, score and money, the inventory, the equipped gun, and the red flash of
-being hurt."""
+"""What is drawn over the game picture: health, score and money, the inventory, the equipped gun, the red flash of
+being hurt, and in bomb defusal the round: the score, the timers, the bomb and what the player can do."""
 import pygame
 
+from bomb import can_defuse, can_plant, clock_text, site_under
 from constants import HEIGHT, WIDTH
+from mapfile import CT_TEAM, DEFUSE_KIT, SITE_NAMES, T_TEAM, TEAM_NAMES
 
 TEXT = (255, 255, 255)
 SHADOW = (0, 0, 0)
@@ -15,6 +17,9 @@ NAME_LIFT = 0.12                       # how far above the head a name floats, i
 HURT_COLOR = (220, 20, 20)
 HURT_ALPHA = 64                        # how strong the red over the picture is just after a hit (of 255)
 HURT_FADE = 3.0                        # the flash fades out in 1 / HURT_FADE seconds
+TEAM_COLORS = {T_TEAM: (240, 175, 70), CT_TEAM: (120, 165, 255)}
+DANGER = (255, 80, 60)
+BAR_BACK, BAR_FILL = (20, 20, 24), (250, 210, 90)
 
 
 def draw_names(picture, font, renderer, viewer, labels, team):
@@ -103,7 +108,7 @@ def draw_hud(picture, font, stats, message, inventory=None, tiles=None, kick=0.0
         shadowed(picture, font, f"Money ${stats.money:g}", (8, y), HIGHLIGHT)
         y += 18
     if team is not None:
-        shadowed(picture, font, f"Team {team}", (8, y), DIM)
+        shadowed(picture, font, team if isinstance(team, str) else f"Team {team}", (8, y), DIM)
         y += 18
     if buy_key:
         shadowed(picture, font, "B: buy menu", (8, y), DIM)
@@ -127,3 +132,65 @@ def draw_hud(picture, font, stats, message, inventory=None, tiles=None, kick=0.0
                  HIGHLIGHT if out else DIM)
     if tiles is not None:
         draw_weapon(picture, tiles, inventory.current(), kick)
+
+
+def draw_bar(picture, font, text, share):
+    """A progress bar under the crosshair (planting, defusing), `share` (0 to 1) full."""
+    width, height = 160, 10
+    x, y = WIDTH // 2 - width // 2, HEIGHT // 2 + 62
+    pygame.draw.rect(picture, BAR_BACK, (x - 1, y - 1, width + 2, height + 2))
+    pygame.draw.rect(picture, BAR_FILL, (x, y, round(width * max(0.0, min(1.0, share))), height))
+    shadowed(picture, font, text, (WIDTH // 2, y - 18), center=True)
+
+
+def draw_round(picture, font, big, view, me_id, me, level, watching=None):
+    """Bomb defusal: the score and the timer at the top, the round's result in the middle, and what this player can
+    do (or who they are watching while out of the round). `view` is the bomb.RoundView, `me` their PlayerState."""
+    if view is None:
+        return
+    settings = level.settings
+    middle = WIDTH // 2
+    # the score either side of the timer
+    if view.phase == "planted":
+        timer, color = f"BOMB {clock_text(view.bomb.left)}", DANGER
+    elif view.phase == "over":
+        timer, color = clock_text(view.clock), DIM
+    else:
+        timer = clock_text(view.clock)
+        color = DANGER if view.phase == "live" and view.clock <= 10 else TEXT
+    shadowed(picture, big, timer, (middle, 6), color, center=True)
+    half = big.size(timer)[0] // 2 + 14
+    t_score, ct_score = str(view.score[T_TEAM]), str(view.score[CT_TEAM])
+    shadowed(picture, big, t_score, (middle - half - big.size(t_score)[0], 6), TEAM_COLORS[T_TEAM])
+    shadowed(picture, big, ct_score, (middle + half, 6), TEAM_COLORS[CT_TEAM])
+    shadowed(picture, font, TEAM_NAMES[T_TEAM], (middle - half - big.size(t_score)[0] - 26, 10), TEAM_COLORS[T_TEAM])
+    shadowed(picture, font, TEAM_NAMES[CT_TEAM], (middle + half + big.size(ct_score)[0] + 8, 10), TEAM_COLORS[CT_TEAM])
+    under = f"Round {view.number} of {view.max_rounds}"
+    if view.phase == "freeze":
+        under = "Freeze time - " + ("buy now (B)" if settings.buy_menu else "get ready")
+    elif view.phase == "planted":
+        under = f"The bomb is planted at {SITE_NAMES.get(view.bomb.site, '?')}"
+    shadowed(picture, font, under, (middle, 32), DIM, center=True)
+    if view.message and view.message_left > 0:
+        shadowed(picture, big, view.message, (middle, HEIGHT // 2 - 70), HIGHLIGHT, center=True)
+    # what this player is doing, or can do
+    if me_id not in view.alive:
+        text = "You are out until the next round"
+        if watching:
+            text += f" - watching {watching} (click: next)"
+        shadowed(picture, font, text, (middle, HEIGHT - 70), DIM, center=True)
+        return
+    body = me.body
+    if view.planting[0] == me_id:
+        draw_bar(picture, font, "Planting the bomb...", view.planting[1] / max(0.01, settings.plant_time))
+    elif view.defusing[0] == me_id:
+        kit = " (with a kit)" if me.inventory.count(DEFUSE_KIT) > 0 else ""
+        draw_bar(picture, font, f"Defusing the bomb{kit}...", view.defusing[1] / max(0.01, view.defuse_needed))
+    elif can_plant(view, me_id, body, level):
+        shadowed(picture, font, f"Hold E to plant the bomb at {SITE_NAMES.get(site_under(level, body), '?')}",
+                 (middle, HEIGHT // 2 + 44), HIGHLIGHT, center=True)
+    elif can_defuse(view, me_id, body):
+        shadowed(picture, font, "Hold E to defuse the bomb", (middle, HEIGHT // 2 + 44), HIGHLIGHT, center=True)
+    if view.bomb.state == "carried" and view.bomb.carrier == me_id:
+        shadowed(picture, font, "You have the bomb: plant it in a site (G drops it)", (middle, HEIGHT - 70),
+                 TEAM_COLORS[T_TEAM], center=True)

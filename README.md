@@ -207,7 +207,7 @@ The editor's **Map settings** section (`J`) says how a map is played; the settin
 
 | Setting | |
 | --- | --- |
-| Game mode | **Free for all** (everyone against everyone), **Two teams** (players are split between team 1 and team 2 as they join; a teammate's name shows white) or **Co-op** (everyone on one team) |
+| Game mode | **Free for all** (everyone against everyone), **Two teams** (players are split between team 1 and team 2 as they join; a teammate's name shows white), **Co-op** (everyone on one team) or **Bomb defusal** (rounds, as in Counter-Strike: see below) |
 | Friendly fire | whether bullets and blasts hurt teammates (your own blast always hurts you) |
 | Max health | the health every player starts and comes back with |
 | Start money | money a player has when they join |
@@ -223,6 +223,42 @@ with "+ Add to buy menu" (or the buy menu row's "+ Add" list of the map's guns a
 button text and an icon (a gun shows its own picture when it has none); "Move up / down" orders the menu. Beside the
 list is the menu as a player who just joined sees it. In the game, entries a player cannot afford are greyed out.
 When you join someone, the host decides what each purchase gives, as with pickups.
+
+## Bomb defusal
+
+Counter-Strike's mode, played in rounds. Players are split into **Terrorists** (T, team 1) and **Counter-Terrorists**
+(CT, team 2). One T carries the bomb; the Ts win the round by planting it in a bomb site and letting it explode, or
+by eliminating the CTs. The CTs win by eliminating the Ts before the bomb is planted, by defusing it, or when the
+round time runs out without a plant. A player knocked out stays out until the next round and watches a teammate
+(click for the next one).
+
+- **A round**: the **freeze time** (nobody can move; look around and buy), then the **round time** (the timer at the
+  top). Once the bomb is planted the timer becomes the **bomb timer** (red). When the round is decided its result
+  shows for the **round end pause**, then the next round starts: everyone back at their team's spawn points, those
+  who lived keeping what they carry, the others coming back with the starting gun.
+- **The bomb**: hold `E` standing in a bomb site to plant it (you cannot move meanwhile; letting go starts over).
+  `G` drops it; it also drops where its carrier is knocked out, and any T walking over it picks it up. A CT holds `E`
+  at the planted bomb to defuse it, faster with a **Defuse kit** (an inventory item of that name: sell it in the buy
+  menu). The explosion hurts everyone in its radius, most at the bomb, through walls.
+- **Buying**: the buy menu is open during the freeze time and the buy time after it.
+- **Money** (as in Counter-Strike): the winners get the round win money (more for a win by the bomb exploding or
+  being defused); the losers get the loss money, plus the loss bonus for each round they lost in a row before it, up
+  to a most. Ts get the plant money when they planted but lost, and the planter or defuser a bonus. Ts still alive
+  when the time runs out get nothing.
+- **A match** is the rounds in a match (24): the teams swap sides (and start over with the start money) after half
+  of them, and the first team to win more than half wins the match; a new one starts after it.
+
+All of these are **Map settings** with Bomb defusal chosen, with Counter-Strike's defaults: freeze 15 s, round
+1:55, buy time 20 s, bomb 40 s, plant 3.2 s, defuse 10 s (5 s with a kit), pause 7 s, 24 rounds, bomb damage 500 over
+27 cells, $3250 a round won ($3500 by the bomb), $1400 a round lost plus $500 a loss in a row up to $3400, $800 to
+the Ts when they planted, $300 for planting or defusing, at most $16000. Choose the explosion's particle effect and
+light there too.
+
+In the editor, the **Sites** layer (`9`) marks where the bomb can be planted: paint bomb site **A** or **B** (`R`
+switches) on each floor, and erase it the same way. The Spawn tool's **Team** button gives spawn points to the Ts or
+the CTs (or anyone); a team without spawn points of its own uses the others. `maps/sand2.json` is set up for it:
+both bomb sites, spawn points for each team, and a buy menu with a defuse kit. The bomb's picture is tile 26 of
+`textures.png`.
 
 ## Layout
 

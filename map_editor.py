@@ -208,6 +208,7 @@ from mapfile import (ANIMATION_KINDS, ANIMATION_LABELS, DEFAULTS, EDIT_LAYERS, E
                      IMPORT_KINDS, TAKEN_CHOICES, grid_name, import_things, load_level, save_level, split_grid_name,
                      things_named, with_needs, area_rect, clear_area, copy_area, paste_area,
                      BUY_COST_LABELS, BUY_COSTS, BUY_KIND_LABELS, BUY_KINDS, GAME_MODE_LABELS, GAME_MODES, MAX_BUY_ITEMS,
+                     BOMB_NUMBERS, SITE_NAMES, SPAWN_TEAMS, SPAWN_TEAM_LABELS, CT_TEAM, T_TEAM,
                      MAX_MONEY, BuyItem)
 from buymenu import entry_tile, price_text
 import details
@@ -276,8 +277,23 @@ STAMP_LAYERS = ("walls", "floor_tex", "ceil_tex")
 ROOM_HEIGHT_LAYERS = ("floor_h", "ceil_h")                  # heights that make up a floor's rooms
 VALUE_LAYERS = ROOM_HEIGHT_LAYERS + ("wall_h",)             # every layer painted with a number
 LAYER_LABELS = {"walls": "Walls", "floor_tex": "FloorTex", "ceil_tex": "CeilTex",
-                "floor_h": "FloorH", "ceil_h": "CeilH", "ramp": "Ramps", "wall_h": "WallH", "sides": "WallSide"}
-EDITOR_LAYERS = EDIT_LAYERS + ("sides",)                    # the stored layers, and the sides of walls
+                "floor_h": "FloorH", "ceil_h": "CeilH", "ramp": "Ramps", "site": "Sites", "wall_h": "WallH",
+                "sides": "WallSide"}
+SITE_COLORS = {1: (255, 150, 40), 2: (60, 200, 255)}         # bomb site A and B on the Sites layer
+SPAWN_TEAM_FILLS = {0: (90, 170, 255), T_TEAM: (235, 160, 60), CT_TEAM: (80, 140, 255)}   # spawn points by team
+# Bomb defusal settings in the Map settings section: (label, step) for each number, in the order shown.
+BOMB_FIELDS = (("freeze_time", "Freeze time (s)", 1.0), ("round_time", "Round time (s)", 5.0),
+               ("buy_time", "Buy time (s)", 5.0), ("bomb_time", "Bomb timer (s)", 5.0),
+               ("plant_time", "Plant time (s)", 0.1), ("defuse_time", "Defuse time (s)", 0.5),
+               ("kit_defuse_time", "Defuse with kit (s)", 0.5), ("round_end_time", "Round end pause (s)", 1.0),
+               ("max_rounds", "Rounds in a match", 2.0), ("bomb_damage", "Bomb damage", 50.0),
+               ("bomb_radius", "Bomb radius (cells)", 1.0), ("win_money", "Money / round won", 50.0),
+               ("bomb_win_money", "Money / bomb won", 50.0), ("loss_money", "Money / round lost", 50.0),
+               ("loss_bonus", "Loss bonus per loss", 50.0), ("max_loss_money", "Most for a loss", 50.0),
+               ("plant_money", "T money if planted", 50.0), ("objective_money", "Plant / defuse bonus", 50.0),
+               ("money_cap", "Most money", 500.0))
+EDITOR_LAYERS = tuple(name for name in EDIT_LAYERS if name != "site") + ("sides", "site")   # the stored layers, the
+                                                            # sides of walls, and bomb sites last (keys 1-9)
 TILE_LAYERS = STAMP_LAYERS + ("sides",)                     # layers painted with atlas tiles
 LAYER_KEYS = {pygame.K_1 + i: name for i, name in enumerate(EDITOR_LAYERS)}
 SIDE_STEP = 0.1                                 # From- / From+ / To- / To+ change a wall side's band by this
@@ -543,6 +559,7 @@ class Editor:
         self.selection = {0}                    # selected atlas tile indices (0-based)
         self.value = {}                         # height brush per stored grid; see brush()
         self.ramp_dir = 1
+        self.site_brush = 1                     # the bomb site the Sites layer paints (1 A, 2 B)
         self.stair_step = 0.25
         self.atlas_drag = None                  # (start_cell, current_cell) while dragging
         self.stairs_drag = None                 # (start_cell, current_cell) while dragging
@@ -552,6 +569,7 @@ class Editor:
         self.shape_side = None                  # the wall side under the mouse where that drag started
         self.side_lock = None                   # the wall side a whole shape paints (None: the one at the mouse)
         self.spawn_order = 0                    # the order the Spawn tool gives the spawn points it places
+        self.spawn_team = 0                     # ... and the team (0 anyone, T_TEAM, CT_TEAM)
         self.area = None                        # Select tool: the cells selected, (x0, y0, x1, y1), or None
         self.area_drag = None                   # (start cell, current cell) while dragging a selection
         self.clip = None                        # what was copied (mapfile.Area); kept across maps
@@ -1460,12 +1478,25 @@ class Editor:
         if rules.mode != "ffa":
             fields.append(field("friendly_fire", "Friendly fire", "enum", choices=(False, True),
                                 labels={False: "Off", True: "On"}))
+        if rules.mode == "bomb":
+            fields.append(Field("bomb_note", "Teams", "info", (lambda: "1 = T (plants), 2 = CT; sites: Sites layer"),
+                                None))
         fields += [field("max_health", "Max health", "num", step=10.0, low=1.0, high=10000.0),
                    field("start_money", "Start money", "num", step=50.0, low=0.0, high=MAX_MONEY),
                    field("kill_score", "Score / kill", "num", step=1.0, low=0.0, high=MAX_MONEY),
                    field("kill_money", "Money / kill", "num", step=50.0, low=0.0, high=MAX_MONEY),
                    field("start_gun", "Starting gun", "enum", choices=guns,
                          labels={"": "(none)", **{n: n for n in guns if n}})]
+        if rules.mode == "bomb":
+            for name, label, step in BOMB_FIELDS:
+                low, high = BOMB_NUMBERS[name]
+                fields.append(field(name, label, "num", step=step, low=low, high=high))
+            effects = ("",) + tuple(e.name for e in self.level.effects)
+            lights = ("",) + tuple(light.name for light in self.level.lights)
+            fields += [field("bomb_effect", "Explosion effect", "enum", choices=effects,
+                             labels={"": "(none)", **{n: n for n in effects if n}}),
+                       field("bomb_light", "Explosion light", "enum", choices=lights,
+                             labels={"": "(none)", **{n: n for n in lights if n}})]
         return fields
 
     def buy_menu_fields(self):
@@ -1511,12 +1542,20 @@ class Editor:
             fields.append(field("amount", "Health", "num", step=5.0, low=0.0, high=10000.0))
         fields += [field("price", "Price", "num", step=50.0 if self.level.settings.buy_cost == "money" else 5.0,
                          low=0.0, high=MAX_MONEY),
+                   field("team", "For team", "enum", choices=SPAWN_TEAMS, labels=self.buy_team_labels()),
                    field("tile", "Icon", "tile", low=-1, high=len(self.tiles) - 1),
                    Field("move_up", "Move up", "button", None, None, action=lambda: self.move_buy_item(-1),
                          text_override="Move up the menu"),
                    Field("move_down", "Move down", "button", None, None, action=lambda: self.move_buy_item(1),
                          text_override="Move down the menu")]
         return fields
+
+    def buy_team_labels(self):
+        """Names of the teams a buy menu entry can be for, in this map's game mode."""
+        if self.level.settings.mode == "bomb":
+            return {0: "Everyone", T_TEAM: "T only", CT_TEAM: "CT only"}
+        suffix = "" if self.level.settings.has_teams() else " (no teams in this mode)"
+        return {0: "Everyone", T_TEAM: "Team 1 only" + suffix, CT_TEAM: "Team 2 only" + suffix}
 
     def set_rule(self, name, value):
         """Change one of the map's settings (one undo step)."""
@@ -1770,6 +1809,9 @@ class Editor:
                      ("val", f"value {fmt(self.brush(self.gname()))}" if typed is None else typed, "val_type")]
         elif self.layer == "ramp":
             row2 += [("btn", "Rotate(R)", "dir"), ("txt", f"rises {RAMP_NAMES[self.ramp_dir]}", ACCENT)]
+        elif self.layer == "site":
+            row2 += [("btn", "A / B (R)", "dir"), ("txt", f"paints bomb site {SITE_NAMES[self.site_brush]}", ACCENT),
+                     ("txt", "erase (E) clears; used by Bomb defusal (Map settings)", DIM)]
         elif self.layer == "sides":
             row2 += [("btn", "From-", "side_from-"), ("btn", "From+", "side_from+"),
                      ("txt", f"from {fmt(self.side_from)}", ACCENT),
@@ -1793,6 +1835,7 @@ class Editor:
         if self.tool == "spawn":
             row2 += [None, ("btn", "Order-", "order-"), ("btn", "Order+", "order+"),
                      ("txt", f"order {self.spawn_order}", ACCENT),
+                     ("btn", f"Team: {SPAWN_TEAM_LABELS[self.spawn_team]}", "spawn_team"),
                      ("txt", f"{len(self.level.spawners)} spawn point{'s' if len(self.level.spawners) != 1 else ''}"
                              " (0 is used first)", DIM)]
         if self.tool == "entity":
@@ -1920,6 +1963,8 @@ class Editor:
             return self.brush(self.gname())
         if self.layer == "ramp":
             return self.ramp_dir
+        if self.layer == "site":
+            return self.site_brush
         return self.primary_id()
 
     def drag_indices(self):
@@ -2402,12 +2447,13 @@ class Editor:
             self.say("A spawn point needs open floor: no room in this cell on this floor")
             return
         self.begin_edit()
+        team = SPAWN_TEAM_LABELS[self.spawn_team]
         if not found:
-            level.spawners.append(Spawner(cell[0] + 0.5, cell[1] + 0.5, self.floor, 0.0, self.spawn_order))
-            self.say(f"Spawn point {len(level.spawners)}, order {self.spawn_order} (click it again to turn it)")
-        elif found[0].order != self.spawn_order:
-            found[0].order = self.spawn_order
-            self.say(f"Spawn point now has order {self.spawn_order}")
+            level.spawners.append(Spawner(cell[0] + 0.5, cell[1] + 0.5, self.floor, 0.0, self.spawn_order, self.spawn_team))
+            self.say(f"Spawn point {len(level.spawners)}, order {self.spawn_order}, {team} (click it again to turn it)")
+        elif found[0].order != self.spawn_order or found[0].team != self.spawn_team:
+            found[0].order, found[0].team = self.spawn_order, self.spawn_team
+            self.say(f"Spawn point now has order {self.spawn_order}, {team}")
         else:
             found[0].angle = (found[0].angle + math.pi / 2) % math.tau
             self.say(f"Spawn point faces {math.degrees(found[0].angle):.0f} deg")
@@ -2457,6 +2503,8 @@ class Editor:
             low = VALUE_LIMITS[self.layer][0]
             if value >= low:                             # (a wall of height 0 is a full-height wall: no brush)
                 self.value[self.gname()] = value
+        elif value > 0 and self.layer == "site":         # a bomb site
+            self.site_brush = value
         elif value > 0:                                  # a ramp direction
             self.ramp_dir = value
         self.tool = "paint"
@@ -2725,8 +2773,14 @@ class Editor:
         elif action == "val_type" and self.layer in VALUE_LAYERS:
             self.value_edit = ""
             self.say("Type the brush value, Enter to use it, Esc to cancel", 60)
+        elif action == "dir" and self.layer == "site":
+            self.site_brush = 3 - self.site_brush
+            self.say(f"Painting bomb site {SITE_NAMES[self.site_brush]}")
         elif action == "dir":
             self.ramp_dir = self.ramp_dir % 4 + 1
+        elif action == "spawn_team":
+            self.spawn_team = SPAWN_TEAMS[(SPAWN_TEAMS.index(self.spawn_team) + 1) % len(SPAWN_TEAMS)]
+            self.say(f"New spawn points are for {SPAWN_TEAM_LABELS[self.spawn_team]} (click one to give it this team)")
         elif action == "side_full":
             self.side_from = self.side_to = 0.0
             self.say("Wall side band: the whole height of the side")
@@ -3475,7 +3529,7 @@ class Editor:
             source = "ceil_h" if layer == "ceil_h" else "floor_h"
             value = grids[g(source)][y][x]
             color = heat(value, *HEIGHT_RANGE[source])
-            if layer == "ramp":
+            if layer in ("ramp", "site"):
                 color = tuple(c // 2 for c in color)
             pygame.draw.rect(screen, color, rect)
             if layer in VALUE_LAYERS and self.zoom >= 24:
@@ -3483,6 +3537,14 @@ class Editor:
                 screen.blit(label, label.get_rect(center=rect.center))
         if layer == "ramp" and grids[g("ramp")][y][x]:
             self.draw_arrow(screen, rect, grids[g("ramp")][y][x], ACCENT)
+        if layer == "site" and grids[g("site")][y][x] in SITE_COLORS:
+            site = grids[g("site")][y][x]
+            veil = pygame.Surface(rect.size, pygame.SRCALPHA)
+            veil.fill((*SITE_COLORS[site], 150))
+            screen.blit(veil, rect)
+            if self.zoom >= 14:
+                label = self.small.render(SITE_NAMES[site], True, (10, 10, 20))
+                screen.blit(label, label.get_rect(center=rect.center))
         if self.zoom >= 16 and any(level.span_present(s, x, y) for s in range(floor + 1, level.floor_count)):
             draw_upper_mark(screen, rect)
 
@@ -4529,7 +4591,10 @@ class Editor:
             text += f"   start ${rules.start_money:g}"
         if rules.kill_score or rules.kill_money:
             text += f"   kill +{rules.kill_score:g} score +${rules.kill_money:g}"
-        return text + (f"   starts with {rules.start_gun}" if rules.start_gun else "")
+        text += f"   starts with {rules.start_gun}" if rules.start_gun else ""
+        if rules.mode == "bomb":
+            text += (f"   round {rules.round_time:g}s, bomb {rules.bomb_time:g}s, {rules.max_rounds:g} rounds")
+        return text
 
     def buy_summary(self):
         rules = self.level.settings
@@ -4574,6 +4639,8 @@ class Editor:
             entry = rules.buy_items[i]
             what = BUY_KIND_LABELS[entry.kind] + ("" if entry.kind != "gun" or entry.gun in self.gun_names()
                                                    else "  (no such gun: not sold)")
+            if entry.team:
+                what += "   " + self.buy_team_labels()[entry.team]
             self.draw_settings_row(screen, rect, f"{entry.label()}   {price_text(rules.buy_cost, entry.price)}", what,
                                    i == self.settings_selected, entry_tile(entry, self.level.guns))
         self._draw_add_button(screen, add, "+ Add to buy menu")
@@ -4736,10 +4803,10 @@ class Editor:
         for s in self.level.spawners:
             cx, cy = origin.x + s.x * z, origin.y + s.y * z
             if s.span != self.floor:
-                pygame.draw.circle(screen, SPAWN_FILL, (cx, cy), radius, 2)
+                pygame.draw.circle(screen, SPAWN_TEAM_FILLS.get(s.team, SPAWN_FILL), (cx, cy), radius, 2)
                 continue
             tip = (cx + math.cos(s.angle) * z * 0.45, cy + math.sin(s.angle) * z * 0.45)
-            pygame.draw.circle(screen, SPAWN_FILL, (cx, cy), radius)
+            pygame.draw.circle(screen, SPAWN_TEAM_FILLS.get(s.team, SPAWN_FILL), (cx, cy), radius)
             pygame.draw.circle(screen, SPAWN_EDGE, (cx, cy), radius, 2)
             pygame.draw.line(screen, (255, 255, 255), (cx, cy), tip, max(2, z // 12))
             if z >= 16:
@@ -4819,7 +4886,10 @@ class Editor:
             entries.append(("wall_full", "Full-height wall"))
         if self.layer == "ramp":
             entries.append(("ramp", "Ramp: rises toward arrow"))
-        if self.layer in VALUE_LAYERS or self.layer == "ramp":
+        if self.layer == "site":
+            entries.append(("site_a", "Bomb site A (plant here)"))
+            entries.append(("site_b", "Bomb site B (plant here)"))
+        if self.layer in VALUE_LAYERS or self.layer in ("ramp", "site"):
             entries.append(("heat", "Height: blue low, yellow high"))
         return entries
 
@@ -4919,6 +4989,11 @@ class Editor:
         elif kind == "ramp":
             pygame.draw.rect(screen, tuple(c // 2 for c in heat(1.0, *HEIGHT_RANGE["floor_h"])), box)
             self.draw_arrow(screen, box, 1, ACCENT)
+        elif kind in ("site_a", "site_b"):
+            site = 1 if kind == "site_a" else 2
+            pygame.draw.rect(screen, SITE_COLORS[site], box)
+            text = self.small.render(SITE_NAMES[site], True, (10, 10, 20))
+            screen.blit(text, text.get_rect(center=box.center))
 
     def draw_legend(self, screen):
         """The key to the marks on the map (K or the Key button shows and hides it). Docked in
