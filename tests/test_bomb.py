@@ -334,6 +334,23 @@ def test_g_drops_the_bomb_and_the_dropper_does_not_take_it_straight_back():
     assert game.round.bomb.state == "carried" and carrier(game) == pid
 
 
+def test_a_bomb_dropped_in_the_air_falls_to_the_floor():
+    game = bomb_game()
+    go_live(game)
+    pid = carrier(game)
+    body = game.players[pid].body
+    body.z, body.vz, body.on_ground = 1.0, 0.0, False             # mid jump (or falling)
+    game.round.drop(pid)
+    stand(game, pid, (3, 3))                                       # (away, so they don't pick it back up)
+    assert game.round.bomb.z == pytest.approx(1.0)
+    game.round.update(0.1)
+    assert 0.0 < game.round.bomb.z < 1.0                           # on its way down
+    game.round.update(1.0)
+    assert game.round.bomb.z == 0.0 and game.round.bomb.vz == 0.0  # on the floor, and it stays there
+    game.round.update(0.5)
+    assert game.round.bomb.z == 0.0
+
+
 def test_buying_is_only_allowed_during_the_freeze_and_the_buy_time():
     game = bomb_game()
     assert play(game, DT, {0: Inputs(buy=(0,))})[0][-1].startswith("Bought")

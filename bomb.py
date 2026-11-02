@@ -16,6 +16,8 @@ the host makes one with Round.view(), and sends it to joiners as a dict (RoundVi
 import math
 from dataclasses import dataclass, field
 
+from constants import GRAVITY
+
 from mapfile import CT_TEAM, DEFUSE_KIT, MAX_MONEY, SITE_NAMES, T_TEAM, TEAM_TITLES, grid_name
 
 BOMB_REACH = 0.6                # how close (cells) a T has to walk to a dropped bomb to pick it up
@@ -62,7 +64,8 @@ def bomb_damage(settings, distance):
 @dataclass
 class Bomb:
     """Where the bomb is. state: "none" (nobody has it), "carried" (by `carrier`), "dropped" (lying at x, y, z on floor
-    `span`), "planted" (at x, y, z in bomb site `site`, exploding in `left` seconds), "exploded" or "defused"."""
+    `span`, or falling there at `vz` if it was dropped in the air), "planted" (at x, y, z in bomb site `site`, exploding
+    in `left` seconds), "exploded" or "defused"."""
     state: str = "none"
     carrier: int = None
     x: float = 0.0
@@ -71,9 +74,24 @@ class Bomb:
     span: int = 0
     site: int = 0
     left: float = 0.0
+    vz: float = 0.0                 # falling speed while dropped (the host's only: joiners see where it is)
 
     def at(self, body):
         self.x, self.y, self.z, self.span = body.x, body.y, body.z, body.span
+
+    def fall(self, world, dt):
+        """A dropped bomb in the air falls (with the players' gravity) until it lands on the floor under it."""
+        span = world.span_at(self.x, self.y, self.z, self.span, grounded=False)
+        if span < 0:
+            return
+        self.span, ground = span, world.floor_of(span, self.x, self.y)
+        if self.z <= ground:
+            self.z, self.vz = ground, 0.0
+            return
+        self.vz -= GRAVITY * dt
+        self.z = max(ground, self.z + self.vz * dt)
+        if self.z <= ground:
+            self.vz = 0.0
 
 
 @dataclass
@@ -302,6 +320,8 @@ class Round:
         self.message_left = max(0.0, self.message_left - dt)
         if self.dropped_by[0] is not None:
             self.dropped_by = (self.dropped_by[0], self.dropped_by[1] - dt) if self.dropped_by[1] > dt else (None, 0.0)
+        if self.bomb.state == "dropped":
+            self.bomb.fall(self.game.world, dt)
         if self.phase == "freeze":
             self.clock -= dt
             if self.clock <= 0:
@@ -399,9 +419,9 @@ class Round:
     def drop(self, pid):
         """The carrier lets go of the bomb (or is knocked out, or leaves): it lies where they stood."""
         state = self.game.players.get(pid)
-        self.bomb.state, self.bomb.carrier = "dropped", None
+        self.bomb.state, self.bomb.carrier, self.bomb.vz = "dropped", None, 0.0
         if state is not None:
-            self.bomb.at(state.body)
+            self.bomb.at(state.body)                # (in the air it falls from there: see Bomb.fall)
         if self.planting[0] == pid:
             self.planting = (None, 0.0)
 
