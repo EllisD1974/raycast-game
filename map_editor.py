@@ -64,7 +64,7 @@ Map size: the Edge buttons add (+) or remove (-) a column or row on one side: L 
 T top, B bottom. Cells, the start and the 3D camera stay where they are on the map.
 
 Tools: B paint, E erase, F fill, I pick from the map, S set the start (on the floor you are
-editing; click it again to rotate), T stairs (drag a line on the FloorH layer: heights rise by
+editing; click it again to rotate, drag it to move it), T stairs (drag a line on the FloorH layer: heights rise by
 the Step each cell, starting at the brush value), H shapes (drag a line, box or ellipse, outline
 or filled, chosen on the second toolbar row; it paints what the brush paints on the layer you are
 on, right-drag erases the shape, Shift makes a square or circle, Esc cancels).
@@ -94,7 +94,7 @@ onto the floor being edited, which may be another floor, and stays copied when a
 
 Spawn points (the Spawn tool, O): where players come into the game. Click an open cell to put one there
 with the Order shown on the second toolbar row (Order- / Order+, or [ and ]); click one again to give it
-that order, or (if it has it already) to turn it a quarter; right-click removes it. Players come in at the
+that order, or (if it has it already) to turn it a quarter; drag one to move it; right-click removes it. Players come in at the
 lowest order that has a spawn point not yet used, picked at random among those; once all have been used it
 starts over. A map with no spawn points uses the Start (S).
 
@@ -103,7 +103,8 @@ selected; Shift for bigger steps): how much higher or lower than its settings pu
 a wall or not. A prefab never changes it, and changing it moves no other copy.
 
 Items (the Entity tool, N): click an empty cell to add an item there (in the middle of the cell, on
-the floor you are editing), or click an existing item to select it. A selected item opens the
+the floor you are editing), or click an existing item to select it; drag an item to move it to another
+cell (it stays on its wall if the new cell has a wall on that side). A selected item opens the
 Details pane, docked beside the map, where you change it in place: Sprite (or click a tile in the
 atlas), Mode ("Pick up once": touching it gives the effect and it is gone; "Respawns": gone, then
 back after the set seconds; "Stays": the effect counts each visit but it is never removed),
@@ -545,6 +546,7 @@ class Editor:
         self.stair_step = 0.25
         self.atlas_drag = None                  # (start_cell, current_cell) while dragging
         self.stairs_drag = None                 # (start_cell, current_cell) while dragging
+        self.move_drag = None                   # (kind, thing, from_cell, cell) while dragging an item, spawn point or the start
         self.shape = "box"                      # what the Shape tool draws (one of SHAPES)
         self.shape_drag = None                  # (start_cell, current_cell, erasing) while dragging a shape
         self.shape_side = None                  # the wall side under the mouse where that drag started
@@ -2166,6 +2168,8 @@ class Editor:
 
     def map_click(self, cell, button):
         """Start of a click on the map: left uses the active tool, right always erases."""
+        if button == 1 and self.start_move(cell):
+            return
         if button == 3 and self.tool == "entity":
             self.remove_entities(cell)
             return
@@ -2281,6 +2285,66 @@ class Editor:
             for e in found:
                 self.level.entities.remove(e)
             self.deselect()
+
+    def start_move(self, cell):
+        """Pressing on an item (Entity tool), a spawn point (Spawn tool) or the start (Start tool) picks it
+        up: dragging it to another cell moves it there; letting go where it was is a plain click."""
+        level, kind, thing = self.level, None, None
+        if not level.in_bounds(*cell):
+            return False
+        if self.tool == "entity" and self.entities_in(cell):
+            kind, thing = "entity", self.entities_in(cell)[0]
+            self.select_entity(thing)
+        elif self.tool == "spawn" and self.spawners_in(cell):
+            kind, thing = "spawn", self.spawners_in(cell)[0]
+        elif self.tool == "start" and cell == (int(level.start_x), int(level.start_y)) and level.start_span == self.floor:
+            kind = "start"
+        if kind is None:
+            return False
+        self.move_drag = (kind, thing, tuple(cell), tuple(cell))
+        return True
+
+    def move_target_ok(self, kind, cell):
+        """Whether the thing being dragged can be put down in `cell` on the floor being edited."""
+        level = self.level
+        if not level.in_bounds(*cell):
+            return False
+        if kind == "entity":                        # (an item may also stand on top of a wall)
+            return level.span_present(self.floor, *cell) or level.is_solid(*cell, self.floor)
+        return level.span_present(self.floor, *cell)
+
+    def finish_move(self):
+        """Let go of the dragged item, spawn point or start: move it to the cell under the mouse."""
+        kind, thing, start, cell = self.move_drag
+        self.move_drag = None
+        level = self.level
+        if cell == start:                           # not moved: a plain click
+            if kind == "spawn":
+                self.place_spawner(start)
+            elif kind == "start":
+                self.place_start(start)
+            return
+        if not self.move_target_ok(kind, cell):
+            self.say("Can't move it there: no room in that cell on this floor")
+            return
+        if kind == "entity" and thing in level.entities:
+            self.begin_edit()
+            dx, dy = SIDE_VECTORS.get(thing.wall, (0, 0))
+            if thing.wall and (level.is_solid(*cell, self.floor) or not level.is_solid(cell[0] + dx, cell[1] + dy, self.floor)):
+                thing.wall = ""                         # no wall on that side there: stand in the middle
+            if thing.wall:
+                thing.x, thing.y = mounted_position(*cell, thing.wall)
+            else:                                       # keep where in its cell it stood
+                thing.x, thing.y = cell[0] + thing.x - math.floor(thing.x), cell[1] + thing.y - math.floor(thing.y)
+            self.say(f"Moved the item to {cell[0]}, {cell[1]}")
+        elif kind == "spawn" and thing in level.spawners:
+            self.begin_edit()
+            thing.x, thing.y = cell[0] + 0.5, cell[1] + 0.5
+            self.say(f"Moved the spawn point to {cell[0]}, {cell[1]}")
+        elif kind == "start":
+            self.begin_edit()
+            level.start_x, level.start_y = cell[0] + 0.5, cell[1] + 0.5
+            self.say(f"Moved the start to {cell[0]}, {cell[1]}")
 
     def place_camera(self, cell, point):
         """Camera tool: stand the 3D view's camera in this cell, on the floor being edited (or the
@@ -2518,7 +2582,7 @@ class Editor:
 
     def select_floor(self, floor):
         self.floor = max(0, min(floor, self.level.floor_count - 1))
-        self.stairs_drag = self.shape_drag = None
+        self.stairs_drag = self.shape_drag = self.move_drag = None
         e = self.selected_entity()
         if e is not None and e.span != self.floor:
             self.deselect()                             # the item is on another floor
@@ -2559,7 +2623,7 @@ class Editor:
     def clamp_floor(self):
         """Keep the edited floor valid after the level changed (undo, reload, new map)."""
         self.floor = max(0, min(self.floor, self.level.floor_count - 1))
-        self.rename = self.value_edit = None
+        self.rename = self.value_edit = self.move_drag = None
         self.field_edit = self.menu_open = None
         if self.selected_entity() is None:
             self.selected = None
@@ -3078,7 +3142,10 @@ class Editor:
             return
         ctrl = bool(e.mod & pygame.KMOD_CTRL)
         if e.key == pygame.K_ESCAPE:
-            if self.shape_drag:
+            if self.move_drag:
+                self.move_drag = None
+                self.say("Move cancelled")
+            elif self.shape_drag:
                 self.shape_drag = None
                 self.say("Shape cancelled")
             elif self.pasting:
@@ -3241,6 +3308,8 @@ class Editor:
             self.finish_atlas_drag()
         if e.button == 1 and self.stairs_drag:
             self.finish_stairs()
+        if e.button == 1 and self.move_drag:
+            self.finish_move()
         if self.shape_drag and e.button == (3 if self.shape_drag[2] else 1):
             self.finish_shape()
         if self.area_drag and e.button == 1:
@@ -3272,6 +3341,8 @@ class Editor:
             self.atlas_drag = (self.atlas_drag[0], ((x - rect.x) // TILE, (y - rect.y) // TILE))
         elif self.stairs_drag:
             self.stairs_drag = (self.stairs_drag[0], self.cell_at(e.pos))
+        elif self.move_drag:
+            self.move_drag = self.move_drag[:3] + (self.cell_at(e.pos),)
         elif self.shape_drag:
             self.shape_drag = (self.shape_drag[0], self.cell_at(e.pos), self.shape_drag[2])
         elif self.area_drag:
@@ -4926,6 +4997,13 @@ class Editor:
                     ghost.set_alpha(150)
                     screen.blit(ghost, rect)
                 pygame.draw.rect(screen, WARN if erasing else ACCENT, rect, 1 if tiles else 2)
+            return
+        if self.move_drag:
+            kind, _thing, start, cell = self.move_drag
+            if cell != start:
+                color = ACCENT if self.move_target_ok(kind, cell) else WARN
+                pygame.draw.line(screen, color, self.cell_rect(*start).center, self.cell_rect(*cell).center, 2)
+                pygame.draw.rect(screen, color, self.cell_rect(*cell), 2)
             return
         if self.stairs_drag:
             for cell, height in self.stairs_heights():
