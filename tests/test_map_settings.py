@@ -231,6 +231,26 @@ def test_the_buy_menu_lists_the_entries_and_greys_out_what_cannot_be_afforded():
     menu.draw(surface)
 
 
+def test_an_entry_for_one_team_is_only_listed_and_sold_to_that_team(tmp_path):
+    level = shop_level(mode="teams")
+    level.settings.buy_items[3].team = 2                            # the Key: team 2 only
+    game = game_for(level, players=(0, 1))
+    assert [game.players[p].team for p in (0, 1)] == [1, 2]
+    assert game.buy(0, 3).endswith("not for sale to your team")
+    assert game.buy(1, 3) == "Bought 2 x Key"
+
+    def listed(team):
+        menu = BuyMenu(None, lambda: level, lambda: PlayerStats(money=1000), team=lambda: team)
+        menu.show()
+        return {i.action for i in menu.items((1280, 800)) if i.action and i.action.startswith("buy:")}
+    assert listed(1) == {"buy:0", "buy:1", "buy:2"} and listed(2) == {"buy:0", "buy:1", "buy:2", "buy:3"}
+    level.settings.mode = "ffa"                                     # no teams: everyone sees it
+    assert "buy:3" in listed(0) and game.buy(0, 3) == "Bought 2 x Key"
+
+    save_level(tmp_path / "shop.json", level)
+    assert [b.team for b in load_level(tmp_path / "shop.json").settings.buy_items] == [0, 0, 0, 2]
+
+
 def test_prices_and_icons():
     assert price_text("money", 300) == "$300" and price_text("score", 5) == "5 score"
     assert price_text("free", 300) == "free" and price_text("money", 0) == "free"

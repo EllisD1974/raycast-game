@@ -3,7 +3,7 @@ with its picture and price.
 
 It is drawn and laid out like the in-game menu (menu.Pages). Clicking an entry returns "buy:<index>": main.py puts the
 index in the player's next Inputs, and the game (the host's, for a joiner) gives it if the player has enough money or
-score. An entry the player cannot afford is greyed out. "close" (B, Esc or Close) puts the menu away.
+score. An entry the player cannot afford is greyed out; one for the other team (in a mode with teams) is not listed. "close" (B, Esc or Close) puts the menu away.
 """
 import pygame
 
@@ -29,12 +29,18 @@ def entry_tile(entry, guns):
 
 class BuyMenu(Pages):
     """The buy menu. `level()` is the map being played and `stats()` the player's PlayerStats (both asked for each time,
-    as the map can change while the game runs), `tiles()` the atlas's tile pictures for the entries' icons."""
+    as the map can change while the game runs), `tiles()` the atlas's tile pictures for the entries' icons and `team()`
+    the player's team (entries for the other team are left out)."""
     TITLES = {"main": "Buy menu"}
 
-    def __init__(self, settings, level, stats, tiles=lambda: []):
+    def __init__(self, settings, level, stats, tiles=lambda: [], team=lambda: 0):
         super().__init__(settings)
-        self.level, self.stats, self.tiles = level, stats, tiles
+        self.level, self.stats, self.tiles, self.team = level, stats, tiles, team
+
+    def offered(self):
+        """[(index in the map's buy menu, entry)] of the entries this player's team can buy."""
+        settings, team = self.level().settings, self.team()
+        return [(i, e) for i, e in enumerate(settings.buy_items) if e.offered_to(team, settings.has_teams())]
 
     def affordable(self, entry):
         settings, stats = self.level().settings, self.stats()
@@ -53,10 +59,10 @@ class BuyMenu(Pages):
 
     def lines(self):
         settings = self.level().settings
-        entries = settings.buy_items
+        entries = self.offered()
         self.scroll = max(0, min(self.scroll, len(entries) - LIST_ROWS))
         rows = [[cell(self.wallet(), color=DIM)]]
-        for i, entry in enumerate(entries[self.scroll:self.scroll + LIST_ROWS], self.scroll):
+        for i, entry in entries[self.scroll:self.scroll + LIST_ROWS]:
             rows.append([cell(f"{entry.label()}   {price_text(settings.buy_cost, entry.price)}", f"buy:{i}",
                               self.affordable(entry))])
         if not entries:
@@ -79,7 +85,7 @@ class BuyMenu(Pages):
         for text in messages:
             if text.startswith("Bought"):
                 self.say(text)
-            elif text.startswith(("Not enough", "Nothing to buy", "Health is already")) or text.endswith("not for sale"):
+            elif text.startswith(("Not enough", "Nothing to buy", "Health is already")) or "not for sale" in text:
                 self.say(text, warn=True)
 
     def draw(self, surface, mouse=(-1, -1), shade=True):
