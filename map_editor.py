@@ -16,7 +16,8 @@ A map has several layers; you edit one at a time (keys 1-7 or the Layer buttons)
                on the ground floor fills every floor.
   2 FloorTex   floor texture of each cell (also the riser texture of stairs / raised blocks)
   3 CeilTex    ceiling texture of each cell
-  4 FloorH     floor height of each cell (stairs, platforms, pits); [ ] change the brush value
+  4 FloorH     floor height of each cell (stairs, platforms, pits); [ ] change the brush value,
+               or click the value (or press Enter) and type one
   5 CeilH      ceiling height of each cell (tall rooms, low tunnels)
   6 Ramps      ramp direction; a run of ramp cells slopes from the floor before it to the floor
                after it. R rotates the direction.
@@ -498,6 +499,7 @@ class Editor:
         self.dropdown_open = False
         self.show_legend = True                 # the key to the marks on the map (K toggles)
         self.rename = None                      # text being typed while renaming a floor
+        self.value_edit = None                  # brush value being typed into the toolbar (None: not typing)
         self.new_name = None                    # name being typed in the New map dialog (None: closed)
         self.new_error = ""                     # why the typed name can't be used, shown in the dialog
         self.importing = None                   # the Import dialog (an ImportDialog), while it is open
@@ -1761,8 +1763,9 @@ class Editor:
         row2 += [("btn", f"{LAYER_LABELS[name]}({i + 1})", f"layer:{name}") for i, name in enumerate(EDITOR_LAYERS)]
         row2.append(None)
         if self.layer in VALUE_LAYERS:
+            typed = self.value_edit
             row2 += [("btn", "Val-", "val-"), ("btn", "Val+", "val+"),
-                     ("txt", f"value {fmt(self.brush(self.gname()))}", ACCENT)]
+                     ("val", f"value {fmt(self.brush(self.gname()))}" if typed is None else typed, "val_type")]
         elif self.layer == "ramp":
             row2 += [("btn", "Rotate(R)", "dir"), ("txt", f"rises {RAMP_NAMES[self.ramp_dir]}", ACCENT)]
         elif self.layer == "sides":
@@ -1809,6 +1812,10 @@ class Editor:
                     x += self.font.size(item[1])[0] + 8
                 elif item[0] == "drop":
                     rect = pygame.Rect(x, y, DROPDOWN_W, 34)
+                    self.buttons.append((rect, item[1], item[2]))
+                    x = rect.right + 4
+                elif item[0] == "val":                  # the brush value: click it to type one
+                    rect = pygame.Rect(x, y, max(90, self.font.size(item[1] + "|")[0] + 16), 34)
                     self.buttons.append((rect, item[1], item[2]))
                     x = rect.right + 4
                 else:
@@ -2089,6 +2096,7 @@ class Editor:
         if self.layer == "sides":
             self.set_side(cx, cy, self.painted_side(), 0)
         elif self.layer == "walls":
+            self.open_like_neighbors(cx, cy)
             for side in SIDES:                                          # ... and its sides' own tiles
                 for name in (f"side_{side}", f"side_{side}_from", f"side_{side}_to"):
                     self.level.set(name, cx, cy, DEFAULTS[name])
@@ -2104,6 +2112,21 @@ class Editor:
             self.remove_room(cx, cy)                    # erasing a higher floor's height removes the room
         else:
             self.level.set(self.gname(), cx, cy, DEFAULTS[self.gname()])   # (wall height: back to full)
+
+    def open_like_neighbors(self, x, y):
+        """Before a ground wall is erased, give its cell the room around it: the floor and ceiling
+        stored under a wall are never seen, so left as they are they could leave a sunken pocket
+        (say floor 0, ceiling 1 beside a floor at 2) that still looks and blocks like a wall."""
+        level = self.level
+        if not level.in_bounds(x, y) or not level.walls[y][x] or level.wall_floor(x, y):
+            return
+        if not level._beside(x, y, "floor_h"):          # boxed in by walls: nothing to match
+            return
+        level.set("floor_h", x, y, level.wall_base(x, y))
+        level.set("ceil_h", x, y, level.auto_wall_ceiling(x, y))
+        for name in ("floor_tex", "ceil_tex"):          # the most common texture beside it
+            values = level._beside(x, y, name)
+            level.set(name, x, y, max(set(values), key=values.count))
 
     def stroke_cell(self, cell):
         (self.erase_at if self.stroke == "erase" else self.paint_at)(*cell)
@@ -2536,7 +2559,7 @@ class Editor:
     def clamp_floor(self):
         """Keep the edited floor valid after the level changed (undo, reload, new map)."""
         self.floor = max(0, min(self.floor, self.level.floor_count - 1))
-        self.rename = None
+        self.rename = self.value_edit = None
         self.field_edit = self.menu_open = None
         if self.selected_entity() is None:
             self.selected = None
@@ -2635,6 +2658,9 @@ class Editor:
             self.do("order-" if action == "val-" else "order+")        # [ and ] step the order too
         elif action in ("val-", "val+"):
             self.adjust_value(-VALUE_STEP if action == "val-" else VALUE_STEP)
+        elif action == "val_type" and self.layer in VALUE_LAYERS:
+            self.value_edit = ""
+            self.say("Type the brush value, Enter to use it, Esc to cancel", 60)
         elif action == "dir":
             self.ramp_dir = self.ramp_dir % 4 + 1
         elif action == "side_full":
@@ -2772,6 +2798,20 @@ class Editor:
         else:
             return
         self.touch()
+
+    def finish_value_edit(self, commit):
+        """Use (or drop) the brush value typed into the toolbar, clamped to the layer's limits."""
+        typed, self.value_edit = self.value_edit, None
+        if not commit or not typed or self.layer not in VALUE_LAYERS:
+            return
+        try:
+            value = float(typed.replace(",", "."))
+        except ValueError:
+            self.say(f"'{typed}' is not a number: value unchanged")
+            return
+        low, high = VALUE_LIMITS[self.layer]
+        self.value[self.gname()] = max(low, min(high, round(value, 2)))
+        self.say(f"Brush value {fmt(self.value[self.gname()])}")
 
     def adjust_value(self, delta):
         if self.layer in VALUE_LAYERS:
@@ -3010,6 +3050,19 @@ class Editor:
             elif char and char.isprintable() and len(self.rename) < MAX_NAME_LENGTH:
                 self.rename += char
             return
+        if self.value_edit is not None:                 # typing the brush value into the toolbar
+            char = getattr(e, "unicode", "")
+            if e.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                self.finish_value_edit(True)
+            elif e.key == pygame.K_ESCAPE:
+                self.finish_value_edit(False)
+            elif e.key == pygame.K_BACKSPACE:
+                self.value_edit = self.value_edit[:-1]
+            elif char and char in "0123456789.,-" and len(self.value_edit) < 8:
+                _whole, dot, decimals = self.value_edit.replace(",", ".").partition(".")
+                if not (dot and (char in ".," or len(decimals) >= 2)):    # one point, 2 decimal places
+                    self.value_edit += char
+            return
         if self.field_edit is not None:                 # typing a number into the Details pane
             char = getattr(e, "unicode", "")
             if e.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
@@ -3095,6 +3148,8 @@ class Editor:
             self.do("val-")
         elif e.key == pygame.K_RIGHTBRACKET:
             self.do("val+")
+        elif e.key in (pygame.K_RETURN, pygame.K_KP_ENTER) and self.layer in VALUE_LAYERS:
+            self.do("val_type")
         elif e.key == pygame.K_r:
             self.do("dir")
 
@@ -3117,6 +3172,9 @@ class Editor:
             return
         if self.rename is not None:                     # clicking away keeps the typed name
             self.finish_rename(True)
+            return
+        if self.value_edit is not None:                 # ... and the typed brush value
+            self.finish_value_edit(True)
             return
         if self.field_edit is not None:                 # ... and the typed number
             self.finish_field_edit(True)
@@ -4968,6 +5026,9 @@ class Editor:
             if action == "dropdown":
                 self.draw_dropdown_button(screen, rect, label)
                 continue
+            if action == "val_type":
+                self.draw_value_box(screen, rect, label)
+                continue
             active = action in (f"tool:{self.tool}", f"layer:{self.layer}", f"shape:{self.shape}") \
                 or (action == "legend" and self.show_legend) or (action == "guns" and self.guns_mode) \
                 or (action == "prefabs" and self.prefabs_mode) or (action == "effects" and self.effects_mode) or (action == "lights" and self.lights_mode)
@@ -4977,6 +5038,15 @@ class Editor:
             screen.blit(text, text.get_rect(center=rect.center))
         for text, pos, color in self.readouts:
             screen.blit(self.font.render(text, True, color), pos)
+
+    def draw_value_box(self, screen, rect, label):
+        """The brush value in the toolbar: its number, or a text box while one is being typed."""
+        typing = self.value_edit is not None
+        hot = rect.collidepoint(self.mouse)
+        pygame.draw.rect(screen, (24, 26, 32), rect, border_radius=4)
+        pygame.draw.rect(screen, ACCENT if typing else (BUTTON_HOT if hot else BUTTON), rect, 2, border_radius=4)
+        caret = ("|" if int(time.time() * 2) % 2 == 0 else " ") if typing else ""
+        screen.blit(self.font.render(label + caret, True, TEXT if typing else ACCENT), (rect.x + 8, rect.y + 8))
 
     def draw_dropdown_button(self, screen, rect, label):
         """The closed dropdown: the current floor's name and an arrow, or a text box while renaming."""
