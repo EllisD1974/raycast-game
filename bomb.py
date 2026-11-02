@@ -26,6 +26,10 @@ REACH_UP = 1.0                  # ... and how far above or below it they may be
 DROP_COOLDOWN = 1.0             # seconds before a player who dropped the bomb can pick it up again
 BOMB_SIZE = 0.35                # the bomb's picture, in cells
 BOMB_TILE = 25                  # its picture in the atlas (tile id 26; make_atlas.py / textures.png)
+THROW_SPEED = 5.0               # cells / second a bomb dropped with G leaves the hand at, the way the player looks
+THROW_HEIGHT = 0.3              # ... from this far above their feet
+BOMB_EDGE = 0.1                 # how close (cells) a flying bomb's middle gets to a wall before it bounces off
+BOUNCE = 0.3                    # how much of its speed into a wall it keeps, going back the other way
 NOTE_TIME = 4.0                 # seconds a round's result stays on screen
 
 # Why a round ended -> what everyone is told (after "<team> win").
@@ -64,8 +68,8 @@ def bomb_damage(settings, distance):
 @dataclass
 class Bomb:
     """Where the bomb is. state: "none" (nobody has it), "carried" (by `carrier`), "dropped" (lying at x, y, z on floor
-    `span`, or falling there at `vz` if it was dropped in the air), "planted" (at x, y, z in bomb site `site`, exploding
-    in `left` seconds), "exploded" or "defused"."""
+    `span`, or flying there at (vx, vy, vz) if it was thrown or dropped in the air), "planted" (at x, y, z in bomb
+    site `site`, exploding in `left` seconds), "exploded" or "defused"."""
     state: str = "none"
     carrier: int = None
     x: float = 0.0
@@ -74,24 +78,53 @@ class Bomb:
     span: int = 0
     site: int = 0
     left: float = 0.0
-    vz: float = 0.0                 # falling speed while dropped (the host's only: joiners see where it is)
+    vx: float = 0.0                 # velocity while flying after a throw or a drop (the host's only: joiners see
+    vy: float = 0.0                 # where it is)
+    vz: float = 0.0
 
     def at(self, body):
         self.x, self.y, self.z, self.span = body.x, body.y, body.z, body.span
 
     def fall(self, world, dt):
-        """A dropped bomb in the air falls (with the players' gravity) until it lands on the floor under it."""
+        """A dropped bomb in the air flies (with the players' gravity) until it lands on the floor under it, where it
+        stops. It bounces back a little off walls and does not go through ceilings."""
+        if self.vx or self.vy:
+            for axis in (0, 1):                     # axes separately, like the players: it slides along a wall
+                v = self.vx if axis == 0 else self.vy
+                x = self.x + (v * dt if axis == 0 else 0.0)
+                y = self.y + (v * dt if axis == 1 else 0.0)
+                ex = x + math.copysign(BOMB_EDGE, v) if axis == 0 else x
+                ey = y + math.copysign(BOMB_EDGE, v) if axis == 1 else y
+                if world.point_open(ex, ey, self.z + 0.01) and world.point_open(x, y, self.z + 0.01):
+                    self.x, self.y = x, y
+                elif axis == 0:
+                    self.vx = -self.vx * BOUNCE
+                else:
+                    self.vy = -self.vy * BOUNCE
         span = world.span_at(self.x, self.y, self.z, self.span, grounded=False)
         if span < 0:
             return
         self.span, ground = span, world.floor_of(span, self.x, self.y)
-        if self.z <= ground:
-            self.z, self.vz = ground, 0.0
+        if self.z <= ground and self.vz <= 0:
+            self.z, self.vx, self.vy, self.vz = ground, 0.0, 0.0, 0.0
             return
         self.vz -= GRAVITY * dt
-        self.z = max(ground, self.z + self.vz * dt)
-        if self.z <= ground:
-            self.vz = 0.0
+        self.z += self.vz * dt
+        ceiling = world.ceil_of(span, self.x, self.y)
+        if self.z + BOMB_SIZE > ceiling:            # hit the ceiling: it comes back down
+            self.z, self.vz = max(ground, ceiling - BOMB_SIZE), min(self.vz, 0.0)
+        if self.z <= ground:                        # landed: it stays where it lands
+            self.z, self.vx, self.vy, self.vz = ground, 0.0, 0.0, 0.0
+
+    def throw(self, body, world):
+        """Thrown with G: from about the hand, at THROW_SPEED the way the player looks (up / down too), plus the
+        player's own speed."""
+        up = math.cos(body.pitch)
+        self.vx = math.cos(body.angle) * up * THROW_SPEED + body.vx
+        self.vy = math.sin(body.angle) * up * THROW_SPEED + body.vy
+        self.vz = math.sin(body.pitch) * THROW_SPEED + (0.0 if body.on_ground else body.vz)
+        top = world.ceil_of(self.span, self.x, self.y) - BOMB_SIZE
+        self.z = max(self.z, min(self.z + THROW_HEIGHT, top))
 
 
 @dataclass
@@ -167,7 +200,7 @@ def may_move(view, pid, body, use, level):
 class Round:
     """The rounds of bomb defusal in a Game (game.round), which calls:
 
-        act(pid, wish, dt)      for each player step: plants / defuses / drops the bomb, and returns the Inputs the
+        act(pid, wish, dt)      for each player step: plants / defuses / throws the bomb, and returns the Inputs the
                                 player may actually use (no moving while frozen, planting or defusing)
         update(dt)              once per step of the world: the timers, picking the bomb up, deciding the round
         killed(pid)             when a player is knocked out: they stay out until the next round
@@ -373,7 +406,7 @@ class Round:
         elif self.defusing[0] == pid:
             self.defusing = (None, 0.0)
         if wish.drop and self.bomb.state == "carried" and self.bomb.carrier == pid and self.planting[0] != pid:
-            self.drop(pid)
+            self.drop(pid, throw=True)
             self.dropped_by = (pid, DROP_COOLDOWN)
         if may_move(self.view(), pid, body, wish.use, self.game.level):
             return wish
@@ -416,12 +449,16 @@ class Round:
             if damage > 0:
                 game.hurt(pid, damage)
 
-    def drop(self, pid):
-        """The carrier lets go of the bomb (or is knocked out, or leaves): it lies where they stood."""
+    def drop(self, pid, throw=False):
+        """The carrier lets go of the bomb (or is knocked out, or leaves): it lies where they stood (in the air it falls
+        from there: see Bomb.fall). `throw` (G): it is thrown the way they look instead."""
         state = self.game.players.get(pid)
-        self.bomb.state, self.bomb.carrier, self.bomb.vz = "dropped", None, 0.0
+        bomb = self.bomb
+        bomb.state, bomb.carrier, bomb.vx, bomb.vy, bomb.vz = "dropped", None, 0.0, 0.0, 0.0
         if state is not None:
-            self.bomb.at(state.body)                # (in the air it falls from there: see Bomb.fall)
+            bomb.at(state.body)
+            if throw:
+                bomb.throw(state.body, self.game.world)
         if self.planting[0] == pid:
             self.planting = (None, 0.0)
 

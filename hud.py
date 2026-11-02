@@ -192,5 +192,5 @@ def draw_round(picture, font, big, view, me_id, me, level, watching=None):
     elif can_defuse(view, me_id, body):
         shadowed(picture, font, "Hold E to defuse the bomb", (middle, HEIGHT // 2 + 44), HIGHLIGHT, center=True)
     if view.bomb.state == "carried" and view.bomb.carrier == me_id:
-        shadowed(picture, font, "You have the bomb: plant it in a site (G drops it)", (middle, HEIGHT - 70),
+        shadowed(picture, font, "You have the bomb: plant it in a site (G throws it)", (middle, HEIGHT - 70),
                  TEAM_COLORS[T_TEAM], center=True)

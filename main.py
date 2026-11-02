@@ -9,7 +9,7 @@ Run:  python make_atlas.py   (once: creates assets/textures.png, the 32x32 textu
           ESC the menu: resume, settings (mouse sensitivity, fullscreen), host settings (the host can
                         move everyone to another map) and exit
           B   the buy menu, on maps whose settings have one: click an entry to buy it
-          E   (hold) plant the bomb in a bomb site, or defuse it; G drops the bomb (bomb defusal)
+          E   (hold) plant the bomb in a bomb site, or defuse it; G throws the bomb (bomb defusal)
       The game opens maximized and can be resized; the picture keeps its aspect ratio.
       python main.py --map other.json   (play that map straight away, as the map editor's Play does)
 Multiplayer (one player hosts, the others join with the password):

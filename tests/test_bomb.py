@@ -1,5 +1,6 @@
 """Bomb defusal: rounds, the bomb, planting and defusing, the timers, the score and money, and playing it through a
 host (bomb.py, with game.py, session.py and the map's site layer)."""
+import math
 import os
 import random
 import sys
@@ -326,12 +327,46 @@ def test_g_drops_the_bomb_and_the_dropper_does_not_take_it_straight_back():
     game = bomb_game()
     go_live(game)
     pid = carrier(game)
+    game.players[pid].body.pitch = -math.pi / 2                    # looking straight down: it lands at their feet
     play(game, DT, {pid: Inputs(drop=True)})
     assert game.round.bomb.state == "dropped"
     play(game, 0.5)
     assert game.round.bomb.state == "dropped"
     play(game, 0.6)
     assert game.round.bomb.state == "carried" and carrier(game) == pid
+
+
+def thrown(pitch, angle=0.0, cell=(4, 6)):
+    """Where the bomb lands when the carrier, standing in `cell`, throws it with G looking that way."""
+    game = bomb_game()
+    go_live(game)
+    pid = carrier(game)
+    stand(game, pid, cell)
+    body = game.players[pid].body
+    body.angle, body.pitch = angle, pitch
+    play(game, DT, {pid: Inputs(drop=True)})
+    bomb, start = game.round.bomb, body.x
+    assert bomb.state == "dropped" and bomb.z > 0.0                # in the air, out of the hand
+    stand(game, pid, (1, 1))                                       # (away, so they don't pick it back up)
+    play(game, 2.0)
+    assert bomb.state == "dropped" and bomb.z == 0.0 and (bomb.vx, bomb.vy, bomb.vz) == (0.0, 0.0, 0.0)
+    return bomb, start
+
+
+def test_g_throws_the_bomb_the_way_the_player_looks():
+    level, _ = thrown(0.0)
+    assert level.x > 5.0 and level.y == pytest.approx(6.5)        # ahead (+x), straight
+    up, _ = thrown(math.radians(30))
+    assert up.x > level.x                                          # aimed up it flies further
+    down, start = thrown(math.radians(-60))
+    assert start < down.x < level.x                               # aimed down it lands close
+    side, _ = thrown(0.0, angle=math.pi / 2)
+    assert side.x == pytest.approx(4.5) and side.y > 7.0           # the way they face
+
+
+def test_a_thrown_bomb_bounces_off_a_wall_and_stays_in_the_room():
+    bomb, _ = thrown(math.radians(20), cell=(18, 6))              # right at the east wall of the 20 wide room
+    assert 0.0 < bomb.x < 19.0 and bomb.x < 18.9
 
 
 def test_a_bomb_dropped_in_the_air_falls_to_the_floor():

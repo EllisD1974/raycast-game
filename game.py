@@ -42,7 +42,7 @@ class Inputs:
     cycle: int = 0                  # steps through the guns, as with the mouse wheel
     buy: tuple = ()                 # entries of the map's buy menu (0 based) to buy, in order
     use: bool = False               # the use key (E) is held: plants or defuses the bomb
-    drop: bool = False              # drop the bomb (G)
+    drop: bool = False              # throw the bomb (G), the way the player looks
 
     def to_dict(self):
         return {"forward": self.forward, "strafe": self.strafe, "turn": self.turn, "tilt": self.tilt,
