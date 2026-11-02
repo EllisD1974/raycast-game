@@ -48,7 +48,8 @@ The ceiling stored under a wall by other tools is never used, since you can't se
 
 Left panel: the texture atlas. Click a tile, drag a rectangle, or Ctrl+click/drag to add more
 tiles (Ctrl+click a selected tile removes it). On the texture layers the selection is a stamp:
-it keeps its layout from the atlas, with its top-left at the cursor.
+it keeps its layout from the atlas, with its top-left at the cursor. The wheel over the atlas zooms
+into it (around the cursor); while zoomed, middle-drag or Space+drag moves it around.
 Map: left-drag paints, right-drag erases (back to the layer's default), wheel zooms,
 middle-drag or Space+drag pans.
 
@@ -232,6 +233,7 @@ RESIZE_EVENTS = tuple(getattr(pygame, name) for name in
 DROPDOWN_W, ITEM_H = 230, 30
 ATLAS_X, ATLAS_Y = 8, TOOLBAR_H + 8
 PANEL_W = 512 + 2 * 8
+ATLAS_ZOOMS = (1.0, 1.5, 2.0, 3.0, 4.0)        # how far the atlas panel zooms in (the wheel over it)
 DEFAULT_SHOW_PREVIEW = True                     # the live 3D view opens with the editor (V toggles it)
 PREVIEW_MIN_W, PREVIEW_MAX_W = 240, 640         # width of the 3D view's column, at the window's right
 PREVIEW_TITLE_H = 24
@@ -562,6 +564,7 @@ class Editor:
         self.site_brush = 1                     # the bomb site the Sites layer paints (1 A, 2 B)
         self.stair_step = 0.25
         self.atlas_drag = None                  # (start_cell, current_cell) while dragging
+        self.atlas_pan = False                  # middle-drag / Space+drag in the zoomed atlas
         self.stairs_drag = None                 # (start_cell, current_cell) while dragging
         self.move_drag = None                   # (kind, thing, from_cell, cell) while dragging an item, spawn point or the start
         self.shape = "box"                      # what the Shape tool draws (one of SHAPES)
@@ -605,6 +608,10 @@ class Editor:
         self.atlas_cols = atlas_img.get_width() // TILE
         self.atlas_rows = atlas_img.get_height() // TILE
         self.atlas_grid = self._make_atlas_grid()
+        self.atlas_zoom = getattr(self, "atlas_zoom", 1.0)              # (a reload keeps the atlas zoom)
+        self.atlas_scroll = getattr(self, "atlas_scroll", [0, 0])       # zoomed atlas pixels left of / above the view
+        self._atlas_zoomed = {}                                         # zoom -> (backdrop, picture, grid)
+        self.clamp_atlas_scroll()
         self._scaled = {}
         self._trans_cache = (None, None)
         self._atlas_stamp = self._atlas_mtime()
@@ -1895,13 +1902,62 @@ class Editor:
         index = max(0, min(tile_id - 1, len(self.tiles) - 1))
         return bool(self.transparent[index])
 
-    def _make_atlas_grid(self):
-        grid = pygame.Surface(self.atlas_img.get_size(), pygame.SRCALPHA)
-        for x in range(0, grid.get_width() + 1, TILE):
+    def _make_atlas_grid(self, cell=TILE):
+        grid = pygame.Surface((self.atlas_cols * cell, self.atlas_rows * cell), pygame.SRCALPHA)
+        for x in range(0, grid.get_width() + 1, cell):
             pygame.draw.line(grid, (255, 255, 255, 40), (x, 0), (x, grid.get_height()))
-        for y in range(0, grid.get_height() + 1, TILE):
+        for y in range(0, grid.get_height() + 1, cell):
             pygame.draw.line(grid, (255, 255, 255, 40), (0, y), (grid.get_width(), y))
         return grid
+
+    def atlas_cell(self):
+        """Size on screen of one atlas tile at the atlas panel's zoom."""
+        return round(TILE * self.atlas_zoom)
+
+    def atlas_origin(self):
+        """Screen position of the zoomed atlas picture's top-left (it may be above / left of the view)."""
+        rect = self.atlas_rect()
+        return rect.x - self.atlas_scroll[0], rect.y - self.atlas_scroll[1]
+
+    def atlas_pictures(self):
+        """(backdrop, picture, grid) of the atlas at the panel's zoom."""
+        if self.atlas_zoom == 1.0:
+            return self.atlas_backdrop, self.atlas_img, self.atlas_grid
+        if self.atlas_zoom not in self._atlas_zoomed:
+            cell = self.atlas_cell()
+            size = (self.atlas_cols * cell, self.atlas_rows * cell)
+            self._atlas_zoomed[self.atlas_zoom] = (pygame.transform.scale(self.atlas_backdrop, size),
+                                                   pygame.transform.scale(self.atlas_img, size),  # (nearest: crisp pixels)
+                                                   self._make_atlas_grid(cell))
+        return self._atlas_zoomed[self.atlas_zoom]
+
+    def clamp_atlas_scroll(self):
+        rect, cell = self.atlas_rect(), self.atlas_cell()
+        self.atlas_scroll = [max(0, min(self.atlas_scroll[0], self.atlas_cols * cell - rect.w)),
+                             max(0, min(self.atlas_scroll[1], self.atlas_rows * cell - rect.h))]
+
+    def zoom_atlas(self, pos, step):
+        """Zoom the atlas panel one step in (step > 0) or out, keeping the point under `pos` where it is."""
+        i = ATLAS_ZOOMS.index(self.atlas_zoom) if self.atlas_zoom in ATLAS_ZOOMS else 0
+        zoom = ATLAS_ZOOMS[max(0, min(len(ATLAS_ZOOMS) - 1, i + (1 if step > 0 else -1)))]
+        if zoom == self.atlas_zoom:
+            return
+        rect, old = self.atlas_rect(), self.atlas_cell()
+        mx, my = pos[0] - rect.x, pos[1] - rect.y
+        self.atlas_zoom = zoom
+        new = self.atlas_cell()
+        self.atlas_scroll = [round((mx + self.atlas_scroll[0]) * new / old - mx),
+                             round((my + self.atlas_scroll[1]) * new / old - my)]
+        self.clamp_atlas_scroll()
+        self.say(f"Atlas zoom {zoom:g}x" + (" (middle-drag or Space+drag to move around)" if zoom > 1 else ""))
+
+    def atlas_cell_at(self, pos):
+        """(column, row) of the atlas tile at a screen position, clamped to the tiles in view."""
+        rect, cell = self.atlas_rect(), self.atlas_cell()
+        x = min(max(pos[0], rect.left), rect.right - 1)
+        y = min(max(pos[1], rect.top), rect.bottom - 1)
+        ox, oy = self.atlas_origin()
+        return (min(self.atlas_cols - 1, (x - ox) // cell), min(self.atlas_rows - 1, (y - oy) // cell))
 
     # ---------------------------------------------------------------- view
 
@@ -1939,10 +1995,9 @@ class Editor:
 
     def tile_index_at(self, pos):
         """Atlas tile index under a screen position, or None."""
-        rect = self.atlas_rect()
-        if not rect.collidepoint(pos):
+        if not self.atlas_rect().collidepoint(pos):
             return None
-        col, row = (pos[0] - rect.x) // TILE, (pos[1] - rect.y) // TILE
+        col, row = self.atlas_cell_at(pos)
         return row * self.atlas_cols + col
 
     def stamp(self):
@@ -3330,6 +3385,8 @@ class Editor:
                 if rect.collidepoint(e.pos):
                     self.do(action)
                     return
+        elif atlas.collidepoint(e.pos) and (e.button == 2 or (e.button == 1 and pygame.key.get_pressed()[pygame.K_SPACE])):
+            self.atlas_pan = True                       # move the zoomed atlas around
         elif e.button == 1 and atlas.collidepoint(e.pos):
             index = self.tile_index_at(e.pos)
             cell = (index % self.atlas_cols, index // self.atlas_cols)
@@ -3378,7 +3435,7 @@ class Editor:
             if self.gizmo_drag:
                 self.gizmo_release()
         if e.button in (1, 2):
-            self.pan_drag = False
+            self.pan_drag = self.atlas_pan = False
 
     def on_mouse_move(self, e):
         self.mouse = e.pos
@@ -3388,11 +3445,11 @@ class Editor:
             self.preview.look(e.rel[0] * MOUSE_SENSITIVITY, -e.rel[1] * MOUSE_SENSITIVITY)
         elif self.camera_drag and self.preview is not None:
             self.preview.aim(*self.map_point(e.pos))
-        elif self.atlas_drag:
-            rect = self.atlas_rect()            # clamp so dragging outside keeps the nearest tile
-            x = min(max(e.pos[0], rect.left), rect.right - 1)
-            y = min(max(e.pos[1], rect.top), rect.bottom - 1)
-            self.atlas_drag = (self.atlas_drag[0], ((x - rect.x) // TILE, (y - rect.y) // TILE))
+        elif self.atlas_pan:
+            self.atlas_scroll = [self.atlas_scroll[0] - e.rel[0], self.atlas_scroll[1] - e.rel[1]]
+            self.clamp_atlas_scroll()
+        elif self.atlas_drag:                   # (clamped: dragging outside keeps the nearest tile)
+            self.atlas_drag = (self.atlas_drag[0], self.atlas_cell_at(e.pos))
         elif self.stairs_drag:
             self.stairs_drag = (self.stairs_drag[0], self.cell_at(e.pos))
         elif self.move_drag:
@@ -3420,6 +3477,9 @@ class Editor:
             self.open_scroll = max(0, min(most, self.open_scroll - e.y))
             return
         if self.new_name is not None:
+            return
+        if self.atlas_rect().collidepoint(self.mouse):  # the wheel zooms the atlas
+            self.zoom_atlas(self.mouse, e.y)
             return
         pane = self.details_rect()
         if pane is not None and pane.collidepoint(self.mouse):      # the wheel steps the value under it
@@ -5122,12 +5182,16 @@ class Editor:
     def draw_panel(self, screen):
         h = self._size()[1]
         pygame.draw.rect(screen, PANEL_BG, (0, TOOLBAR_H, PANEL_W, h - TOOLBAR_H - STATUS_H))
-        screen.blit(self.atlas_backdrop, self.atlas_rect())      # shows through transparent pixels
-        screen.blit(self.atlas_img, self.atlas_rect())
-        screen.blit(self.atlas_grid, self.atlas_rect())
+        view = self.atlas_rect()
+        screen.set_clip(view)                           # (zoomed in, only part of the atlas is in view)
+        backdrop, picture, grid = self.atlas_pictures()
+        origin = self.atlas_origin()
+        screen.blit(backdrop, origin)                   # shows through transparent pixels
+        screen.blit(picture, origin)
+        screen.blit(grid, origin)
         shown = self.drag_indices() if self.atlas_drag and not (self.mods() & pygame.KMOD_CTRL) \
             else (self.selection | (self.drag_indices() if self.atlas_drag else set()))
-        veil = pygame.Surface((TILE, TILE), pygame.SRCALPHA)
+        veil = pygame.Surface((self.atlas_cell(), self.atlas_cell()), pygame.SRCALPHA)
         veil.fill((255, 205, 60, 70))
         for index in shown:
             rect = self.tile_rect(index)
@@ -5137,9 +5201,15 @@ class Editor:
         if hover is not None:
             pygame.draw.rect(screen, TEXT, self.tile_rect(hover), 1)
         if self.layer not in TILE_LAYERS:               # the atlas is not what this layer paints with
-            shade = pygame.Surface(self.atlas_img.get_size(), pygame.SRCALPHA)
+            shade = pygame.Surface(view.size, pygame.SRCALPHA)
             shade.fill((20, 20, 26, 150))
-            screen.blit(shade, self.atlas_rect())
+            screen.blit(shade, view)
+        screen.set_clip(None)
+        if self.atlas_zoom > 1:
+            label = self.small.render(f"{self.atlas_zoom:g}x", True, TEXT)
+            back = label.get_rect(topright=(view.right - 4, view.y + 4)).inflate(8, 4)
+            pygame.draw.rect(screen, (20, 20, 26), back, border_radius=3)
+            screen.blit(label, label.get_rect(center=back.center))
 
         y, cell, _after, hints_y = self.panel_metrics()
         count = len(self.selection)
@@ -5147,7 +5217,7 @@ class Editor:
         for dx, dy, tile_id in self.stamp():
             small = pygame.transform.scale(self.tiles[tile_id - 1], (cell, cell))
             screen.blit(small, (ATLAS_X + dx * cell, y + 22 + dy * cell))
-        hints = ("Atlas: click / drag = select, Ctrl = add/remove",
+        hints = ("Atlas: click / drag = select, Ctrl = add/remove, wheel zoom, middle-drag pan",
                  "Map: L-drag paint, R-drag erase, wheel zoom, Space+drag pan",
                  "Tab floor, layers 1-8, tools B E F I S O T H M C N, [ ] value, R ramp, K key")
         for i, text in enumerate(hints):
@@ -5168,9 +5238,8 @@ class Editor:
         return y, cell, after, max(after, h - STATUS_H - 56)
 
     def tile_rect(self, index):
-        base = self.atlas_rect()
-        return pygame.Rect(base.x + (index % self.atlas_cols) * TILE,
-                           base.y + (index // self.atlas_cols) * TILE, TILE, TILE)
+        (x, y), cell = self.atlas_origin(), self.atlas_cell()
+        return pygame.Rect(x + (index % self.atlas_cols) * cell, y + (index // self.atlas_cols) * cell, cell, cell)
 
     def draw_toolbar(self, screen):
         pygame.draw.rect(screen, PANEL_BG, (0, 0, self._size()[0], TOOLBAR_H))
