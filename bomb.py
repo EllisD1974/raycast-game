@@ -262,8 +262,8 @@ class Round:
 
     def new_round(self):
         """Start the next round: swap sides at half time, start over after a match, bring everyone back in at their
-        team's spawn points (keeping what they carry if they lived through the last round) and hand one T the
-        bomb."""
+        team's spawn points (keeping what they carry if they lived through the last round, with their guns' ammo
+        filled up again) and hand one T the bomb."""
         game, settings = self.game, self.settings
         if self.new_match:
             self.number = 0
@@ -286,6 +286,7 @@ class Round:
             if keep:
                 state.body = body
                 state.stats.health = state.stats.max_health = settings.max_health
+                state.inventory.refill()
             else:
                 game.respawn(state, body=body)
             state.alive = True

@@ -386,6 +386,32 @@ def test_a_bomb_dropped_in_the_air_falls_to_the_floor():
     assert game.round.bomb.z == 0.0
 
 
+def test_survivors_start_the_next_round_with_their_guns_full_of_ammo():
+    level = bomb_level()
+    level.guns = [Gun(name="Pistol", mag_size=12, start_ammo=24, ammo="9mm"),
+                  Gun(name="Smg", mag_size=30, start_ammo=60, ammo="9mm"),
+                  Gun(name="Shotgun", mag_size=8, start_ammo=16, ammo="Shells")]
+    level.settings.start_gun = "Pistol"
+    game = Game(level, World(level, 32), random.Random(1))
+    for pid in (0, 1):
+        game.add_player(pid)
+    inventory = game.players[0].inventory
+    for name in ("Smg", "Shotgun"):
+        inventory.give_gun(next(g for g in level.guns if g.name == name))
+    for state in inventory.guns:
+        state.mag = 1
+    inventory.ammo = {"9mm": 3, "Shells": 0}
+    inventory.guns[1].reload_left = 0.5
+    go_live(game)
+    game.round.end_round(T_TEAM, "eliminated")
+    play(game, level.settings.round_end_time + DT)
+    assert game.round.phase == "freeze" and game.round.number == 2
+    inventory = game.players[0].inventory
+    assert [(s.gun.name, s.mag) for s in inventory.guns] == [("Pistol", 12), ("Smg", 30), ("Shotgun", 8)]
+    assert inventory.ammo == {"9mm": 60, "Shells": 16}         # a shared ammo type: the most any of its guns brings
+    assert not inventory.guns[1].reloading
+
+
 def test_buying_is_only_allowed_during_the_freeze_and_the_buy_time():
     game = bomb_game()
     assert play(game, DT, {0: Inputs(buy=(0,))})[0][-1].startswith("Bought")

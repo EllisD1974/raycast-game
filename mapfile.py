@@ -587,8 +587,8 @@ GAME_MODES = ("ffa", "teams", "coop", "bomb")
 GAME_MODE_LABELS = {"ffa": "Free for all", "teams": "Two teams", "coop": "Co-op", "bomb": "Bomb defusal"}
 BUY_COSTS = ("free", "money", "score")
 BUY_COST_LABELS = {"free": "Free", "money": "Money", "score": "Score"}
-BUY_KINDS = ("gun", "ammo", "item", "health")
-BUY_KIND_LABELS = {"gun": "A gun", "ammo": "Ammo", "item": "Inventory item", "health": "Health"}
+BUY_KINDS = ("gun", "item", "health")         # (no ammo: guns come with theirs, filled up each bomb defusal round)
+BUY_KIND_LABELS = {"gun": "A gun", "item": "Inventory item", "health": "Health"}
 MAX_BUY_ITEMS = 40                              # entries a buy menu may have
 MAX_MONEY = 1000000.0
 DEFUSE_KIT = "Defuse kit"                       # the inventory item that makes defusing faster (sell it as an item)
@@ -607,8 +607,9 @@ class BuyItem:
     """One entry of a map's buy menu (MapSettings.buy_items): what clicking it gives and what it costs.
 
     name     what the button says ("" names it after what it gives)
-    kind     gun: hands out the gun named `gun` (as a "Give a gun" item does); ammo: `amount` rounds of the ammo
-             type `ammo`; item: `amount` of the inventory item `item`; health: +`amount` health (up to the most)
+    kind     gun: hands out the gun named `gun` (as a "Give a gun" item does); item: `amount` of the inventory item
+             `item`; health: +`amount` health (up to the most). Ammo is not sold (an older map's ammo entries are
+             left out when it is read)
     price    what it costs, in the menu's currency (MapSettings.buy_cost); nothing when the menu is free
     tile     the atlas tile shown beside it (-1: the gun's own picture, or none)
     team     0: everyone can buy it; T_TEAM / CT_TEAM: in a mode with teams, only that team's players see and can
@@ -616,7 +617,6 @@ class BuyItem:
     name: str = ""
     kind: str = "gun"
     gun: str = ""
-    ammo: str = ""
     item: str = ""
     amount: float = 1.0
     price: float = 100.0
@@ -633,8 +633,6 @@ class BuyItem:
             return self.name
         if self.kind == "gun":
             return self.gun or "(no gun)"
-        if self.kind == "ammo":
-            return f"{self.amount:g} {self.ammo or 'default'} rounds"
         if self.kind == "item":
             return f"{self.amount:g} x {self.item or 'Item'}"
         return f"+{self.amount:g} health"
@@ -650,7 +648,7 @@ class BuyItem:
                 return getattr(base, key)
         return cls(name=str(data.get("name", ""))[:MAX_NAME],
                    kind=data.get("kind") if data.get("kind") in BUY_KINDS else base.kind,
-                   gun=str(data.get("gun", ""))[:MAX_NAME], ammo=str(data.get("ammo", ""))[:MAX_NAME],
+                   gun=str(data.get("gun", ""))[:MAX_NAME],
                    item=str(data.get("item", ""))[:MAX_NAME], amount=number("amount", 0.0, 100000.0),
                    price=number("price", 0.0, MAX_MONEY), tile=int(number("tile", -1, 255)),
                    team=data.get("team") if data.get("team") in SPAWN_TEAMS else 0)
@@ -759,7 +757,8 @@ class MapSettings:
                    start_gun=str(data.get("start_gun", ""))[:MAX_NAME],
                    buy_menu=bool(data.get("buy_menu", base.buy_menu)),
                    buy_cost=data.get("buy_cost") if data.get("buy_cost") in BUY_COSTS else base.buy_cost,
-                   buy_items=[BuyItem.from_dict(b) for b in items if isinstance(b, dict)][:MAX_BUY_ITEMS]
+                   buy_items=[BuyItem.from_dict(b) for b in items
+                              if isinstance(b, dict) and b.get("kind") != "ammo"][:MAX_BUY_ITEMS]
                    if isinstance(items, list) else [],
                    bomb_effect=str(data.get("bomb_effect", ""))[:MAX_NAME],
                    bomb_light=str(data.get("bomb_light", ""))[:MAX_NAME],

@@ -17,7 +17,7 @@ import net
 from buymenu import BuyMenu, entry_tile, price_text
 from entities import PlayerStats
 from game import NO_TEAM, Game, Inputs
-from mapfile import BuyItem, Gun, Level, MapSettings, level_text, load_level, parse_level, save_level
+from mapfile import BUY_KINDS, BuyItem, Gun, Level, MapSettings, level_text, load_level, parse_level, save_level
 from session import ClientSession, HostSession
 from test_session import FIRST_CHARACTER, make_world, run
 from world import World
@@ -36,7 +36,7 @@ def shop_level(cost="money", **rules):
     level.guns = [Gun(name="Pistol", tile=16), Gun(name="Shotgun", tile=17, start_ammo=8)]
     level.settings = MapSettings(buy_menu=True, buy_cost=cost, buy_items=[
         BuyItem(kind="gun", gun="Shotgun", price=300),
-        BuyItem(kind="ammo", ammo="9mm", amount=30, price=50),
+        BuyItem(kind="gun", gun="Pistol", price=50),
         BuyItem(kind="health", amount=40, price=20),
         BuyItem(kind="item", item="Key", amount=2, price=0)], **rules)
     return level
@@ -62,7 +62,14 @@ def test_settings_are_saved_with_the_map_and_read_back(tmp_path):
     save_level(str(path), level)
     again = load_level(str(path))
     assert again.settings == level.settings
-    assert again.settings.buy_items[1] == BuyItem(kind="ammo", ammo="9mm", amount=30, price=50)
+    assert again.settings.buy_items[1] == BuyItem(kind="gun", gun="Pistol", price=50)
+
+
+def test_ammo_is_not_sold_and_an_older_maps_ammo_entries_are_left_out():
+    assert "ammo" not in BUY_KINDS
+    data = json.loads(level_text(shop_level()))
+    data["settings"]["buy_items"].insert(1, {"kind": "ammo", "ammo": "9mm", "amount": 30, "price": 50})
+    assert [b.label() for b in parse_level(data).settings.buy_items] == ["Shotgun", "Pistol", "+40 health", "2 x Key"]
 
 
 def test_a_map_with_default_settings_saves_none_and_old_maps_load():
@@ -97,8 +104,8 @@ def test_buying_with_money_gives_the_thing_and_takes_the_price():
     assert me.stats.money == 400
     assert buy(game, 0, 0) == ["Bought Shotgun for 300"]
     assert me.inventory.find_gun("Shotgun") is not None and me.stats.money == 100
-    assert buy(game, 0, 1) == ["Bought 30 9mm rounds for 50"]
-    assert me.inventory.ammo["9mm"] == 30 and me.stats.money == 50
+    assert buy(game, 0, 1) == ["Bought Pistol for 50"]
+    assert me.inventory.find_gun("Pistol") is not None and me.stats.money == 50
 
 
 def test_buying_without_enough_money_gives_nothing():
@@ -326,7 +333,7 @@ def test_adding_entries_turns_the_menu_on_and_they_can_be_edited(ed):
     assert [b.gun for b in ed.level.settings.buy_items] == ["Pistol"]
 
 
-def test_the_buy_menu_row_adds_any_gun_or_ammo(ed):
+def test_the_buy_menu_row_adds_any_gun(ed):
     ed.do("mapsettings")
     click(ed, ed.settings_rows()[1].center)
     assert ed.settings_row() == map_editor.BUY_ROW
@@ -335,6 +342,10 @@ def test_the_buy_menu_row_adds_any_gun_or_ammo(ed):
     assert ed.level.settings.buy_cost == "score"
     assert ed.level.settings.buy_items == [BuyItem(kind="gun", gun="Rifle")]
     assert ed.selected_buy_item() is ed.level.settings.buy_items[0]
+    add = next(f for f in ed.buy_menu_fields() if f.key == "add_buy")
+    assert not any(c.startswith("ammo:") for c in add.choices)             # ammo is not sold
+    kind = next(f for f in ed.buy_item_fields(ed.selected_buy_item()) if f.key == "kind")
+    assert "ammo" not in kind.choices
 
 
 def test_renaming_or_deleting_a_gun_follows_into_the_settings(ed):

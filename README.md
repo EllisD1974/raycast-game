@@ -218,8 +218,9 @@ Score and money are kept when a player is knocked out. The HUD shows money on ma
 
 **Buy menu**: turn it on and players open it with `B` in the game. **Costs** is **Free** (everything is free),
 **Money** or **Score**: an entry is only given to a player who has its price, which is then taken off. Add entries
-with "+ Add to buy menu" (or the buy menu row's "+ Add" list of the map's guns and ammo types). An entry gives
-**a gun**, **ammo** (rounds of an ammo type), an **inventory item** or **health**, and has a price, an optional
+with "+ Add to buy menu" (or the buy menu row's "+ Add" list of the map's guns). An entry gives **a gun**, an
+**inventory item** or **health** (ammo is not sold: guns come with their own, filled up again each bomb defusal
+round), and has a price, an optional
 button text and an icon (a gun shows its own picture when it has none); "Move up / down" orders the menu. Beside the
 list is the menu as a player who just joined sees it. In the game, entries a player cannot afford are greyed out.
 When you join someone, the host decides what each purchase gives, as with pickups.
@@ -235,7 +236,8 @@ round time runs out without a plant. A player knocked out stays out until the ne
 - **A round**: the **freeze time** (nobody can move; look around and buy), then the **round time** (the timer at the
   top). Once the bomb is planted the timer becomes the **bomb timer** (red). When the round is decided its result
   shows for the **round end pause**, then the next round starts: everyone back at their team's spawn points, those
-  who lived keeping what they carry, the others coming back with the starting gun.
+  who lived keeping what they carry (with every gun's magazine full and its spare rounds back to what the gun comes
+  with), the others coming back with the starting gun.
 - **The bomb**: hold `E` standing in a bomb site to plant it (you cannot move meanwhile; letting go starts over).
   `G` drops it; it also drops where its carrier is knocked out, and any T walking over it picks it up. A CT holds `E`
   at the planted bomb to defuse it, faster with a **Defuse kit** (an inventory item of that name: sell it in the buy

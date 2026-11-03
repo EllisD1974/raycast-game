@@ -171,8 +171,8 @@ The Map settings section (J or the Map settings button) says how this map is pla
 team), Friendly fire (whether bullets and blasts hurt teammates), Max health, Start money, what knocking out an
 opponent earns (Score / kill, Money / kill) and a Starting gun every player comes in with. "Buy menu": turn it on
 (players then open it with B in the game) and choose what it costs: Free, Money or Score. "+ Add to buy menu" (or the
-pane's "+ Add" list of the map's guns and ammo) adds an entry: what it gives (a gun, ammo rounds, an inventory item or
-health), how much, its price and its icon (none: a gun shows its own picture); Move up / down orders the menu. On the
+pane's "+ Add" list of the map's guns) adds an entry: what it gives (a gun, an inventory item or health; ammo is not
+sold, guns come with theirs), how much, its price and its icon (none: a gun shows its own picture); Move up / down orders the menu. On the
 right is the menu as a player who just joined sees it (entries they cannot afford yet are greyed out). In the game,
 clicking an entry gives it to the player when they have enough money or score, and takes the price off it.
 
@@ -328,7 +328,7 @@ GIZMO_COLORS = {"bullet": (255, 170, 60), "effect": (80, 220, 255)}
 GIZMO_NAMES = {"bullet": "Bullets", "effect": "Effect"}
 AMBIENT_ROW = -1                                # light_selected value for the map's ambient light, listed first
 RULES_ROW, BUY_ROW = -1, -2                     # settings_selected values for the game rules and the buy menu's own
-BUY_AMOUNTS = {"gun": 1.0, "ammo": 30.0, "item": 1.0, "health": 50.0}   # what an entry gives when its kind is chosen
+BUY_AMOUNTS = {"gun": 1.0, "item": 1.0, "health": 50.0}   # what an entry gives when its kind is chosen
 
 
 def recolored(picture, matrix):
@@ -1113,7 +1113,7 @@ class Editor:
             for g in self.level.guns:
                 if g.ammo == a.name:
                     g.ammo = value
-            for e in self.level.entities + self.level.prefabs + self.level.settings.buy_items:
+            for e in self.level.entities + self.level.prefabs:
                 if e.ammo == a.name:
                     e.ammo = value
         setattr(a, name, value)
@@ -1125,7 +1125,7 @@ class Editor:
             for g in self.level.guns:                    # guns that used it fall back to the default bullet
                 if g.ammo == a.name:
                     g.ammo = ""
-            for e in self.level.entities + self.level.prefabs + self.level.settings.buy_items:
+            for e in self.level.entities + self.level.prefabs:
                 if e.ammo == a.name:
                     e.ammo = ""
             self.level.ammo_types.remove(a)
@@ -1508,16 +1508,15 @@ class Editor:
 
     def buy_menu_fields(self):
         """Whether the map has a buy menu and what it costs, for the Details pane in the Map settings section, and a
-        list to add one of the map's guns, ammo types, health or an item to it."""
+        list to add one of the map's guns, health or an item to it."""
         rules = self.level.settings
 
         def field(name, label, kind, **options):
             return Field(name, label, kind, (lambda n=name: getattr(rules, n)),
                          (lambda v, n=name: self.set_rule(n, v)), **options)
 
-        choices = (tuple(f"gun:{g.name}" for g in self.level.guns) + tuple(f"ammo:{a.name}" for a in self.level.ammo_types)
-                   + ("health:", "item:"))
-        labels = {c: {"gun": "Gun: ", "ammo": "Ammo: ", "health": "Health", "item": "Inventory item"}[c.split(":")[0]]
+        choices = tuple(f"gun:{g.name}" for g in self.level.guns) + ("health:", "item:")
+        labels = {c: {"gun": "Gun: ", "health": "Health", "item": "Inventory item"}[c.split(":")[0]]
                   + c.split(":", 1)[1] for c in choices}
         fields = [field("buy_menu", "Buy menu", "enum", choices=(False, True),
                         labels={False: "Off", True: "On (B in the game)"}),
@@ -1538,11 +1537,6 @@ class Editor:
         if entry.kind == "gun":
             names = tuple(g.name for g in self.level.guns) or ("",)
             fields.append(field("gun", "Gun", "enum", choices=names, labels={"": "(no guns yet)", **{n: n for n in names}}))
-        elif entry.kind == "ammo":
-            names = ("",) + tuple(a.name for a in self.level.ammo_types)
-            fields += [field("ammo", "Ammo type", "enum", choices=names,
-                             labels={"": "(default bullet)", **{n: n for n in names}}),
-                       field("amount", "Rounds", "num", step=6.0, low=0.0, high=100000.0)]
         elif entry.kind == "item":
             fields += [field("item", "Item name", "text"), field("amount", "How many", "num", step=1.0, low=0.0, high=1000.0)]
         else:
@@ -1610,11 +1604,11 @@ class Editor:
         self.say(f"Added {entry.label()} to the buy menu: set its price in the Details pane")
 
     def add_buy_choice(self, choice):
-        """An entry picked from the pane's "+ Add" list: "gun:<name>", "ammo:<name>", "health:" or "item:"."""
+        """An entry picked from the pane's "+ Add" list: "gun:<name>", "health:" or "item:"."""
         kind, name = choice.split(":", 1)
         entry = BuyItem(kind=kind, amount=BUY_AMOUNTS[kind])
-        if kind in ("gun", "ammo"):
-            setattr(entry, kind, name)
+        if kind == "gun":
+            entry.gun = name
         self.add_buy_item(entry)
 
     def move_buy_item(self, step):

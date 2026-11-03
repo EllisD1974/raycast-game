@@ -309,8 +309,6 @@ class Game:
             if gun is None:
                 return f"{entry.label()} is not for sale"
             state.inventory.give_gun(gun)
-        elif entry.kind == "ammo":
-            state.inventory.add_ammo(entry.ammo, entry.amount)
         elif entry.kind == "item":
             state.inventory.add_item(entry.item, entry.amount)
         elif entry.kind == "health":
