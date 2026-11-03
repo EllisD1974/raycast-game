@@ -17,9 +17,9 @@ jobs:
       SDL_VIDEODRIVER: dummy        # no screen on the runner: pygame draws to nothing
       SDL_AUDIODRIVER: dummy
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
 
@@ -43,7 +43,7 @@ jobs:
         shell: pwsh
         run: Compress-Archive -Path dist/RaycastGame -DestinationPath RaycastGame-windows.zip
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: RaycastGame-windows-${{ github.run_number }}
           path: RaycastGame-windows.zip
