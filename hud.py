@@ -1,10 +1,14 @@
 """What is drawn over the game picture: health, score and money, the inventory, the equipped gun, the red flash of
-being hurt, and in bomb defusal the round: the score, the timers, the bomb and what the player can do."""
+being hurt, and in bomb defusal and King of the Hill the round: the score, the timers, the bomb or the capture point,
+and what the player can do."""
+import math
+
 import pygame
 
 from bomb import can_defuse, can_plant, clock_text, site_under
 from constants import HEIGHT, WIDTH
-from mapfile import CT_TEAM, DEFUSE_KIT, SITE_NAMES, T_TEAM, TEAM_NAMES
+from koth import HillView, on_hill
+from mapfile import CT_TEAM, DEFUSE_KIT, KOTH_NAMES, SITE_NAMES, T_TEAM, TEAM_NAMES
 
 TEXT = (255, 255, 255)
 SHADOW = (0, 0, 0)
@@ -18,6 +22,9 @@ HURT_COLOR = (220, 20, 20)
 HURT_ALPHA = 64                        # how strong the red over the picture is just after a hit (of 255)
 HURT_FADE = 3.0                        # the flash fades out in 1 / HURT_FADE seconds
 TEAM_COLORS = {T_TEAM: (240, 175, 70), CT_TEAM: (120, 165, 255)}
+KOTH_COLORS = {T_TEAM: (200, 60, 50), CT_TEAM: (70, 115, 205)}         # RED and BLU
+KOTH_TEXT = {T_TEAM: (255, 120, 105), CT_TEAM: (140, 180, 255)}
+NEUTRAL = (150, 150, 158)
 DANGER = (255, 80, 60)
 BAR_BACK, BAR_FILL = (20, 20, 24), (250, 210, 90)
 
@@ -145,8 +152,12 @@ def draw_bar(picture, font, text, share):
 
 def draw_round(picture, font, big, view, me_id, me, level, watching=None):
     """Bomb defusal: the score and the timer at the top, the round's result in the middle, and what this player can
-    do (or who they are watching while out of the round). `view` is the bomb.RoundView, `me` their PlayerState."""
+    do (or who they are watching while out of the round). `view` is the bomb.RoundView, `me` their PlayerState.
+    King of the Hill (a koth.HillView) is drawn by draw_hill instead."""
     if view is None:
+        return
+    if isinstance(view, HillView):
+        draw_hill(picture, font, big, view, me_id, me, level, watching)
         return
     settings = level.settings
     middle = WIDTH // 2
@@ -194,3 +205,71 @@ def draw_round(picture, font, big, view, me_id, me, level, watching=None):
     if view.bomb.state == "carried" and view.bomb.carrier == me_id:
         shadowed(picture, font, "You have the bomb: plant it in a site (G throws it)", (middle, HEIGHT - 70),
                  TEAM_COLORS[T_TEAM], center=True)
+
+
+def draw_hill(picture, font, big, view, me_id, me, level, watching=None):
+    """King of the Hill: each team's clock either side of the point (in its owner's color, ringed by the capture
+    progress) at the top, what is happening under them, the round's result in the middle, and what this player is
+    doing on the point (or how long until they respawn)."""
+    middle, radius = WIDTH // 2, 13
+    height = big.get_height() + 6
+    for team, side in ((T_TEAM, -1), (CT_TEAM, 1)):
+        text = clock_text(view.clocks[team])
+        box = pygame.Rect(0, 4, big.size(text)[0] + 16, height)
+        box.centerx = middle + side * (radius + 10 + box.w // 2)
+        running = view.owner == team and view.phase == "live"
+        pygame.draw.rect(picture, KOTH_COLORS[team] if running else tuple(c // 2 for c in KOTH_COLORS[team]), box,
+                         border_radius=4)
+        if running:
+            pygame.draw.rect(picture, TEXT, box, 2, border_radius=4)
+        shadowed(picture, big, text, (box.centerx, box.y + 4), TEXT if running or not view.owner else DIM, center=True)
+        label = f"{KOTH_NAMES[team]} {view.score[team]}"
+        x = box.left - 8 - font.size(label)[0] if side < 0 else box.right + 8
+        shadowed(picture, font, label, (x, box.y + 7), KOTH_TEXT[team])
+    center = (middle, 4 + height // 2)
+    pygame.draw.circle(picture, SHADOW, center, radius + 3)
+    pygame.draw.circle(picture, KOTH_COLORS.get(view.owner, NEUTRAL), center, radius)
+    if view.phase == "setup":                                   # locked: a bar across it
+        pygame.draw.rect(picture, SHADOW, (center[0] - radius + 4, center[1] - 2, 2 * radius - 8, 4))
+    if view.capper and view.progress > 0:
+        ring = pygame.Rect(0, 0, 2 * radius + 6, 2 * radius + 6)
+        ring.center = center
+        start = math.pi / 2
+        pygame.draw.arc(picture, KOTH_TEXT[view.capper], ring, start, start + view.progress * math.tau, 3)
+    if view.phase == "setup":
+        status, color = f"The point unlocks in {clock_text(view.clock)}", TEXT
+    elif view.phase == "over":
+        status, color = f"Next round in {clock_text(view.clock)}", DIM
+    elif view.overtime:
+        status, color = "OVERTIME", DANGER
+    elif view.contested:
+        status, color = "The point is contested", HIGHLIGHT
+    elif view.capper and view.progress > 0:
+        status, color = f"{KOTH_NAMES[view.capper]} is capturing the point", KOTH_TEXT[view.capper]
+    elif view.owner:
+        status, color = f"{KOTH_NAMES[view.owner]} holds the point", KOTH_TEXT[view.owner]
+    else:
+        status, color = "Capture the point", TEXT
+    shadowed(picture, font, status, (middle, 8 + height), color, center=True)
+    if view.message and view.message_left > 0:
+        shadowed(picture, big, view.message, (middle, HEIGHT // 2 - 70), HIGHLIGHT, center=True)
+    if me_id not in view.alive:
+        left = view.respawns.get(me_id)
+        text = f"Respawning in {max(1, math.ceil(left))}" if left is not None else "Waiting to respawn"
+        if watching:
+            text += f" - watching {watching} (click: next)"
+        shadowed(picture, font, text, (middle, HEIGHT - 70), DIM, center=True)
+        return
+    if view.phase == "over" and view.winner and me.team != view.winner:
+        shadowed(picture, font, "Your team lost the round: no shooting until the next one", (middle, HEIGHT - 70),
+                 DIM, center=True)
+    if not on_hill(level, me.body):
+        return
+    if view.phase == "setup":
+        shadowed(picture, font, "The point is locked", (middle, HEIGHT // 2 + 44), DIM, center=True)
+    elif view.phase == "live" and view.contested:
+        draw_bar(picture, font, "Contested!", view.progress)
+    elif view.phase == "live" and view.capper and view.capper != me.team:
+        draw_bar(picture, font, "Pushing the capture back...", view.progress)
+    elif view.phase == "live" and view.capper == me.team:
+        draw_bar(picture, font, "Capturing the point...", view.progress)

@@ -38,7 +38,7 @@ from constants import FPS_CAP, HEIGHT, MOUSE_SENSITIVITY, TURN_SPEED, WIDTH
 from game import NO_TEAM, Events, Game, Inputs
 from hud import draw_hud, draw_hurt, draw_names, draw_round, hurt_flash
 from home import Home
-from mapfile import MAP_PATH, TEAM_TITLES, load_or_default
+from mapfile import KOTH_NAMES, MAP_PATH, TEAM_TITLES, load_or_default
 from menu import GameSettings, Menu
 from physics import look
 from renderer import BACKGROUND, Renderer, fit_rect  # noqa: F401  (re-exported: main.Renderer etc.)
@@ -394,7 +394,7 @@ def play(screen, clock, graphics, settings, session, map_path, from_home=False):
     print("Compiling the renderer (first run only; later runs use the cache)...")
     jump_pressed = reload_pressed = drop_pressed = False
     equips, cycle, buys = [], 0, []
-    watch = 0                                    # out of a bomb defusal round: which of the others we watch
+    watch = 0                                    # out of a round (or respawning): which of the others we watch
     loads = getattr(session, "loads", 0)
     running, quit_all, why = True, False, None
     while running:
@@ -493,7 +493,7 @@ def play(screen, clock, graphics, settings, session, map_path, from_home=False):
         if happened.picked:
             message, message_left = ", ".join(happened.picked), 1.5
             buy.bought(happened.picked)
-        view = session.round_view()                         # bomb defusal's round (None in the other modes)
+        view = session.round_view()                         # bomb defusal's or KotH's round (None in other modes)
         if buy.open and (not session.level.settings.buy_menu or (view is not None and not view.can_buy)):
             buy.hide()                                      # the map has no buy menu now, or the buy time is over
             mouse.set_captured(True)
@@ -512,7 +512,7 @@ def play(screen, clock, graphics, settings, session, map_path, from_home=False):
         rules = session.level.settings
         team = None
         if me.team != NO_TEAM and rules.has_teams():
-            team = TEAM_TITLES.get(me.team, me.team) if rules.mode == "bomb" else me.team
+            team = {"bomb": TEAM_TITLES, "koth": KOTH_NAMES}.get(rules.mode, {}).get(me.team, me.team)
         draw_hud(picture, font, me.stats, message if message_left > 0 else "", me.inventory if hidden is None and
                  (view is None or session.id in view.alive) else None, graphics.tiles, kick,
                  money=rules.uses_money(), team=team,
