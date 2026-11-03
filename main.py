@@ -8,6 +8,8 @@ Run:  python make_atlas.py   (once: creates assets/textures.png, the 32x32 textu
           SPACE jump, TAB let go of / take back the mouse, F11 fullscreen
           ESC the menu: resume, settings (mouse sensitivity, fullscreen), host settings (the host can
                         move everyone to another map) and exit
+          B   the buy menu, on maps whose settings have one: click an entry to buy it
+          E   (hold) plant the bomb in a bomb site, or defuse it; G throws the bomb (bomb defusal)
       The game opens maximized and can be resized; the picture keeps its aspect ratio.
       python main.py --map other.json   (play that map straight away, as the map editor's Play does)
 Multiplayer (one player hosts, the others join with the password):
@@ -30,12 +32,13 @@ from pygame._sdl2 import sdl2, video
 
 import net
 from atlas import ATLAS_PATH, atlas_array, transparent_tiles, unpack_atlas
+from buymenu import BuyMenu
 from character import character_tiles
 from constants import FPS_CAP, HEIGHT, MOUSE_SENSITIVITY, TURN_SPEED, WIDTH
-from game import Events, Game, Inputs
-from hud import draw_hud, draw_hurt, draw_names, hurt_flash
+from game import NO_TEAM, Events, Game, Inputs
+from hud import draw_hud, draw_hurt, draw_names, draw_round, hurt_flash
 from home import Home
-from mapfile import MAP_PATH, load_or_default
+from mapfile import MAP_PATH, TEAM_TITLES, load_or_default
 from menu import GameSettings, Menu
 from physics import look
 from renderer import BACKGROUND, Renderer, fit_rect  # noqa: F401  (re-exported: main.Renderer etc.)
@@ -379,15 +382,19 @@ def play(screen, clock, graphics, settings, session, map_path, from_home=False):
     hurt = 0.0                                   # the red flash after being hurt, 1 fading to 0
     font = pygame.font.Font(None, 22)
     name_font = pygame.font.Font(None, 18)
+    big_font = pygame.font.Font(None, 30)           # bomb defusal: the timer, the score and the round's result
     message, message_left = "", 0.0
     mouse = MouseLook(screen.window, MOUSE_SENSITIVITY * settings.sensitivity)
     menu = Menu(settings, is_host=isinstance(session, HostSession), map_path=map_path,
                 players=lambda: len(session.game.players) if hasattr(session, "game") else 1,
                 leave_label="Leave game" if from_home else "Exit game")
+    buy = BuyMenu(settings, lambda: session.level, lambda: session.me.stats, lambda: graphics.tiles,
+                  lambda: session.me.team)
     mouse.set_captured(True)
     print("Compiling the renderer (first run only; later runs use the cache)...")
-    jump_pressed = reload_pressed = False
-    equips, cycle = [], 0
+    jump_pressed = reload_pressed = drop_pressed = False
+    equips, cycle, buys = [], 0, []
+    watch = 0                                    # out of a bomb defusal round: which of the others we watch
     loads = getattr(session, "loads", 0)
     running, quit_all, why = True, False, None
     while running:
@@ -420,9 +427,28 @@ def play(screen, clock, graphics, settings, session, map_path, from_home=False):
                         message, message_left = f"Map changed to {os.path.basename(map_path)}", 3.0
                         menu.hide()
                         mouse.set_captured(True)
+            elif buy.open:                                      # the buy menu takes every other key and click
+                action = buy.handle(event, screen.window.size)
+                if action == "close":
+                    buy.hide()
+                    mouse.set_captured(True)
+                elif action and action.startswith("buy:"):
+                    buys.append(int(action[4:]))                # bought in the next step, by the game
             elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                 menu.show()                                     # Esc opens the menu and lets go of the mouse
                 mouse.set_captured(False)
+            elif event.type == pygame.KEYDOWN and event.key == pygame.K_b and session.level.settings.buy_menu:
+                view = session.round_view()
+                if view is not None and not view.can_buy:
+                    message, message_left = "The buy time is over", 1.5
+                else:
+                    buy.show()                                  # B opens the buy menu and lets go of the mouse
+                    mouse.set_captured(False)
+            elif event.type == pygame.KEYDOWN and event.key == pygame.K_g:
+                drop_pressed = True                             # drop the bomb
+            elif (event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and mouse.captured
+                  and session.round_view() is not None and session.id not in session.round_view().alive):
+                watch += 1                                      # out of the round: watch the next player
             elif event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
                 jump_pressed = True
             elif event.type == pygame.KEYDOWN and event.key == pygame.K_TAB:
@@ -439,11 +465,12 @@ def play(screen, clock, graphics, settings, session, map_path, from_home=False):
         forward, strafe, key_turn, sprint = read_movement(pygame.key.get_pressed())
         mouse_turn, tilt = mouse.take()
         wish = Inputs(forward, strafe, key_turn * TURN_SPEED * dt + mouse_turn, tilt, jump_pressed, sprint,
-                      mouse.captured and pygame.mouse.get_pressed()[0], reload_pressed, tuple(equips), cycle)
+                      mouse.captured and pygame.mouse.get_pressed()[0], reload_pressed, tuple(equips), cycle,
+                      tuple(buys), use=bool(pygame.key.get_pressed()[pygame.K_e]), drop=drop_pressed)
         if menu.open:
             wish = Inputs()                                     # (the player stands still while in the menu)
-        jump_pressed = reload_pressed = False
-        equips, cycle = [], 0
+        jump_pressed = reload_pressed = drop_pressed = False
+        equips, cycle, buys = [], 0, []
         if watcher and watcher.changed():
             try:
                 reload_game(session, graphics, map_path)
@@ -465,17 +492,36 @@ def play(screen, clock, graphics, settings, session, map_path, from_home=False):
         hurt = hurt_flash(hurt, happened.hurt, dt)
         if happened.picked:
             message, message_left = ", ".join(happened.picked), 1.5
+            buy.bought(happened.picked)
+        view = session.round_view()                         # bomb defusal's round (None in the other modes)
+        if buy.open and (not session.level.settings.buy_menu or (view is not None and not view.can_buy)):
+            buy.hide()                                      # the map has no buy menu now, or the buy time is over
+            mouse.set_captured(True)
         message_left = max(0.0, message_left - dt)
 
         me = session.me
-        picture = graphics.renderer.draw(session.world, me.body, session.sprites(), session.lighting())
-        draw_names(picture, name_font, graphics.renderer, me.body, session.labels(), me.team)
+        camera, hidden, watching = me.body, None, None
+        if view is not None and session.id not in view.alive:   # out of the round: see through a teammate's eyes
+            others = session.watchable()
+            others = [o for o in others if view.teams.get(o[0]) == me.team] or others
+            if others:
+                hidden, camera, watching = others[watch % len(others)]
+        picture = graphics.renderer.draw(session.world, camera, session.sprites(hidden), session.lighting())
+        draw_names(picture, name_font, graphics.renderer, camera, session.labels(hidden), me.team)
         draw_hurt(picture, hurt)                            # (under the HUD, which stays easy to read)
-        draw_hud(picture, font, me.stats, message if message_left > 0 else "", me.inventory, graphics.tiles, kick)
+        rules = session.level.settings
+        team = None
+        if me.team != NO_TEAM and rules.has_teams():
+            team = TEAM_TITLES.get(me.team, me.team) if rules.mode == "bomb" else me.team
+        draw_hud(picture, font, me.stats, message if message_left > 0 else "", me.inventory if hidden is None and
+                 (view is None or session.id in view.alive) else None, graphics.tiles, kick,
+                 money=rules.uses_money(), team=team,
+                 buy_key=rules.buy_menu and not buy.open and (view is None or view.can_buy))
+        draw_round(picture, font, big_font, view, session.id, me, session.level, watching)
         overlay = None
-        if menu.open:
+        if menu.open or buy.open:
             overlay = pygame.Surface(screen.window.size, pygame.SRCALPHA)
-            menu.draw(overlay, pygame.mouse.get_pos())
+            (menu if menu.open else buy).draw(overlay, pygame.mouse.get_pos())
         screen.show(picture, overlay)
         screen.title = f"simple raycaster - {clock.get_fps():.0f} fps{session.status()}"
     mouse.set_captured(False)

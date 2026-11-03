@@ -6,6 +6,8 @@ No pygame. The three sessions look the same to main.py:
     session.me                          # their PlayerState (body, stats, inventory) to draw and show
     session.sprites()                   # what the renderer draws around them (items, bullets, others)
     session.ended                       # None, or why the game is over for them (host left, kicked...)
+    session.round_view()                # bomb defusal: the round as they are shown it (bomb.RoundView), else None
+    session.watchable()                 # [(id, body, name)] of the others still in the round, to watch when out
 
 The host runs the real Game. Joiners send their steps and get back snapshots of it, which they draw;
 a joiner predicts its own movement and smooths everyone else's (see ClientSession).
@@ -17,6 +19,7 @@ import time
 from collections import deque
 
 import net
+from bomb import BOMB_TILE, RoundView, bomb_sprite, may_move
 from entities import Entities, PlayerStats
 from constants import PLAYER_HEIGHT
 from game import (MAX_STEP_DT, NO_TEAM, Events, Inputs, PlayerState, character_sprite, character_tile_for, clean_name,
@@ -44,11 +47,17 @@ class LocalSession:
     def __init__(self, game, name=""):
         self.game = game
         self.world = game.world
+        self.id = LOCAL_ID
         self.me = game.add_player(LOCAL_ID)
         self.me.name = clean_name(name)
         self.ended = None
         self.particles = ParticleSystem(game.level.effects, game.world)     # looks only; worked out on this machine
         self.lights = LightSystem(game.level, game.world)                   # likewise
+
+    @property
+    def level(self):
+        """The map being played (its settings say whether there is a buy menu, and what is in it)."""
+        return self.game.level
 
     def step(self, wish, dt, elapsed=None):
         """`dt` is the frame time the game runs by (capped); `elapsed` the real time since the last frame,
@@ -83,12 +92,20 @@ class LocalSession:
         self.particles.keep(keys)
         self.particles.update(dt)
 
-    def sprites(self):
-        return self.game.sprites(LOCAL_ID) + self.particles.sprites()
+    def sprites(self, hide=None):
+        """What the renderer draws around this player; `hide` is a player not to draw (the one being watched)."""
+        return self.game.sprites(LOCAL_ID, hide) + self.particles.sprites()
 
-    def labels(self):
+    def labels(self, hide=None):
         """The other players' names over their heads: (x, y, z, name, team) each."""
-        return self.game.labels(LOCAL_ID)
+        return self.game.labels(LOCAL_ID, hide)
+
+    def round_view(self):
+        return self.game.round.view() if self.game.round is not None else None
+
+    def watchable(self):
+        return [(pid, s.body, shown_name(s.name, pid)) for pid, s in sorted(self.game.players.items())
+                if pid != LOCAL_ID and s.alive]
 
     def lighting(self):
         """The Lighting to draw this player's view with (None when the map has no lights and is fully lit)."""
@@ -204,6 +221,8 @@ class HostSession(LocalSession):
             "items": "".join("1" if item.present else "0" for item in self.game.items.items),
             "names": {str(pid): [state.name, state.team] for pid, state in self.game.players.items()},
         }
+        if self.game.round is not None:
+            common["round"] = self.game.round.view().to_dict()
         for peer, owed in self.owed.items():
             state = self.game.players[peer]
             self.host.send(peer, dict(common, you=private_fields(state, owed, self.acked[peer])))
@@ -259,6 +278,7 @@ class ClientSession:
         self.ready = False                      # the host has sent the map and a first snapshot
         self.sent_at = {}                       # seq -> when it was sent, until the host acknowledges it
         self.ping = 0.0                         # seconds from sending a step to hearing the host has run it
+        self.round = None                       # bomb defusal: the last RoundView the host sent (None otherwise)
 
     def step(self, wish, dt, elapsed=None):
         elapsed = dt if elapsed is None else elapsed
@@ -272,9 +292,10 @@ class ClientSession:
             wish = Inputs.from_dict(wish.to_dict())     # exactly what the host will read it as
             self.seq += 1
             self.client.send(net.HOST_ID, dict(wish.to_dict(), type="input", seq=self.seq, dt=dt))
-            self.pending.append((self.seq, wish, dt))
+            ours = self.predicted(wish)
+            self.pending.append((self.seq, ours, dt))
             self.sent_at[self.seq] = time.monotonic()
-            move_body(self.world, self.me.body, wish, dt)
+            move_body(self.world, self.me.body, ours, dt)
         if self.items:
             self.items.clock += dt              # (only the bobbing: the host decides what is picked up)
         if self.game_time is not None:
@@ -292,6 +313,30 @@ class ClientSession:
             self.lights.update(dt)
         events, self.owed = self.owed, Events()
         return events
+
+    def predicted(self, wish):
+        """The step as the host will run it: in bomb defusal, without moving while frozen, out of the round, planting
+        or defusing (looking around is always ours)."""
+        if self.round is None or may_move(self.round, self.id, self.me.body, wish.use, self.level):
+            return wish
+        return Inputs(turn=wish.turn, tilt=wish.tilt)
+
+    def round_view(self):
+        return self.round
+
+    def watchable(self):
+        if self.game_time is None:
+            return []
+        out = []
+        for pid, samples in sorted(self.history.items()):
+            if self.round is not None and pid not in self.round.alive:
+                continue
+            x, y, z, *angle = interpolate(samples, self.game_time - INTERP_DELAY)
+            out.append((pid, Player(x, y, z, angle[0] if angle else 0.0), shown_name(self.names.get(pid, ("", 0))[0], pid)))
+        return out
+
+    def out_of_round(self, pid):
+        return self.round is not None and pid not in self.round.alive
 
     @staticmethod
     def bullet_offset(bullet):
@@ -349,7 +394,9 @@ class ClientSession:
         for _, wish, dt in self.pending:
             move_body(self.world, body, wish, dt)
         self.me.body = body
-        self.me.stats = PlayerStats(mine["score"], mine["health"], mine["max_health"])
+        money = mine.get("money", 0.0)
+        self.me.stats = PlayerStats(mine["score"], mine["health"], mine["max_health"],
+                                    float(money) if isinstance(money, (int, float)) else 0.0)
         self.me.inventory = inventory_from(mine, self.level)
         now = message["time"]
         self.game_time = now if self.game_time is None else self.game_time + (now - self.game_time) * CLOCK_BLEND
@@ -381,20 +428,31 @@ class ClientSession:
                 if str(pid).isdigit() and isinstance(entry, list) and len(entry) == 2 and isinstance(entry[1], int):
                     self.names[int(pid)] = (clean_name(entry[0]), entry[1])
             self.me.name, self.me.team = self.names.get(self.id, (self.name, NO_TEAM))
+        if "round" in message:
+            self.round = RoundView.from_dict(message["round"], {pid: team for pid, (_, team) in self.names.items()})
+            self.me.alive = self.round is None or self.id in self.round.alive
+        else:
+            self.round, self.me.alive = None, True
         self.owed.fired += mine["fired"]
         self.owed.picked += mine["picked"]
         hurt = mine.get("hurt", 0.0)
         self.owed.hurt += float(hurt) if isinstance(hurt, (int, float)) else 0.0
         self.ready = True
 
-    def sprites(self):
+    def sprites(self, hide=None):
         if self.items is None:
             return []
         sprites = self.items.sprites()
         for bullet, (x, y, z) in self.bullets_now():
             sprites.append((x, y, z - bullet[6] / 2, bullet[6], bullet[7], 0.0, 1.0, 1.0 if bullet[10] else 0.0))
+        if self.round is not None:
+            bomb = bomb_sprite(self.round.bomb, BOMB_TILE, self.game_time or 0.0)
+            if bomb:
+                sprites.append(bomb)
         if self.character_tile is not None and self.game_time is not None:
             for pid, samples in self.history.items():
+                if self.out_of_round(pid) or pid == hide:
+                    continue
                 shown_at = self.game_time - INTERP_DELAY
                 x, y, z, *angle = interpolate(samples, shown_at)
                 body = Player(x, y, z, angle[0] if angle else 0.0)
@@ -406,12 +464,14 @@ class ClientSession:
             sprites += self.particles.sprites()
         return sprites
 
-    def labels(self):
+    def labels(self, hide=None):
         """The other players' names over their heads: (x, y, z, name, team) each, where they are drawn."""
         if self.game_time is None:
             return []
         out = []
         for pid, samples in self.history.items():
+            if self.out_of_round(pid) or pid == hide:
+                continue
             x, y, z, *_angle = interpolate(samples, self.game_time - INTERP_DELAY)
             name, team = self.names.get(pid, ("", NO_TEAM))
             out.append((x, y, z + PLAYER_HEIGHT, shown_name(name, pid), team))
@@ -466,6 +526,7 @@ def private_fields(state, owed, ack):
     return {
         "body": body_fields(state.body),
         "score": state.stats.score, "health": state.stats.health, "max_health": state.stats.max_health,
+        "money": state.stats.money,
         "items": dict(inventory.items), "ammo": dict(inventory.ammo), "equipped": inventory.equipped,
         "guns": [{"name": g.gun.name, "mag": g.mag, "reload_left": g.reload_left} for g in inventory.guns],
         "fired": owed.fired, "picked": owed.picked, "hurt": owed.hurt, "ack": ack,

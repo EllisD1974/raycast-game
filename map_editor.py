@@ -16,7 +16,8 @@ A map has several layers; you edit one at a time (keys 1-7 or the Layer buttons)
                on the ground floor fills every floor.
   2 FloorTex   floor texture of each cell (also the riser texture of stairs / raised blocks)
   3 CeilTex    ceiling texture of each cell
-  4 FloorH     floor height of each cell (stairs, platforms, pits); [ ] change the brush value
+  4 FloorH     floor height of each cell (stairs, platforms, pits); [ ] change the brush value,
+               or click the value (or press Enter) and type one
   5 CeilH      ceiling height of each cell (tall rooms, low tunnels)
   6 Ramps      ramp direction; a run of ramp cells slopes from the floor before it to the floor
                after it. R rotates the direction.
@@ -47,7 +48,8 @@ The ceiling stored under a wall by other tools is never used, since you can't se
 
 Left panel: the texture atlas. Click a tile, drag a rectangle, or Ctrl+click/drag to add more
 tiles (Ctrl+click a selected tile removes it). On the texture layers the selection is a stamp:
-it keeps its layout from the atlas, with its top-left at the cursor.
+it keeps its layout from the atlas, with its top-left at the cursor. The wheel over the atlas zooms
+into it (around the cursor); while zoomed, middle-drag or Space+drag moves it around.
 Map: left-drag paints, right-drag erases (back to the layer's default), wheel zooms,
 middle-drag or Space+drag pans.
 
@@ -63,7 +65,7 @@ Map size: the Edge buttons add (+) or remove (-) a column or row on one side: L 
 T top, B bottom. Cells, the start and the 3D camera stay where they are on the map.
 
 Tools: B paint, E erase, F fill, I pick from the map, S set the start (on the floor you are
-editing; click it again to rotate), T stairs (drag a line on the FloorH layer: heights rise by
+editing; click it again to rotate, drag it to move it), T stairs (drag a line on the FloorH layer: heights rise by
 the Step each cell, starting at the brush value), H shapes (drag a line, box or ellipse, outline
 or filled, chosen on the second toolbar row; it paints what the brush paints on the layer you are
 on, right-drag erases the shape, Shift makes a square or circle, Esc cancels).
@@ -84,9 +86,16 @@ Items hang on a wall when added with a click near the side of the cell that has 
 up): they are then a flat picture against the wall, facing into the cell, at their Lift above the floor.
 The item's "On wall" setting moves it onto another wall of its cell, or off the wall.
 
+Copy and paste (the Select tool, M): drag a rectangle on the map to select it, then Ctrl+C copies it, Ctrl+X
+cuts it and Delete clears it; Ctrl+A selects the whole map. Ctrl+V (or Paste) carries the copy under the mouse:
+each click puts it down there (centered on the mouse), until Esc or a right-click. Only the floor being edited
+is copied: its floor and ceiling textures and heights and its ramps, the walls that start on it (with their
+heights and sides), and the items and spawn points on it; walls of other floors stay where they are. It pastes
+onto the floor being edited, which may be another floor, and stays copied when another map is opened.
+
 Spawn points (the Spawn tool, O): where players come into the game. Click an open cell to put one there
 with the Order shown on the second toolbar row (Order- / Order+, or [ and ]); click one again to give it
-that order, or (if it has it already) to turn it a quarter; right-click removes it. Players come in at the
+that order, or (if it has it already) to turn it a quarter; drag one to move it; right-click removes it. Players come in at the
 lowest order that has a spawn point not yet used, picked at random among those; once all have been used it
 starts over. A map with no spawn points uses the Start (S).
 
@@ -95,7 +104,8 @@ selected; Shift for bigger steps): how much higher or lower than its settings pu
 a wall or not. A prefab never changes it, and changing it moves no other copy.
 
 Items (the Entity tool, N): click an empty cell to add an item there (in the middle of the cell, on
-the floor you are editing), or click an existing item to select it. A selected item opens the
+the floor you are editing), or click an existing item to select it; drag an item to move it to another
+cell (it stays on its wall if the new cell has a wall on that side). A selected item opens the
 Details pane, docked beside the map, where you change it in place: Sprite (or click a tile in the
 atlas), Mode ("Pick up once": touching it gives the effect and it is gone; "Respawns": gone, then
 back after the set seconds; "Stays": the effect counts each visit but it is never removed),
@@ -156,6 +166,16 @@ it. The first row, "Map ambient light", sets how bright the map is without light
 dark so lights show. Walls stop light. Lights only change how things look and are worked out on each player's
 own machine.
 
+The Map settings section (J or the Map settings button) says how this map is played, and holds its buy menu.
+"Game rules": the Game mode (Free for all; Two teams, which splits the players as they join; Co-op, everyone on one
+team), Friendly fire (whether bullets and blasts hurt teammates), Max health, Start money, what knocking out an
+opponent earns (Score / kill, Money / kill) and a Starting gun every player comes in with. "Buy menu": turn it on
+(players then open it with B in the game) and choose what it costs: Free, Money or Score. "+ Add to buy menu" (or the
+pane's "+ Add" list of the map's guns) adds an entry: what it gives (a gun, an inventory item or health; ammo is not
+sold, guns come with theirs), how much, its price and its icon (none: a gun shows its own picture); Move up / down orders the menu. On the
+right is the menu as a player who just joined sees it (entries they cannot afford yet are greyed out). In the game,
+clicking an entry gives it to the player when they have enough money or score, and takes the price off it.
+
 The 3D view (V or the 3D button shows and hides it) is a live picture of the level at the right of
 the window, drawn by the game's own renderer, and it follows every edit as you make it, even
 mid-stroke. Drag inside it to look around; with the mouse over it, W A S D / arrows walk and turn
@@ -187,7 +207,11 @@ from mapfile import (ANIMATION_KINDS, ANIMATION_LABELS, DEFAULTS, EDIT_LAYERS, E
                      EFFECT_AIM_LABELS, EFFECT_AIMS, EFFECT_COLOR_LABELS, EFFECT_COLORS, EFFECT_KIND_LABELS, EFFECT_KINDS, MIN_AMBIENT, MODE_LABELS, SHOT_LABELS, SHOT_TYPES, Animation, AmmoType, Effect,
                      Entity, Gun, Level, Light, MAX_ELEVATION, MAX_SPAWN_ORDER, Spawner, SIDE_VECTORS, SIDES, WALL_LABELS, default_level, mounted_position,
                      IMPORT_KINDS, TAKEN_CHOICES, grid_name, import_things, load_level, save_level, split_grid_name,
-                     things_named, with_needs)
+                     things_named, with_needs, area_rect, clear_area, copy_area, paste_area,
+                     BUY_COST_LABELS, BUY_COSTS, BUY_KIND_LABELS, BUY_KINDS, GAME_MODE_LABELS, GAME_MODES, MAX_BUY_ITEMS,
+                     BOMB_NUMBERS, SITE_NAMES, SPAWN_TEAMS, SPAWN_TEAM_LABELS, CT_TEAM, T_TEAM,
+                     MAX_MONEY, BuyItem)
+from buymenu import entry_tile, price_text
 import details
 import hud
 from entities import describe
@@ -209,6 +233,7 @@ RESIZE_EVENTS = tuple(getattr(pygame, name) for name in
 DROPDOWN_W, ITEM_H = 230, 30
 ATLAS_X, ATLAS_Y = 8, TOOLBAR_H + 8
 PANEL_W = 512 + 2 * 8
+ATLAS_ZOOMS = (1.0, 1.5, 2.0, 3.0, 4.0)        # how far the atlas panel zooms in (the wheel over it)
 DEFAULT_SHOW_PREVIEW = True                     # the live 3D view opens with the editor (V toggles it)
 PREVIEW_MIN_W, PREVIEW_MAX_W = 240, 640         # width of the 3D view's column, at the window's right
 PREVIEW_TITLE_H = 24
@@ -254,8 +279,23 @@ STAMP_LAYERS = ("walls", "floor_tex", "ceil_tex")
 ROOM_HEIGHT_LAYERS = ("floor_h", "ceil_h")                  # heights that make up a floor's rooms
 VALUE_LAYERS = ROOM_HEIGHT_LAYERS + ("wall_h",)             # every layer painted with a number
 LAYER_LABELS = {"walls": "Walls", "floor_tex": "FloorTex", "ceil_tex": "CeilTex",
-                "floor_h": "FloorH", "ceil_h": "CeilH", "ramp": "Ramps", "wall_h": "WallH", "sides": "WallSide"}
-EDITOR_LAYERS = EDIT_LAYERS + ("sides",)                    # the stored layers, and the sides of walls
+                "floor_h": "FloorH", "ceil_h": "CeilH", "ramp": "Ramps", "site": "Sites", "wall_h": "WallH",
+                "sides": "WallSide"}
+SITE_COLORS = {1: (255, 150, 40), 2: (60, 200, 255)}         # bomb site A and B on the Sites layer
+SPAWN_TEAM_FILLS = {0: (90, 170, 255), T_TEAM: (235, 160, 60), CT_TEAM: (80, 140, 255)}   # spawn points by team
+# Bomb defusal settings in the Map settings section: (label, step) for each number, in the order shown.
+BOMB_FIELDS = (("freeze_time", "Freeze time (s)", 1.0), ("round_time", "Round time (s)", 5.0),
+               ("buy_time", "Buy time (s)", 5.0), ("bomb_time", "Bomb timer (s)", 5.0),
+               ("plant_time", "Plant time (s)", 0.1), ("defuse_time", "Defuse time (s)", 0.5),
+               ("kit_defuse_time", "Defuse with kit (s)", 0.5), ("round_end_time", "Round end pause (s)", 1.0),
+               ("max_rounds", "Rounds in a match", 2.0), ("bomb_damage", "Bomb damage", 50.0),
+               ("bomb_radius", "Bomb radius (cells)", 1.0), ("win_money", "Money / round won", 50.0),
+               ("bomb_win_money", "Money / bomb won", 50.0), ("loss_money", "Money / round lost", 50.0),
+               ("loss_bonus", "Loss bonus per loss", 50.0), ("max_loss_money", "Most for a loss", 50.0),
+               ("plant_money", "T money if planted", 50.0), ("objective_money", "Plant / defuse bonus", 50.0),
+               ("money_cap", "Most money", 500.0))
+EDITOR_LAYERS = tuple(name for name in EDIT_LAYERS if name != "site") + ("sides", "site")   # the stored layers, the
+                                                            # sides of walls, and bomb sites last (keys 1-9)
 TILE_LAYERS = STAMP_LAYERS + ("sides",)                     # layers painted with atlas tiles
 LAYER_KEYS = {pygame.K_1 + i: name for i, name in enumerate(EDITOR_LAYERS)}
 SIDE_STEP = 0.1                                 # From- / From+ / To- / To+ change a wall side's band by this
@@ -267,10 +307,10 @@ ELEVATION_STEP = 0.05                           # [ / ] and the Elevation row mo
 SPAWN_FILL, SPAWN_EDGE = (90, 170, 255), (15, 40, 90)   # a spawn point on the map
 MOUNT_ZONE = 0.3                                # an item clicked this close (in cells) to a walled side hangs on it
 TOOLS = {"paint": "B", "erase": "E", "fill": "F", "pick": "I", "start": "S", "spawn": "O", "stairs": "T",
-         "shape": "H", "camera": "C", "entity": "N"}
+         "shape": "H", "select": "M", "camera": "C", "entity": "N"}
 TOOL_KEYS = {pygame.K_b: "paint", pygame.K_e: "erase", pygame.K_f: "fill",
              pygame.K_i: "pick", pygame.K_s: "start", pygame.K_o: "spawn", pygame.K_t: "stairs", pygame.K_h: "shape",
-             pygame.K_c: "camera", pygame.K_n: "entity"}
+             pygame.K_m: "select", pygame.K_c: "camera", pygame.K_n: "entity"}
 SHAPES = {"line": "Line", "box": "Box", "filled_box": "Filled box", "ellipse": "Ellipse",
           "filled_ellipse": "Filled ellipse"}           # what the Shape tool draws, and its button
 ENTITY_MODE_COLORS = {"once": (255, 255, 255), "respawn": (90, 210, 255), "persistent": (110, 230, 120),
@@ -287,6 +327,8 @@ GIZMO_HIT = 13                                  # how close (pixels) a click mus
 GIZMO_COLORS = {"bullet": (255, 170, 60), "effect": (80, 220, 255)}
 GIZMO_NAMES = {"bullet": "Bullets", "effect": "Effect"}
 AMBIENT_ROW = -1                                # light_selected value for the map's ambient light, listed first
+RULES_ROW, BUY_ROW = -1, -2                     # settings_selected values for the game rules and the buy menu's own
+BUY_AMOUNTS = {"gun": 1.0, "item": 1.0, "health": 50.0}   # what an entry gives when its kind is chosen
 
 
 def recolored(picture, matrix):
@@ -476,6 +518,7 @@ class Editor:
         self.dropdown_open = False
         self.show_legend = True                 # the key to the marks on the map (K toggles)
         self.rename = None                      # text being typed while renaming a floor
+        self.value_edit = None                  # brush value being typed into the toolbar (None: not typing)
         self.new_name = None                    # name being typed in the New map dialog (None: closed)
         self.new_error = ""                     # why the typed name can't be used, shown in the dialog
         self.importing = None                   # the Import dialog (an ImportDialog), while it is open
@@ -507,6 +550,9 @@ class Editor:
         self.light_selected = None              # index in level.lights of the light being edited, or AMBIENT_ROW
         self.light_clock = 0.0                  # time for the flicker in a light's preview
         self.effects_mode = False               # the Effects section is showing instead of the map
+        self.settings_mode = False              # the Map settings section is showing instead of the map
+        self.settings_selected = None           # RULES_ROW, BUY_ROW or the index of a buy menu entry being edited
+        self.settings_scroll = 0                # how far the Map settings section is scrolled up, in pixels
         self.effect_selected = None             # index in level.effects of the effect being edited
         self.fx_sim = None                      # [ParticleSystem, settings it was made from, time to next burst]
         self.fx_scaled = {}                     # (tile, pixels) -> a particle picture at that size
@@ -515,14 +561,22 @@ class Editor:
         self.selection = {0}                    # selected atlas tile indices (0-based)
         self.value = {}                         # height brush per stored grid; see brush()
         self.ramp_dir = 1
+        self.site_brush = 1                     # the bomb site the Sites layer paints (1 A, 2 B)
         self.stair_step = 0.25
         self.atlas_drag = None                  # (start_cell, current_cell) while dragging
+        self.atlas_pan = False                  # middle-drag / Space+drag in the zoomed atlas
         self.stairs_drag = None                 # (start_cell, current_cell) while dragging
+        self.move_drag = None                   # (kind, thing, from_cell, cell) while dragging an item, spawn point or the start
         self.shape = "box"                      # what the Shape tool draws (one of SHAPES)
         self.shape_drag = None                  # (start_cell, current_cell, erasing) while dragging a shape
         self.shape_side = None                  # the wall side under the mouse where that drag started
         self.side_lock = None                   # the wall side a whole shape paints (None: the one at the mouse)
         self.spawn_order = 0                    # the order the Spawn tool gives the spawn points it places
+        self.spawn_team = 0                     # ... and the team (0 anyone, T_TEAM, CT_TEAM)
+        self.area = None                        # Select tool: the cells selected, (x0, y0, x1, y1), or None
+        self.area_drag = None                   # (start cell, current cell) while dragging a selection
+        self.clip = None                        # what was copied (mapfile.Area); kept across maps
+        self.pasting = False                    # the copy follows the mouse; a click puts it down
         self.side_from = 0.0                    # the band a wall side's own tile covers, above the wall's foot
         self.side_to = 0.0                      # (0: up to the top)
         self.stroke = None                      # "paint" / "erase" while drawing on the map
@@ -554,6 +608,10 @@ class Editor:
         self.atlas_cols = atlas_img.get_width() // TILE
         self.atlas_rows = atlas_img.get_height() // TILE
         self.atlas_grid = self._make_atlas_grid()
+        self.atlas_zoom = getattr(self, "atlas_zoom", 1.0)              # (a reload keeps the atlas zoom)
+        self.atlas_scroll = getattr(self, "atlas_scroll", [0, 0])       # zoomed atlas pixels left of / above the view
+        self._atlas_zoomed = {}                                         # zoom -> (backdrop, picture, grid)
+        self.clamp_atlas_scroll()
         self._scaled = {}
         self._trans_cache = (None, None)
         self._atlas_stamp = self._atlas_mtime()
@@ -632,8 +690,8 @@ class Editor:
         return None
 
     def section_open(self):
-        """True while a section (Guns, Prefabs, Effects) is showing in place of the map."""
-        return self.guns_mode or self.prefabs_mode or self.effects_mode or self.lights_mode
+        """True while a section (Guns, Prefabs, Effects, Lights, Map settings) is showing in place of the map."""
+        return self.guns_mode or self.prefabs_mode or self.effects_mode or self.lights_mode or self.settings_mode
 
     def selected_prefab(self):
         """The prefab being edited in the Prefabs section, or None."""
@@ -679,7 +737,8 @@ class Editor:
 
     def details_width(self):
         chosen = (self.selected_entity() or self.selected_gun() or self.selected_ammo() or self.selected_prefab()
-                  or self.selected_effect() or self.selected_light() or (self.ambient_chosen() or None))
+                  or self.selected_effect() or self.selected_light() or (self.ambient_chosen() or None)
+                  or self.selected_buy_item() or (self.settings_row() or None))
         return PANE_WIDTH if chosen is not None or self.palette_active() else 0
 
     def details_rect(self):
@@ -692,6 +751,13 @@ class Editor:
 
     def details_fields(self):
         """Fields describing the selected thing: a gun in the Guns section, else an item."""
+        if self.settings_row() == RULES_ROW:
+            return self.rules_fields()
+        if self.settings_row() == BUY_ROW:
+            return self.buy_menu_fields()
+        entry = self.selected_buy_item()
+        if entry is not None:
+            return self.buy_item_fields(entry)
         light = self.selected_light()
         if light is not None:
             return self.light_fields(light)
@@ -792,7 +858,7 @@ class Editor:
         """Open the Prefabs section with the named prefab selected, to change what every copy of it looks like."""
         for i, prefab in enumerate(self.level.prefabs):
             if prefab.name == name:
-                self.guns_mode = self.effects_mode = self.lights_mode = False
+                self.guns_mode = self.effects_mode = self.lights_mode = self.settings_mode = False
                 self.prefabs_mode = True
                 self.deselect()
                 self.prefab_selected = i
@@ -1007,9 +1073,11 @@ class Editor:
                 return
         self.begin_edit()
         if name == "name":
-            for e in self.level.entities + self.level.prefabs:
+            for e in self.level.entities + self.level.prefabs + self.level.settings.buy_items:
                 if e.gun == g.name:
                     e.gun = value
+            if self.level.settings.start_gun == g.name:
+                self.level.settings.start_gun = value
         setattr(g, name, value)
 
     def new_ammo_name(self, base="Ammo", skip=None):
@@ -1068,6 +1136,10 @@ class Editor:
         if g is not None:
             self.begin_edit()
             self.level.guns.remove(g)
+            settings = self.level.settings              # it is no longer handed out at the start or sold
+            if settings.start_gun == g.name:
+                settings.start_gun = ""
+            settings.buy_items = [b for b in settings.buy_items if not (b.kind == "gun" and b.gun == g.name)]
             self.gun_selected = None
 
     def add_animation(self, kind):
@@ -1385,6 +1457,177 @@ class Editor:
         self.level.lights.remove(light)
         self.light_selected = None
 
+    # ---------------------------------------------------------------- map settings and the buy menu
+
+    def settings_row(self):
+        """RULES_ROW or BUY_ROW while one of those is chosen in the Map settings section, else None."""
+        if self.settings_mode and self.settings_selected in (RULES_ROW, BUY_ROW):
+            return self.settings_selected
+        return None
+
+    def selected_buy_item(self):
+        """The buy menu entry being edited in the Map settings section, or None."""
+        items = self.level.settings.buy_items
+        if self.settings_mode and self.settings_selected is not None and 0 <= self.settings_selected < len(items):
+            return items[self.settings_selected]
+        return None
+
+    def rules_fields(self):
+        """How the map is played, for the Details pane in the Map settings section."""
+        rules = self.level.settings
+
+        def field(name, label, kind, **options):
+            return Field(name, label, kind, (lambda n=name: getattr(rules, n)),
+                         (lambda v, n=name: self.set_rule(n, v)), **options)
+
+        guns = ("",) + tuple(g.name for g in self.level.guns)
+        fields = [field("mode", "Game mode", "enum", choices=GAME_MODES, labels=GAME_MODE_LABELS)]
+        if rules.mode != "ffa":
+            fields.append(field("friendly_fire", "Friendly fire", "enum", choices=(False, True),
+                                labels={False: "Off", True: "On"}))
+        if rules.mode == "bomb":
+            fields.append(Field("bomb_note", "Teams", "info", (lambda: "1 = T (plants), 2 = CT; sites: Sites layer"),
+                                None))
+        fields += [field("max_health", "Max health", "num", step=10.0, low=1.0, high=10000.0),
+                   field("start_money", "Start money", "num", step=50.0, low=0.0, high=MAX_MONEY),
+                   field("kill_score", "Score / kill", "num", step=1.0, low=0.0, high=MAX_MONEY),
+                   field("kill_money", "Money / kill", "num", step=50.0, low=0.0, high=MAX_MONEY),
+                   field("start_gun", "Starting gun", "enum", choices=guns,
+                         labels={"": "(none)", **{n: n for n in guns if n}})]
+        if rules.mode == "bomb":
+            for name, label, step in BOMB_FIELDS:
+                low, high = BOMB_NUMBERS[name]
+                fields.append(field(name, label, "num", step=step, low=low, high=high))
+            effects = ("",) + tuple(e.name for e in self.level.effects)
+            lights = ("",) + tuple(light.name for light in self.level.lights)
+            fields += [field("bomb_effect", "Explosion effect", "enum", choices=effects,
+                             labels={"": "(none)", **{n: n for n in effects if n}}),
+                       field("bomb_light", "Explosion light", "enum", choices=lights,
+                             labels={"": "(none)", **{n: n for n in lights if n}})]
+        return fields
+
+    def buy_menu_fields(self):
+        """Whether the map has a buy menu and what it costs, for the Details pane in the Map settings section, and a
+        list to add one of the map's guns, health or an item to it."""
+        rules = self.level.settings
+
+        def field(name, label, kind, **options):
+            return Field(name, label, kind, (lambda n=name: getattr(rules, n)),
+                         (lambda v, n=name: self.set_rule(n, v)), **options)
+
+        choices = tuple(f"gun:{g.name}" for g in self.level.guns) + ("health:", "item:")
+        labels = {c: {"gun": "Gun: ", "health": "Health", "item": "Inventory item"}[c.split(":")[0]]
+                  + c.split(":", 1)[1] for c in choices}
+        fields = [field("buy_menu", "Buy menu", "enum", choices=(False, True),
+                        labels={False: "Off", True: "On (B in the game)"}),
+                  field("buy_cost", "Costs", "enum", choices=BUY_COSTS, labels=BUY_COST_LABELS)]
+        if len(rules.buy_items) < MAX_BUY_ITEMS:
+            fields.append(Field("add_buy", "Add", "menu", None, self.add_buy_choice, choices=choices, labels=labels,
+                                text_override="+ Add to the buy menu"))
+        return fields
+
+    def buy_item_fields(self, entry):
+        """One entry of the buy menu, for the Details pane in the Map settings section."""
+        def field(name, label, kind, **options):
+            return Field(name, label, kind, (lambda n=name: getattr(entry, n)),
+                         (lambda v, n=name: self.set_buy_item(n, v)), **options)
+
+        fields = [field("name", "Button text", "text"),
+                  field("kind", "Gives", "enum", choices=BUY_KINDS, labels=BUY_KIND_LABELS)]
+        if entry.kind == "gun":
+            names = tuple(g.name for g in self.level.guns) or ("",)
+            fields.append(field("gun", "Gun", "enum", choices=names, labels={"": "(no guns yet)", **{n: n for n in names}}))
+        elif entry.kind == "item":
+            fields += [field("item", "Item name", "text"), field("amount", "How many", "num", step=1.0, low=0.0, high=1000.0)]
+        else:
+            fields.append(field("amount", "Health", "num", step=5.0, low=0.0, high=10000.0))
+        fields += [field("price", "Price", "num", step=50.0 if self.level.settings.buy_cost == "money" else 5.0,
+                         low=0.0, high=MAX_MONEY),
+                   field("team", "For team", "enum", choices=SPAWN_TEAMS, labels=self.buy_team_labels()),
+                   field("tile", "Icon", "tile", low=-1, high=len(self.tiles) - 1),
+                   Field("move_up", "Move up", "button", None, None, action=lambda: self.move_buy_item(-1),
+                         text_override="Move up the menu"),
+                   Field("move_down", "Move down", "button", None, None, action=lambda: self.move_buy_item(1),
+                         text_override="Move down the menu")]
+        return fields
+
+    def buy_team_labels(self):
+        """Names of the teams a buy menu entry can be for, in this map's game mode."""
+        if self.level.settings.mode == "bomb":
+            return {0: "Everyone", T_TEAM: "T only", CT_TEAM: "CT only"}
+        suffix = "" if self.level.settings.has_teams() else " (no teams in this mode)"
+        return {0: "Everyone", T_TEAM: "Team 1 only" + suffix, CT_TEAM: "Team 2 only" + suffix}
+
+    def set_rule(self, name, value):
+        """Change one of the map's settings (one undo step)."""
+        rules = self.level.settings
+        if getattr(rules, name) == value:
+            return
+        self.begin_edit()
+        setattr(rules, name, value)
+        if name == "buy_menu" and value and not rules.buy_items:
+            self.say("Buy menu on: add entries with + Add to buy menu (players open it with B)")
+
+    def set_buy_item(self, name, value):
+        """Change one setting of the selected buy menu entry (one undo step). Choosing what it gives fills in a
+        sensible amount and the first gun."""
+        entry = self.selected_buy_item()
+        if entry is None or getattr(entry, name) == value:
+            return
+        self.begin_edit()
+        if name in ("name", "item"):
+            value = str(value).strip()[:MAX_NAME]
+        setattr(entry, name, value)
+        if name == "kind":
+            entry.amount = BUY_AMOUNTS[value]
+            if value == "gun" and not entry.gun and self.level.guns:
+                entry.gun = self.level.guns[0].name
+
+    def add_buy_item(self, entry=None):
+        """Add an entry to the buy menu (by default the first of the map's guns not in it yet, or health) and select
+        it. Adding the first entry turns the buy menu on."""
+        rules = self.level.settings
+        if len(rules.buy_items) >= MAX_BUY_ITEMS:
+            self.say(f"A buy menu holds at most {MAX_BUY_ITEMS} entries")
+            return
+        if entry is None:
+            sold = {b.gun for b in rules.buy_items if b.kind == "gun"}
+            gun = next((g.name for g in self.level.guns if g.name not in sold), None)
+            entry = BuyItem(kind="gun", gun=gun) if gun else BuyItem(kind="health", amount=BUY_AMOUNTS["health"])
+        self.begin_edit()
+        rules.buy_items.append(entry)
+        if len(rules.buy_items) == 1:
+            rules.buy_menu = True
+        self.settings_selected = len(rules.buy_items) - 1
+        self.tile_target = "tile"
+        self.field_edit = self.menu_open = None
+        self.say(f"Added {entry.label()} to the buy menu: set its price in the Details pane")
+
+    def add_buy_choice(self, choice):
+        """An entry picked from the pane's "+ Add" list: "gun:<name>", "health:" or "item:"."""
+        kind, name = choice.split(":", 1)
+        entry = BuyItem(kind=kind, amount=BUY_AMOUNTS[kind])
+        if kind == "gun":
+            entry.gun = name
+        self.add_buy_item(entry)
+
+    def move_buy_item(self, step):
+        """Move the selected entry up (-1) or down (1) the buy menu."""
+        items, i = self.level.settings.buy_items, self.settings_selected
+        if self.selected_buy_item() is None or not 0 <= i + step < len(items):
+            return
+        self.begin_edit()
+        items[i], items[i + step] = items[i + step], items[i]
+        self.settings_selected = i + step
+
+    def delete_buy_item(self):
+        entry = self.selected_buy_item()
+        if entry is None:
+            return
+        self.begin_edit()
+        self.level.settings.buy_items.remove(entry)
+        self.settings_selected = None
+
     def select_entity(self, entity):
         self.field_edit = None
         self.selected = None
@@ -1395,9 +1638,12 @@ class Editor:
     def deselect(self):
         self.selected, self.field_edit, self.menu_open = None, None, None
         self.gun_selected = self.ammo_selected = self.prefab_selected = self.effect_selected = None
-        self.light_selected = None
+        self.light_selected = self.settings_selected = None
 
     def delete_selected(self):
+        if self.selected_buy_item() is not None:
+            self.delete_buy_item()
+            return
         if self.selected_light() is not None:
             self.delete_light()
             return
@@ -1456,6 +1702,10 @@ class Editor:
 
     def details_delete_label(self):
         """Text of the Details pane's delete button for what is selected ('' for none: the palette)."""
+        if self.selected_buy_item() is not None:
+            return "Remove from the buy menu"
+        if self.settings_row() is not None:
+            return ""
         if self.selected_light() is not None:
             return "Delete light"
         if self.selected_effect() is not None:
@@ -1546,6 +1796,7 @@ class Editor:
             row1.append(("btn", "Del", "delfloor"))
         row1.append(("txt", f"floor {self.floor + 1} of {count}", DIM))
         row1 += [None, ("btn", "Guns(G)", "guns"), ("btn", "Prefabs(P)", "prefabs"), ("btn", "Effects(X)", "effects"), ("btn", "Lights(L)", "lights"),
+                 ("btn", "Map settings(J)", "mapsettings"),
                  ("btn", "Key(K)", "legend"), ("btn", "3D(V)", "preview"),
                  ("btn", "Reload tex(F6)", "textures")]
         if self.show_preview:
@@ -1554,10 +1805,14 @@ class Editor:
         row2 += [("btn", f"{LAYER_LABELS[name]}({i + 1})", f"layer:{name}") for i, name in enumerate(EDITOR_LAYERS)]
         row2.append(None)
         if self.layer in VALUE_LAYERS:
+            typed = self.value_edit
             row2 += [("btn", "Val-", "val-"), ("btn", "Val+", "val+"),
-                     ("txt", f"value {fmt(self.brush(self.gname()))}", ACCENT)]
+                     ("val", f"value {fmt(self.brush(self.gname()))}" if typed is None else typed, "val_type")]
         elif self.layer == "ramp":
             row2 += [("btn", "Rotate(R)", "dir"), ("txt", f"rises {RAMP_NAMES[self.ramp_dir]}", ACCENT)]
+        elif self.layer == "site":
+            row2 += [("btn", "A / B (R)", "dir"), ("txt", f"paints bomb site {SITE_NAMES[self.site_brush]}", ACCENT),
+                     ("txt", "erase (E) clears; used by Bomb defusal (Map settings)", DIM)]
         elif self.layer == "sides":
             row2 += [("btn", "From-", "side_from-"), ("btn", "From+", "side_from+"),
                      ("txt", f"from {fmt(self.side_from)}", ACCENT),
@@ -1569,9 +1824,19 @@ class Editor:
                      ("txt", f"step {fmt(self.stair_step)}", ACCENT)]
         if self.tool == "shape":
             row2 += [None] + [("btn", label, f"shape:{kind}") for kind, label in SHAPES.items()]
+        if self.tool == "select":
+            row2 += [None, ("btn", "Copy", "copy"), ("btn", "Cut", "cut"), ("btn", "Paste", "paste"),
+                     ("btn", "Clear", "clear"), ("btn", "All", "select_all")]
+            if self.area:
+                x0, y0, x1, y1 = self.area
+                row2.append(("txt", f"{x1 - x0 + 1}x{y1 - y0 + 1} selected", ACCENT))
+            if self.clip:
+                row2.append(("txt", f"copy: {self.clip.width}x{self.clip.height}"
+                                    + (" (click to put it down, Esc stops)" if self.pasting else ""), DIM))
         if self.tool == "spawn":
             row2 += [None, ("btn", "Order-", "order-"), ("btn", "Order+", "order+"),
                      ("txt", f"order {self.spawn_order}", ACCENT),
+                     ("btn", f"Team: {SPAWN_TEAM_LABELS[self.spawn_team]}", "spawn_team"),
                      ("txt", f"{len(self.level.spawners)} spawn point{'s' if len(self.level.spawners) != 1 else ''}"
                              " (0 is used first)", DIM)]
         if self.tool == "entity":
@@ -1593,6 +1858,10 @@ class Editor:
                     x += self.font.size(item[1])[0] + 8
                 elif item[0] == "drop":
                     rect = pygame.Rect(x, y, DROPDOWN_W, 34)
+                    self.buttons.append((rect, item[1], item[2]))
+                    x = rect.right + 4
+                elif item[0] == "val":                  # the brush value: click it to type one
+                    rect = pygame.Rect(x, y, max(90, self.font.size(item[1] + "|")[0] + 16), 34)
                     self.buttons.append((rect, item[1], item[2]))
                     x = rect.right + 4
                 else:
@@ -1627,13 +1896,62 @@ class Editor:
         index = max(0, min(tile_id - 1, len(self.tiles) - 1))
         return bool(self.transparent[index])
 
-    def _make_atlas_grid(self):
-        grid = pygame.Surface(self.atlas_img.get_size(), pygame.SRCALPHA)
-        for x in range(0, grid.get_width() + 1, TILE):
+    def _make_atlas_grid(self, cell=TILE):
+        grid = pygame.Surface((self.atlas_cols * cell, self.atlas_rows * cell), pygame.SRCALPHA)
+        for x in range(0, grid.get_width() + 1, cell):
             pygame.draw.line(grid, (255, 255, 255, 40), (x, 0), (x, grid.get_height()))
-        for y in range(0, grid.get_height() + 1, TILE):
+        for y in range(0, grid.get_height() + 1, cell):
             pygame.draw.line(grid, (255, 255, 255, 40), (0, y), (grid.get_width(), y))
         return grid
+
+    def atlas_cell(self):
+        """Size on screen of one atlas tile at the atlas panel's zoom."""
+        return round(TILE * self.atlas_zoom)
+
+    def atlas_origin(self):
+        """Screen position of the zoomed atlas picture's top-left (it may be above / left of the view)."""
+        rect = self.atlas_rect()
+        return rect.x - self.atlas_scroll[0], rect.y - self.atlas_scroll[1]
+
+    def atlas_pictures(self):
+        """(backdrop, picture, grid) of the atlas at the panel's zoom."""
+        if self.atlas_zoom == 1.0:
+            return self.atlas_backdrop, self.atlas_img, self.atlas_grid
+        if self.atlas_zoom not in self._atlas_zoomed:
+            cell = self.atlas_cell()
+            size = (self.atlas_cols * cell, self.atlas_rows * cell)
+            self._atlas_zoomed[self.atlas_zoom] = (pygame.transform.scale(self.atlas_backdrop, size),
+                                                   pygame.transform.scale(self.atlas_img, size),  # (nearest: crisp pixels)
+                                                   self._make_atlas_grid(cell))
+        return self._atlas_zoomed[self.atlas_zoom]
+
+    def clamp_atlas_scroll(self):
+        rect, cell = self.atlas_rect(), self.atlas_cell()
+        self.atlas_scroll = [max(0, min(self.atlas_scroll[0], self.atlas_cols * cell - rect.w)),
+                             max(0, min(self.atlas_scroll[1], self.atlas_rows * cell - rect.h))]
+
+    def zoom_atlas(self, pos, step):
+        """Zoom the atlas panel one step in (step > 0) or out, keeping the point under `pos` where it is."""
+        i = ATLAS_ZOOMS.index(self.atlas_zoom) if self.atlas_zoom in ATLAS_ZOOMS else 0
+        zoom = ATLAS_ZOOMS[max(0, min(len(ATLAS_ZOOMS) - 1, i + (1 if step > 0 else -1)))]
+        if zoom == self.atlas_zoom:
+            return
+        rect, old = self.atlas_rect(), self.atlas_cell()
+        mx, my = pos[0] - rect.x, pos[1] - rect.y
+        self.atlas_zoom = zoom
+        new = self.atlas_cell()
+        self.atlas_scroll = [round((mx + self.atlas_scroll[0]) * new / old - mx),
+                             round((my + self.atlas_scroll[1]) * new / old - my)]
+        self.clamp_atlas_scroll()
+        self.say(f"Atlas zoom {zoom:g}x" + (" (middle-drag or Space+drag to move around)" if zoom > 1 else ""))
+
+    def atlas_cell_at(self, pos):
+        """(column, row) of the atlas tile at a screen position, clamped to the tiles in view."""
+        rect, cell = self.atlas_rect(), self.atlas_cell()
+        x = min(max(pos[0], rect.left), rect.right - 1)
+        y = min(max(pos[1], rect.top), rect.bottom - 1)
+        ox, oy = self.atlas_origin()
+        return (min(self.atlas_cols - 1, (x - ox) // cell), min(self.atlas_rows - 1, (y - oy) // cell))
 
     # ---------------------------------------------------------------- view
 
@@ -1671,10 +1989,9 @@ class Editor:
 
     def tile_index_at(self, pos):
         """Atlas tile index under a screen position, or None."""
-        rect = self.atlas_rect()
-        if not rect.collidepoint(pos):
+        if not self.atlas_rect().collidepoint(pos):
             return None
-        col, row = (pos[0] - rect.x) // TILE, (pos[1] - rect.y) // TILE
+        col, row = self.atlas_cell_at(pos)
         return row * self.atlas_cols + col
 
     def stamp(self):
@@ -1695,6 +2012,8 @@ class Editor:
             return self.brush(self.gname())
         if self.layer == "ramp":
             return self.ramp_dir
+        if self.layer == "site":
+            return self.site_brush
         return self.primary_id()
 
     def drag_indices(self):
@@ -1873,6 +2192,7 @@ class Editor:
         if self.layer == "sides":
             self.set_side(cx, cy, self.painted_side(), 0)
         elif self.layer == "walls":
+            self.open_like_neighbors(cx, cy)
             for side in SIDES:                                          # ... and its sides' own tiles
                 for name in (f"side_{side}", f"side_{side}_from", f"side_{side}_to"):
                     self.level.set(name, cx, cy, DEFAULTS[name])
@@ -1888,6 +2208,21 @@ class Editor:
             self.remove_room(cx, cy)                    # erasing a higher floor's height removes the room
         else:
             self.level.set(self.gname(), cx, cy, DEFAULTS[self.gname()])   # (wall height: back to full)
+
+    def open_like_neighbors(self, x, y):
+        """Before a ground wall is erased, give its cell the room around it: the floor and ceiling
+        stored under a wall are never seen, so left as they are they could leave a sunken pocket
+        (say floor 0, ceiling 1 beside a floor at 2) that still looks and blocks like a wall."""
+        level = self.level
+        if not level.in_bounds(x, y) or not level.walls[y][x] or level.wall_floor(x, y):
+            return
+        if not level._beside(x, y, "floor_h"):          # boxed in by walls: nothing to match
+            return
+        level.set("floor_h", x, y, level.wall_base(x, y))
+        level.set("ceil_h", x, y, level.auto_wall_ceiling(x, y))
+        for name in ("floor_tex", "ceil_tex"):          # the most common texture beside it
+            values = level._beside(x, y, name)
+            level.set(name, x, y, max(set(values), key=values.count))
 
     def stroke_cell(self, cell):
         (self.erase_at if self.stroke == "erase" else self.paint_at)(*cell)
@@ -1927,11 +2262,29 @@ class Editor:
 
     def map_click(self, cell, button):
         """Start of a click on the map: left uses the active tool, right always erases."""
+        if button == 1 and self.start_move(cell):
+            return
         if button == 3 and self.tool == "entity":
             self.remove_entities(cell)
             return
         if self.tool == "spawn":
             (self.remove_spawners if button == 3 else self.place_spawner)(cell)
+            return
+        if self.tool == "select":
+            if button == 3:                             # right-click: stop pasting, or let go of the selection
+                if self.pasting:
+                    self.pasting = False
+                else:
+                    self.area = None
+                return
+            if self.pasting:
+                x, y = self.paste_corner(cell)
+                self.begin_edit()
+                paste_area(self.level, self.clip, x, y, self.floor)
+                self.area = area_rect(self.level, (x, y), (x + self.clip.width - 1, y + self.clip.height - 1))
+                self.say(f"Pasted on {self.level.names[self.floor]}: click again for another, Esc stops")
+            else:
+                self.area_drag = (cell, cell)
             return
         if self.tool == "shape":
             self.shape_drag = (cell, cell, button == 3)
@@ -2027,6 +2380,66 @@ class Editor:
                 self.level.entities.remove(e)
             self.deselect()
 
+    def start_move(self, cell):
+        """Pressing on an item (Entity tool), a spawn point (Spawn tool) or the start (Start tool) picks it
+        up: dragging it to another cell moves it there; letting go where it was is a plain click."""
+        level, kind, thing = self.level, None, None
+        if not level.in_bounds(*cell):
+            return False
+        if self.tool == "entity" and self.entities_in(cell):
+            kind, thing = "entity", self.entities_in(cell)[0]
+            self.select_entity(thing)
+        elif self.tool == "spawn" and self.spawners_in(cell):
+            kind, thing = "spawn", self.spawners_in(cell)[0]
+        elif self.tool == "start" and cell == (int(level.start_x), int(level.start_y)) and level.start_span == self.floor:
+            kind = "start"
+        if kind is None:
+            return False
+        self.move_drag = (kind, thing, tuple(cell), tuple(cell))
+        return True
+
+    def move_target_ok(self, kind, cell):
+        """Whether the thing being dragged can be put down in `cell` on the floor being edited."""
+        level = self.level
+        if not level.in_bounds(*cell):
+            return False
+        if kind == "entity":                        # (an item may also stand on top of a wall)
+            return level.span_present(self.floor, *cell) or level.is_solid(*cell, self.floor)
+        return level.span_present(self.floor, *cell)
+
+    def finish_move(self):
+        """Let go of the dragged item, spawn point or start: move it to the cell under the mouse."""
+        kind, thing, start, cell = self.move_drag
+        self.move_drag = None
+        level = self.level
+        if cell == start:                           # not moved: a plain click
+            if kind == "spawn":
+                self.place_spawner(start)
+            elif kind == "start":
+                self.place_start(start)
+            return
+        if not self.move_target_ok(kind, cell):
+            self.say("Can't move it there: no room in that cell on this floor")
+            return
+        if kind == "entity" and thing in level.entities:
+            self.begin_edit()
+            dx, dy = SIDE_VECTORS.get(thing.wall, (0, 0))
+            if thing.wall and (level.is_solid(*cell, self.floor) or not level.is_solid(cell[0] + dx, cell[1] + dy, self.floor)):
+                thing.wall = ""                         # no wall on that side there: stand in the middle
+            if thing.wall:
+                thing.x, thing.y = mounted_position(*cell, thing.wall)
+            else:                                       # keep where in its cell it stood
+                thing.x, thing.y = cell[0] + thing.x - math.floor(thing.x), cell[1] + thing.y - math.floor(thing.y)
+            self.say(f"Moved the item to {cell[0]}, {cell[1]}")
+        elif kind == "spawn" and thing in level.spawners:
+            self.begin_edit()
+            thing.x, thing.y = cell[0] + 0.5, cell[1] + 0.5
+            self.say(f"Moved the spawn point to {cell[0]}, {cell[1]}")
+        elif kind == "start":
+            self.begin_edit()
+            level.start_x, level.start_y = cell[0] + 0.5, cell[1] + 0.5
+            self.say(f"Moved the start to {cell[0]}, {cell[1]}")
+
     def place_camera(self, cell, point):
         """Camera tool: stand the 3D view's camera in this cell, on the floor being edited (or the
         nearest floor that has a room there). Dragging afterwards turns it toward the cursor."""
@@ -2036,6 +2449,36 @@ class Editor:
             self.camera_drag = True
         else:
             self.say("The camera can't stand there (wall, no room, or too low)")
+
+    def area_action(self, action):
+        """Copy, Cut, Clear, Paste and All for the Select tool (see the module's notes on copy and paste)."""
+        floor = self.level.names[self.floor]
+        if action == "select_all":
+            self.tool, self.pasting = "select", False
+            self.area = (0, 0, self.level.width - 1, self.level.height - 1)
+            self.say(f"Selected the whole map on {floor}")
+        elif action == "paste":
+            if self.clip is None:
+                self.say("Nothing copied yet: select an area and Copy (Ctrl+C) first")
+                return
+            self.tool, self.pasting = "select", True
+            self.say(f"Click to put the {self.clip.width}x{self.clip.height} copy down on {floor}; Esc stops")
+        elif self.area is None:
+            self.say("Select an area first: drag on the map with the Select tool (M)")
+        else:
+            corners = self.area[:2], self.area[2:]
+            if action in ("copy", "cut"):
+                self.clip = copy_area(self.level, *corners, self.floor)
+            if action in ("cut", "clear"):
+                self.begin_edit()
+                clear_area(self.level, *corners, self.floor)
+            done = {"copy": "Copied", "cut": "Cut", "clear": "Cleared"}[action]
+            self.say(f"{done} {self.area[2] - self.area[0] + 1}x{self.area[3] - self.area[1] + 1} of {floor}"
+                     + ("; Ctrl+V pastes it" if action != "clear" else ""))
+
+    def paste_corner(self, cell):
+        """The top-left cell the copy goes at when the mouse is over `cell` (the copy is centered on it)."""
+        return cell[0] - self.clip.width // 2, cell[1] - self.clip.height // 2
 
     def spawners_in(self, cell):
         """The spawn points in this cell on the floor being edited."""
@@ -2053,12 +2496,13 @@ class Editor:
             self.say("A spawn point needs open floor: no room in this cell on this floor")
             return
         self.begin_edit()
+        team = SPAWN_TEAM_LABELS[self.spawn_team]
         if not found:
-            level.spawners.append(Spawner(cell[0] + 0.5, cell[1] + 0.5, self.floor, 0.0, self.spawn_order))
-            self.say(f"Spawn point {len(level.spawners)}, order {self.spawn_order} (click it again to turn it)")
-        elif found[0].order != self.spawn_order:
-            found[0].order = self.spawn_order
-            self.say(f"Spawn point now has order {self.spawn_order}")
+            level.spawners.append(Spawner(cell[0] + 0.5, cell[1] + 0.5, self.floor, 0.0, self.spawn_order, self.spawn_team))
+            self.say(f"Spawn point {len(level.spawners)}, order {self.spawn_order}, {team} (click it again to turn it)")
+        elif found[0].order != self.spawn_order or found[0].team != self.spawn_team:
+            found[0].order, found[0].team = self.spawn_order, self.spawn_team
+            self.say(f"Spawn point now has order {self.spawn_order}, {team}")
         else:
             found[0].angle = (found[0].angle + math.pi / 2) % math.tau
             self.say(f"Spawn point faces {math.degrees(found[0].angle):.0f} deg")
@@ -2108,6 +2552,8 @@ class Editor:
             low = VALUE_LIMITS[self.layer][0]
             if value >= low:                             # (a wall of height 0 is a full-height wall: no brush)
                 self.value[self.gname()] = value
+        elif value > 0 and self.layer == "site":         # a bomb site
+            self.site_brush = value
         elif value > 0:                                  # a ramp direction
             self.ramp_dir = value
         self.tool = "paint"
@@ -2181,6 +2627,13 @@ class Editor:
             else:
                 self.say("Select a prefab first (or add one), then click a tile")
             return
+        if self.settings_mode:                          # the Map settings section: a buy menu entry's icon
+            if self.selected_buy_item() is not None:
+                self.set_buy_item("tile", min(picked))
+                self.say(f"Buy menu icon: tile {min(picked) + 1}")
+            else:
+                self.say("Select an entry of the buy menu first (or add one), then click a tile for its icon")
+            return
         if self.lights_mode:                            # the Lights section: the wall tile that glows with the light
             if self.selected_light() is not None:
                 self.set_light("wall_tile", min(picked))
@@ -2226,7 +2679,7 @@ class Editor:
 
     def select_floor(self, floor):
         self.floor = max(0, min(floor, self.level.floor_count - 1))
-        self.stairs_drag = self.shape_drag = None
+        self.stairs_drag = self.shape_drag = self.move_drag = None
         e = self.selected_entity()
         if e is not None and e.span != self.floor:
             self.deselect()                             # the item is on another floor
@@ -2267,7 +2720,7 @@ class Editor:
     def clamp_floor(self):
         """Keep the edited floor valid after the level changed (undo, reload, new map)."""
         self.floor = max(0, min(self.floor, self.level.floor_count - 1))
-        self.rename = None
+        self.rename = self.value_edit = self.move_drag = None
         self.field_edit = self.menu_open = None
         if self.selected_entity() is None:
             self.selected = None
@@ -2290,7 +2743,17 @@ class Editor:
             self.confirm = None
         if action != "dropdown":
             self.dropdown_open = False
-        if action == "lights":
+        if action in ("lights", "effects", "guns", "prefabs"):
+            self.settings_mode = False
+        if action == "mapsettings":
+            self.settings_mode = not self.settings_mode
+            self.guns_mode = self.prefabs_mode = self.effects_mode = self.lights_mode = False
+            self.deselect()
+            self.settings_scroll = 0
+            if self.settings_mode:
+                self.settings_selected = RULES_ROW
+            self.say("Map settings: the game mode and rules, and the buy menu" if self.settings_mode else "Back to the map")
+        elif action == "lights":
             self.lights_mode, self.effects_mode, self.guns_mode, self.prefabs_mode = not self.lights_mode, False, False, False
             self.deselect()
             self.say("Lights: add one, set its color and reach, then give it to a gun, item, ammo or effect"
@@ -2315,10 +2778,13 @@ class Editor:
         elif action.startswith("shape:"):
             self.shape = action[6:]
             self.say(f"Shape: {SHAPES[self.shape]} (drag on the map; right-drag erases, Shift: square / circle)")
+        elif action in ("copy", "cut", "clear", "paste", "select_all"):
+            self.area_action(action)
         elif action.startswith("tool:"):
             self.tool = action[5:]
-            self.shape_drag = None
-            self.guns_mode = self.prefabs_mode = self.effects_mode = self.lights_mode = False
+            self.shape_drag = self.area_drag = None
+            self.pasting = False
+            self.guns_mode = self.prefabs_mode = self.effects_mode = self.lights_mode = self.settings_mode = False
             if self.tool != "entity":
                 self.deselect()
             if self.tool == "camera" and not self.show_preview:
@@ -2353,8 +2819,17 @@ class Editor:
             self.do("order-" if action == "val-" else "order+")        # [ and ] step the order too
         elif action in ("val-", "val+"):
             self.adjust_value(-VALUE_STEP if action == "val-" else VALUE_STEP)
+        elif action == "val_type" and self.layer in VALUE_LAYERS:
+            self.value_edit = ""
+            self.say("Type the brush value, Enter to use it, Esc to cancel", 60)
+        elif action == "dir" and self.layer == "site":
+            self.site_brush = 3 - self.site_brush
+            self.say(f"Painting bomb site {SITE_NAMES[self.site_brush]}")
         elif action == "dir":
             self.ramp_dir = self.ramp_dir % 4 + 1
+        elif action == "spawn_team":
+            self.spawn_team = SPAWN_TEAMS[(SPAWN_TEAMS.index(self.spawn_team) + 1) % len(SPAWN_TEAMS)]
+            self.say(f"New spawn points are for {SPAWN_TEAM_LABELS[self.spawn_team]} (click one to give it this team)")
         elif action == "side_full":
             self.side_from = self.side_to = 0.0
             self.say("Wall side band: the whole height of the side")
@@ -2490,6 +2965,20 @@ class Editor:
         else:
             return
         self.touch()
+
+    def finish_value_edit(self, commit):
+        """Use (or drop) the brush value typed into the toolbar, clamped to the layer's limits."""
+        typed, self.value_edit = self.value_edit, None
+        if not commit or not typed or self.layer not in VALUE_LAYERS:
+            return
+        try:
+            value = float(typed.replace(",", "."))
+        except ValueError:
+            self.say(f"'{typed}' is not a number: value unchanged")
+            return
+        low, high = VALUE_LIMITS[self.layer]
+        self.value[self.gname()] = max(low, min(high, round(value, 2)))
+        self.say(f"Brush value {fmt(self.value[self.gname()])}")
 
     def adjust_value(self, delta):
         if self.layer in VALUE_LAYERS:
@@ -2728,6 +3217,19 @@ class Editor:
             elif char and char.isprintable() and len(self.rename) < MAX_NAME_LENGTH:
                 self.rename += char
             return
+        if self.value_edit is not None:                 # typing the brush value into the toolbar
+            char = getattr(e, "unicode", "")
+            if e.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                self.finish_value_edit(True)
+            elif e.key == pygame.K_ESCAPE:
+                self.finish_value_edit(False)
+            elif e.key == pygame.K_BACKSPACE:
+                self.value_edit = self.value_edit[:-1]
+            elif char and char in "0123456789.,-" and len(self.value_edit) < 8:
+                _whole, dot, decimals = self.value_edit.replace(",", ".").partition(".")
+                if not (dot and (char in ".," or len(decimals) >= 2)):    # one point, 2 decimal places
+                    self.value_edit += char
+            return
         if self.field_edit is not None:                 # typing a number into the Details pane
             char = getattr(e, "unicode", "")
             if e.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
@@ -2743,9 +3245,17 @@ class Editor:
             return
         ctrl = bool(e.mod & pygame.KMOD_CTRL)
         if e.key == pygame.K_ESCAPE:
-            if self.shape_drag:
+            if self.move_drag:
+                self.move_drag = None
+                self.say("Move cancelled")
+            elif self.shape_drag:
                 self.shape_drag = None
                 self.say("Shape cancelled")
+            elif self.pasting:
+                self.pasting = False
+                self.say("Stopped pasting (Ctrl+V pastes again)")
+            elif self.area is not None and self.tool == "select":
+                self.area = None
             elif self.dropdown_open:
                 self.dropdown_open = False
             elif self.menu_open is not None:
@@ -2754,6 +3264,10 @@ class Editor:
                 self.deselect()                         # (Esc no longer quits: close the window for that)
         elif e.key == pygame.K_DELETE and self.details_width():
             self.delete_selected()
+        elif e.key == pygame.K_DELETE and self.tool == "select" and self.area is not None:
+            self.do("clear")
+        elif ctrl and e.key in (pygame.K_c, pygame.K_x, pygame.K_v, pygame.K_a):
+            self.do({pygame.K_c: "copy", pygame.K_x: "cut", pygame.K_v: "paste", pygame.K_a: "select_all"}[e.key])
         elif ctrl and e.key == pygame.K_s:
             self.do("save")
         elif ctrl and e.key == pygame.K_o:
@@ -2788,6 +3302,8 @@ class Editor:
             self.do("effects")
         elif e.key == pygame.K_l:
             self.do("lights")
+        elif e.key == pygame.K_j:
+            self.do("mapsettings")
         elif e.key == pygame.K_v:
             self.do("preview")
         elif e.key in LAYER_KEYS:
@@ -2802,6 +3318,8 @@ class Editor:
             self.do("val-")
         elif e.key == pygame.K_RIGHTBRACKET:
             self.do("val+")
+        elif e.key in (pygame.K_RETURN, pygame.K_KP_ENTER) and self.layer in VALUE_LAYERS:
+            self.do("val_type")
         elif e.key == pygame.K_r:
             self.do("dir")
 
@@ -2824,6 +3342,9 @@ class Editor:
             return
         if self.rename is not None:                     # clicking away keeps the typed name
             self.finish_rename(True)
+            return
+        if self.value_edit is not None:                 # ... and the typed brush value
+            self.finish_value_edit(True)
             return
         if self.field_edit is not None:                 # ... and the typed number
             self.finish_field_edit(True)
@@ -2858,6 +3379,8 @@ class Editor:
                 if rect.collidepoint(e.pos):
                     self.do(action)
                     return
+        elif atlas.collidepoint(e.pos) and (e.button == 2 or (e.button == 1 and pygame.key.get_pressed()[pygame.K_SPACE])):
+            self.atlas_pan = True                       # move the zoomed atlas around
         elif e.button == 1 and atlas.collidepoint(e.pos):
             index = self.tile_index_at(e.pos)
             cell = (index % self.atlas_cols, index // self.atlas_cols)
@@ -2877,6 +3400,9 @@ class Editor:
             elif self.lights_mode:
                 if e.button == 1:
                     self.lights_click(e.pos)
+            elif self.settings_mode:
+                if e.button == 1:
+                    self.settings_click(e.pos)
             elif e.button in (1, 3) and not self.over_ruler(e.pos):
                 self.confirm = None
                 self.map_click(self.cell_at(e.pos), e.button)
@@ -2887,8 +3413,15 @@ class Editor:
             self.finish_atlas_drag()
         if e.button == 1 and self.stairs_drag:
             self.finish_stairs()
+        if e.button == 1 and self.move_drag:
+            self.finish_move()
         if self.shape_drag and e.button == (3 if self.shape_drag[2] else 1):
             self.finish_shape()
+        if self.area_drag and e.button == 1:
+            self.area = area_rect(self.level, *self.area_drag)
+            self.area_drag = None
+            x0, y0, x1, y1 = self.area
+            self.say(f"Selected {x1 - x0 + 1}x{y1 - y0 + 1}: Ctrl+C copies, Ctrl+X cuts, Delete clears")
         if e.button in (1, 3):
             self.stroke = self.last_cell = None
         if e.button == 1:
@@ -2896,7 +3429,7 @@ class Editor:
             if self.gizmo_drag:
                 self.gizmo_release()
         if e.button in (1, 2):
-            self.pan_drag = False
+            self.pan_drag = self.atlas_pan = False
 
     def on_mouse_move(self, e):
         self.mouse = e.pos
@@ -2906,15 +3439,19 @@ class Editor:
             self.preview.look(e.rel[0] * MOUSE_SENSITIVITY, -e.rel[1] * MOUSE_SENSITIVITY)
         elif self.camera_drag and self.preview is not None:
             self.preview.aim(*self.map_point(e.pos))
-        elif self.atlas_drag:
-            rect = self.atlas_rect()            # clamp so dragging outside keeps the nearest tile
-            x = min(max(e.pos[0], rect.left), rect.right - 1)
-            y = min(max(e.pos[1], rect.top), rect.bottom - 1)
-            self.atlas_drag = (self.atlas_drag[0], ((x - rect.x) // TILE, (y - rect.y) // TILE))
+        elif self.atlas_pan:
+            self.atlas_scroll = [self.atlas_scroll[0] - e.rel[0], self.atlas_scroll[1] - e.rel[1]]
+            self.clamp_atlas_scroll()
+        elif self.atlas_drag:                   # (clamped: dragging outside keeps the nearest tile)
+            self.atlas_drag = (self.atlas_drag[0], self.atlas_cell_at(e.pos))
         elif self.stairs_drag:
             self.stairs_drag = (self.stairs_drag[0], self.cell_at(e.pos))
+        elif self.move_drag:
+            self.move_drag = self.move_drag[:3] + (self.cell_at(e.pos),)
         elif self.shape_drag:
             self.shape_drag = (self.shape_drag[0], self.cell_at(e.pos), self.shape_drag[2])
+        elif self.area_drag:
+            self.area_drag = (self.area_drag[0], self.cell_at(e.pos))
         elif self.pan_drag:
             self.pan[0] += e.rel[0]
             self.pan[1] += e.rel[1]
@@ -2935,6 +3472,9 @@ class Editor:
             return
         if self.new_name is not None:
             return
+        if self.atlas_rect().collidepoint(self.mouse):  # the wheel zooms the atlas
+            self.zoom_atlas(self.mouse, e.y)
+            return
         pane = self.details_rect()
         if pane is not None and pane.collidepoint(self.mouse):      # the wheel steps the value under it
             self.details_wheel(self.mouse, e.y)
@@ -2947,6 +3487,10 @@ class Editor:
         if self.guns_mode and area.collidepoint(self.mouse):    # the wheel scrolls the Guns section
             self.guns_scroll = max(0, self.guns_scroll - e.y * 48)
             self.clamp_guns_scroll()
+            return
+        if self.settings_mode and area.collidepoint(self.mouse):    # ... and the Map settings section
+            self.settings_scroll = max(0, self.settings_scroll - e.y * 48)
+            self.clamp_settings_scroll()
             return
         if not area.collidepoint(self.mouse) or self.section_open():
             return
@@ -2972,6 +3516,8 @@ class Editor:
             self.draw_effects(screen)
         elif self.lights_mode:
             self.draw_lights(screen)
+        elif self.settings_mode:
+            self.draw_settings(screen)
         else:
             self.draw_map(screen)
         self.draw_panel(screen)
@@ -3037,7 +3583,7 @@ class Editor:
             source = "ceil_h" if layer == "ceil_h" else "floor_h"
             value = grids[g(source)][y][x]
             color = heat(value, *HEIGHT_RANGE[source])
-            if layer == "ramp":
+            if layer in ("ramp", "site"):
                 color = tuple(c // 2 for c in color)
             pygame.draw.rect(screen, color, rect)
             if layer in VALUE_LAYERS and self.zoom >= 24:
@@ -3045,6 +3591,14 @@ class Editor:
                 screen.blit(label, label.get_rect(center=rect.center))
         if layer == "ramp" and grids[g("ramp")][y][x]:
             self.draw_arrow(screen, rect, grids[g("ramp")][y][x], ACCENT)
+        if layer == "site" and grids[g("site")][y][x] in SITE_COLORS:
+            site = grids[g("site")][y][x]
+            veil = pygame.Surface(rect.size, pygame.SRCALPHA)
+            veil.fill((*SITE_COLORS[site], 150))
+            screen.blit(veil, rect)
+            if self.zoom >= 14:
+                label = self.small.render(SITE_NAMES[site], True, (10, 10, 20))
+                screen.blit(label, label.get_rect(center=rect.center))
         if self.zoom >= 16 and any(level.span_present(s, x, y) for s in range(floor + 1, level.floor_count)):
             draw_upper_mark(screen, rect)
 
@@ -4051,6 +4605,145 @@ class Editor:
                                card.x, card.bottom + 12, card.w)
         screen.set_clip(None)
 
+    SETTINGS_ROW_H = 46
+
+    def settings_rows(self):
+        """(rules row rect, buy menu row rect, [(rect, entry index)], Add button rect) for the Map settings section."""
+        area = self.map_area()
+        width = min(area.w - 40, 440)
+        top = area.y + 74 - self.settings_scroll
+        rules = pygame.Rect(area.x + 20, top, width, self.SETTINGS_ROW_H - 4)
+        buy = pygame.Rect(area.x + 20, top + self.SETTINGS_ROW_H, width, self.SETTINGS_ROW_H - 4)
+        first = top + 2 * self.SETTINGS_ROW_H + 30
+        rows = [(pygame.Rect(area.x + 20, first + i * self.SETTINGS_ROW_H, width, self.SETTINGS_ROW_H - 4), i)
+                for i in range(len(self.level.settings.buy_items))]
+        add = pygame.Rect(area.x + 20, first + len(rows) * self.SETTINGS_ROW_H, 220, 34)
+        return rules, buy, rows, add
+
+    def clamp_settings_scroll(self):
+        _rules, _buy, _rows, add = self.settings_rows()
+        bottom = add.bottom + self.settings_scroll + 20
+        self.settings_scroll = max(0, min(self.settings_scroll, bottom - self.map_area().bottom))
+
+    def settings_click(self, pos):
+        rules, buy, rows, add = self.settings_rows()
+        if add.collidepoint(pos):
+            self.add_buy_item()
+            return
+        for rect, choice in [(rules, RULES_ROW), (buy, BUY_ROW)] + rows:
+            if rect.collidepoint(pos):
+                self.settings_selected = choice
+                self.tile_target = "tile"
+                self.field_edit = self.menu_open = None
+                return
+
+    def rules_summary(self):
+        rules = self.level.settings
+        text = GAME_MODE_LABELS[rules.mode] + (", friendly fire" if rules.mode != "ffa" and rules.friendly_fire else "")
+        text += f"   health {rules.max_health:g}"
+        if rules.start_money or rules.kill_money:
+            text += f"   start ${rules.start_money:g}"
+        if rules.kill_score or rules.kill_money:
+            text += f"   kill +{rules.kill_score:g} score +${rules.kill_money:g}"
+        text += f"   starts with {rules.start_gun}" if rules.start_gun else ""
+        if rules.mode == "bomb":
+            text += (f"   round {rules.round_time:g}s, bomb {rules.bomb_time:g}s, {rules.max_rounds:g} rounds")
+        return text
+
+    def buy_summary(self):
+        rules = self.level.settings
+        if not rules.buy_menu:
+            return "Off" + (f" ({len(rules.buy_items)} entries kept)" if rules.buy_items else "")
+        count = len(rules.buy_items)
+        return f"On   costs {BUY_COST_LABELS[rules.buy_cost].lower()}   {count} entr{'y' if count == 1 else 'ies'}"
+
+    def draw_settings_row(self, screen, rect, title, summary, on, icon=-1):
+        pygame.draw.rect(screen, BUTTON_ON if on else (BUTTON_HOT if rect.collidepoint(self.mouse) else BUTTON),
+                         rect, border_radius=4)
+        x = rect.x + 10
+        if 0 <= icon < len(self.tiles):
+            screen.blit(pygame.transform.scale(self.tiles[icon], (32, 32)), (rect.x + 6, rect.y + 5))
+            x = rect.x + 48
+        clip = screen.get_clip()
+        screen.set_clip(rect.clip(clip))
+        screen.blit(self.font.render(title, True, TEXT), (x, rect.y + 5))
+        screen.blit(self.small.render(summary, True, TEXT if on else DIM), (x, rect.y + 24))
+        screen.set_clip(clip)
+
+    def draw_settings(self, screen):
+        """The Map settings section: the game rules, the buy menu and its entries as a list, and the buy menu as a
+        player who just joined sees it."""
+        area = self.map_area()
+        screen.set_clip(area)
+        pygame.draw.rect(screen, BG, area)
+        self.clamp_settings_scroll()
+        rules = self.level.settings
+        top = area.y - self.settings_scroll
+        screen.blit(self.font.render("Map settings", True, ACCENT), (area.x + 20, top + 14))
+        screen.blit(self.small.render("How this map is played: its game mode and rules, and the buy menu players open",
+                                      True, DIM), (area.x + 20, top + 36))
+        screen.blit(self.small.render("with B. Select a row to change it in the Details pane.", True, DIM),
+                    (area.x + 20, top + 52))
+        rules_rect, buy_rect, rows, add = self.settings_rows()
+        self.draw_settings_row(screen, rules_rect, "Game rules", self.rules_summary(), self.settings_selected == RULES_ROW)
+        self.draw_settings_row(screen, buy_rect, "Buy menu", self.buy_summary(), self.settings_selected == BUY_ROW)
+        screen.blit(self.font.render("In the buy menu", True, ACCENT if rules.buy_menu else DIM),
+                    (buy_rect.x, buy_rect.bottom + 12))
+        for rect, i in rows:
+            entry = rules.buy_items[i]
+            what = BUY_KIND_LABELS[entry.kind] + ("" if entry.kind != "gun" or entry.gun in self.gun_names()
+                                                   else "  (no such gun: not sold)")
+            if entry.team:
+                what += "   " + self.buy_team_labels()[entry.team]
+            self.draw_settings_row(screen, rect, f"{entry.label()}   {price_text(rules.buy_cost, entry.price)}", what,
+                                   i == self.settings_selected, entry_tile(entry, self.level.guns))
+        self._draw_add_button(screen, add, "+ Add to buy menu")
+        right = area.x + 20 + min(area.w - 40, 440) + 24
+        width = min(380, area.right - right - 20)
+        card = pygame.Rect(right, area.y + 74, width, 0)
+        if width < 240:
+            card = pygame.Rect(add.x, add.bottom + 24, min(380, max(200, area.w - 40)), 0)
+        self.draw_buy_preview(screen, card)
+        screen.set_clip(None)
+
+    def draw_buy_preview(self, screen, card):
+        """The buy menu as a player who has just joined sees it in the game: entries they cannot afford with the
+        start money (or no score) are greyed out."""
+        rules = self.level.settings
+        entries = rules.buy_items[:10]
+        card.h = 72 + max(1, len(entries)) * 36 + (18 if len(rules.buy_items) > len(entries) else 0)
+        pygame.draw.rect(screen, (32, 34, 42), card, border_radius=8)
+        pygame.draw.rect(screen, (90, 94, 110), card, 1, border_radius=8)
+        title = self.font.render("Buy menu" + ("" if rules.buy_menu else "  (off)"), True, ACCENT)
+        screen.blit(title, title.get_rect(midtop=(card.centerx, card.y + 10)))
+        have = {"free": None, "money": rules.start_money, "score": 0.0}[rules.buy_cost]
+        wallet = ("Everything here is free" if have is None else
+                  f"A new player has ${have:g}" if rules.buy_cost == "money" else "A new player has 0 score")
+        line = self.small.render(wallet, True, DIM)
+        screen.blit(line, line.get_rect(midtop=(card.centerx, card.y + 34)))
+        y = card.y + 58
+        if not entries:
+            line = self.small.render("Nothing for sale yet", True, DIM)
+            screen.blit(line, line.get_rect(midtop=(card.centerx, y + 8)))
+        for entry in entries:
+            button = pygame.Rect(card.x + 14, y, card.w - 28, 30)
+            can = have is None or entry.price <= 0 or have >= entry.price
+            pygame.draw.rect(screen, BUTTON if can else (46, 48, 56), button, border_radius=5)
+            tile = entry_tile(entry, self.level.guns)
+            if 0 <= tile < len(self.tiles):
+                picture = pygame.transform.scale(self.tiles[tile], (24, 24))
+                if not can:
+                    picture.set_alpha(110)
+                screen.blit(picture, (button.x + 4, button.y + 3))
+            text = self.font.render(f"{entry.label()}   {price_text(rules.buy_cost, entry.price)}", True,
+                                    TEXT if can else DIM)
+            screen.blit(text, text.get_rect(center=button.center))
+            y += 36
+        if len(rules.buy_items) > len(entries):
+            more = self.small.render(f"... and {len(rules.buy_items) - len(entries)} more (the wheel scrolls in the game)",
+                                     True, DIM)
+            screen.blit(more, more.get_rect(midtop=(card.centerx, y)))
+
     def draw_details(self, screen):
         """The docked Details pane (only while something is selected)."""
         rect = self.details_rect()
@@ -4059,10 +4752,26 @@ class Editor:
         e, gun, ammo = self.selected_entity(), self.selected_gun(), self.selected_ammo()
         prefab, effect = self.selected_prefab(), self.selected_effect()
         light, ambient = self.selected_light(), self.ambient_chosen()
+        entry, rules_row = self.selected_buy_item(), self.settings_row()
         theme = {"panel": PANEL_BG, "grid": GRID, "text": TEXT, "dim": DIM, "accent": ACCENT, "button": BUTTON,
                  "button_hot": BUTTON_HOT, "field": (28, 29, 34), "field_edit": (50, 52, 64),
                  "danger": (120, 50, 55), "danger_hot": (160, 64, 70), "button_on": BUTTON_ON}
-        if ambient:
+        if rules_row == RULES_ROW:
+            notes = ("Two teams: players are split as they", "join; a teammate's name shows white.",
+                     "Co-op: everyone is on one team.", "Friendly fire off: teammates' bullets",
+                     "and blasts do not hurt (your own do).", "Knocking out an opponent earns the",
+                     "Score / Money per kill. Score and money", "stay when a player is knocked out.")
+        elif rules_row == BUY_ROW:
+            notes = ("Players open the buy menu with B.", "Free: every entry is free. Money or",
+                     "Score: an entry is only given to a", "player who has its price, which is",
+                     "taken off. Money comes from Start", "money and Money / kill (Game rules).")
+        elif entry is not None:
+            cost = self.level.settings.buy_cost
+            notes = (("The menu is free: the price is not used." if cost == "free"
+                      else f"Costs {price_text(cost, entry.price)} ({BUY_COST_LABELS[cost].lower()})."),
+                     "Button text blank: named after", "what it gives.", "Icon none: a gun shows its own picture.",
+                     "Click an atlas tile to set the icon.")
+        elif ambient:
             notes = ("How bright the map is without any", "light: 1 is fully lit, as maps were",
                      "before lights; lower is darker, so", "lights show. Walls, items and the",
                      "player are all dimmed by it.")
@@ -4105,7 +4814,8 @@ class Editor:
             notes = (f"Cell ({math.floor(e.x)}, {math.floor(e.y)}) on {self.level.names[e.span]}",
                      "Wheel over a row steps it.", "Click a number to type one.",
                      "Click an atlas tile: sets the sprite.", "Esc closes this; Del removes the item.")
-        title = ("Ambient light" if ambient else "Light" if light is not None else "Effect" if effect is not None else "Gun" if gun is not None else "Ammo type" if ammo is not None
+        title = ("Game rules" if rules_row == RULES_ROW else "Buy menu" if rules_row == BUY_ROW
+                 else "Buy menu entry" if entry is not None else "Ambient light" if ambient else "Light" if light is not None else "Effect" if effect is not None else "Gun" if gun is not None else "Ammo type" if ammo is not None
                  else "Prefab" if prefab is not None else "Prefab to place" if e is None else "Item")
         details.draw(screen, rect, title, self.details_rows(), theme, (self.font, self.small), focus=self.tile_target,
                      button_label=self.details_delete_label(),
@@ -4147,10 +4857,10 @@ class Editor:
         for s in self.level.spawners:
             cx, cy = origin.x + s.x * z, origin.y + s.y * z
             if s.span != self.floor:
-                pygame.draw.circle(screen, SPAWN_FILL, (cx, cy), radius, 2)
+                pygame.draw.circle(screen, SPAWN_TEAM_FILLS.get(s.team, SPAWN_FILL), (cx, cy), radius, 2)
                 continue
             tip = (cx + math.cos(s.angle) * z * 0.45, cy + math.sin(s.angle) * z * 0.45)
-            pygame.draw.circle(screen, SPAWN_FILL, (cx, cy), radius)
+            pygame.draw.circle(screen, SPAWN_TEAM_FILLS.get(s.team, SPAWN_FILL), (cx, cy), radius)
             pygame.draw.circle(screen, SPAWN_EDGE, (cx, cy), radius, 2)
             pygame.draw.line(screen, (255, 255, 255), (cx, cy), tip, max(2, z // 12))
             if z >= 16:
@@ -4230,7 +4940,10 @@ class Editor:
             entries.append(("wall_full", "Full-height wall"))
         if self.layer == "ramp":
             entries.append(("ramp", "Ramp: rises toward arrow"))
-        if self.layer in VALUE_LAYERS or self.layer == "ramp":
+        if self.layer == "site":
+            entries.append(("site_a", "Bomb site A (plant here)"))
+            entries.append(("site_b", "Bomb site B (plant here)"))
+        if self.layer in VALUE_LAYERS or self.layer in ("ramp", "site"):
             entries.append(("heat", "Height: blue low, yellow high"))
         return entries
 
@@ -4330,6 +5043,11 @@ class Editor:
         elif kind == "ramp":
             pygame.draw.rect(screen, tuple(c // 2 for c in heat(1.0, *HEIGHT_RANGE["floor_h"])), box)
             self.draw_arrow(screen, box, 1, ACCENT)
+        elif kind in ("site_a", "site_b"):
+            site = 1 if kind == "site_a" else 2
+            pygame.draw.rect(screen, SITE_COLORS[site], box)
+            text = self.small.render(SITE_NAMES[site], True, (10, 10, 20))
+            screen.blit(text, text.get_rect(center=box.center))
 
     def draw_legend(self, screen):
         """The key to the marks on the map (K or the Key button shows and hides it). Docked in
@@ -4361,7 +5079,43 @@ class Editor:
         if not docked:
             screen.set_clip(None)
 
+    def area_screen_rect(self, x0, y0, x1, y1):
+        return self.cell_rect(x0, y0).union(self.cell_rect(x1, y1))
+
+    def draw_selection(self, screen, area):
+        """Select tool: the rectangle being dragged or selected, and while pasting the copy under the mouse."""
+        if self.area_drag:
+            pygame.draw.rect(screen, ACCENT, self.area_screen_rect(*area_rect(self.level, *self.area_drag)), 2)
+        elif self.area is not None:
+            box = self.area_screen_rect(*self.area)
+            pygame.draw.rect(screen, (20, 20, 26), box.inflate(2, 2), 1)
+            pygame.draw.rect(screen, ACCENT, box, 2)
+        if self.pasting and self.clip is not None and area.collidepoint(self.mouse):
+            x, y = self.paste_corner(self.cell_at(self.mouse))
+            clip = self.clip
+            for dy in range(clip.height):
+                for dx in range(clip.width):
+                    wall = clip.walls.get((dx, dy))
+                    tile = wall["walls"] if wall else clip.span["floor_tex"][dy][dx]
+                    ghost = self.tile_surface(tile - 1).copy()
+                    ghost.set_alpha(150 if wall else 90)
+                    screen.blit(ghost, self.cell_rect(x + dx, y + dy))
+            origin, z = self.cell_rect(0, 0), self.zoom
+            size = max(8, int(z * 0.6))
+            for e in clip.entities:                             # the items and spawn points that come with it
+                icon = pygame.transform.scale(self.tiles[max(0, min(e.tile, len(self.tiles) - 1))], (size, size))
+                icon.set_alpha(170)
+                screen.blit(icon, icon.get_rect(center=(origin.x + (e.x + x) * z, origin.y + (e.y + y) * z)))
+            for sp in clip.spawners:
+                pygame.draw.circle(screen, SPAWN_FILL, (origin.x + (sp.x + x) * z, origin.y + (sp.y + y) * z),
+                                   max(4, z * 0.3), 2)
+            pygame.draw.rect(screen, ACCENT, self.area_screen_rect(x, y, x + clip.width - 1, y + clip.height - 1), 2)
+
     def draw_cursor(self, screen, area):
+        if self.tool == "select":
+            self.draw_selection(screen, area)
+            if self.area_drag or self.pasting:
+                return
         if self.shape_drag:
             erasing = self.shape_drag[2]
             tiles = not erasing and self.layer in STAMP_LAYERS and self.stamp()
@@ -4372,6 +5126,13 @@ class Editor:
                     ghost.set_alpha(150)
                     screen.blit(ghost, rect)
                 pygame.draw.rect(screen, WARN if erasing else ACCENT, rect, 1 if tiles else 2)
+            return
+        if self.move_drag:
+            kind, _thing, start, cell = self.move_drag
+            if cell != start:
+                color = ACCENT if self.move_target_ok(kind, cell) else WARN
+                pygame.draw.line(screen, color, self.cell_rect(*start).center, self.cell_rect(*cell).center, 2)
+                pygame.draw.rect(screen, color, self.cell_rect(*cell), 2)
             return
         if self.stairs_drag:
             for cell, height in self.stairs_heights():
@@ -4415,12 +5176,16 @@ class Editor:
     def draw_panel(self, screen):
         h = self._size()[1]
         pygame.draw.rect(screen, PANEL_BG, (0, TOOLBAR_H, PANEL_W, h - TOOLBAR_H - STATUS_H))
-        screen.blit(self.atlas_backdrop, self.atlas_rect())      # shows through transparent pixels
-        screen.blit(self.atlas_img, self.atlas_rect())
-        screen.blit(self.atlas_grid, self.atlas_rect())
+        view = self.atlas_rect()
+        screen.set_clip(view)                           # (zoomed in, only part of the atlas is in view)
+        backdrop, picture, grid = self.atlas_pictures()
+        origin = self.atlas_origin()
+        screen.blit(backdrop, origin)                   # shows through transparent pixels
+        screen.blit(picture, origin)
+        screen.blit(grid, origin)
         shown = self.drag_indices() if self.atlas_drag and not (self.mods() & pygame.KMOD_CTRL) \
             else (self.selection | (self.drag_indices() if self.atlas_drag else set()))
-        veil = pygame.Surface((TILE, TILE), pygame.SRCALPHA)
+        veil = pygame.Surface((self.atlas_cell(), self.atlas_cell()), pygame.SRCALPHA)
         veil.fill((255, 205, 60, 70))
         for index in shown:
             rect = self.tile_rect(index)
@@ -4430,9 +5195,15 @@ class Editor:
         if hover is not None:
             pygame.draw.rect(screen, TEXT, self.tile_rect(hover), 1)
         if self.layer not in TILE_LAYERS:               # the atlas is not what this layer paints with
-            shade = pygame.Surface(self.atlas_img.get_size(), pygame.SRCALPHA)
+            shade = pygame.Surface(view.size, pygame.SRCALPHA)
             shade.fill((20, 20, 26, 150))
-            screen.blit(shade, self.atlas_rect())
+            screen.blit(shade, view)
+        screen.set_clip(None)
+        if self.atlas_zoom > 1:
+            label = self.small.render(f"{self.atlas_zoom:g}x", True, TEXT)
+            back = label.get_rect(topright=(view.right - 4, view.y + 4)).inflate(8, 4)
+            pygame.draw.rect(screen, (20, 20, 26), back, border_radius=3)
+            screen.blit(label, label.get_rect(center=back.center))
 
         y, cell, _after, hints_y = self.panel_metrics()
         count = len(self.selection)
@@ -4440,9 +5211,9 @@ class Editor:
         for dx, dy, tile_id in self.stamp():
             small = pygame.transform.scale(self.tiles[tile_id - 1], (cell, cell))
             screen.blit(small, (ATLAS_X + dx * cell, y + 22 + dy * cell))
-        hints = ("Atlas: click / drag = select, Ctrl = add/remove",
+        hints = ("Atlas: click / drag = select, Ctrl = add/remove, wheel zoom, middle-drag pan",
                  "Map: L-drag paint, R-drag erase, wheel zoom, Space+drag pan",
-                 "Tab floor, layers 1-8, tools B E F I S O T H C N, [ ] value, R ramp, K key")
+                 "Tab floor, layers 1-8, tools B E F I S O T H M C N, [ ] value, R ramp, K key")
         for i, text in enumerate(hints):
             screen.blit(self.small.render(text, True, DIM), (ATLAS_X, hints_y + i * 16))
 
@@ -4461,9 +5232,8 @@ class Editor:
         return y, cell, after, max(after, h - STATUS_H - 56)
 
     def tile_rect(self, index):
-        base = self.atlas_rect()
-        return pygame.Rect(base.x + (index % self.atlas_cols) * TILE,
-                           base.y + (index // self.atlas_cols) * TILE, TILE, TILE)
+        (x, y), cell = self.atlas_origin(), self.atlas_cell()
+        return pygame.Rect(x + (index % self.atlas_cols) * cell, y + (index // self.atlas_cols) * cell, cell, cell)
 
     def draw_toolbar(self, screen):
         pygame.draw.rect(screen, PANEL_BG, (0, 0, self._size()[0], TOOLBAR_H))
@@ -4471,6 +5241,9 @@ class Editor:
         for rect, label, action in self.buttons:
             if action == "dropdown":
                 self.draw_dropdown_button(screen, rect, label)
+                continue
+            if action == "val_type":
+                self.draw_value_box(screen, rect, label)
                 continue
             active = action in (f"tool:{self.tool}", f"layer:{self.layer}", f"shape:{self.shape}") \
                 or (action == "legend" and self.show_legend) or (action == "guns" and self.guns_mode) \
@@ -4481,6 +5254,15 @@ class Editor:
             screen.blit(text, text.get_rect(center=rect.center))
         for text, pos, color in self.readouts:
             screen.blit(self.font.render(text, True, color), pos)
+
+    def draw_value_box(self, screen, rect, label):
+        """The brush value in the toolbar: its number, or a text box while one is being typed."""
+        typing = self.value_edit is not None
+        hot = rect.collidepoint(self.mouse)
+        pygame.draw.rect(screen, (24, 26, 32), rect, border_radius=4)
+        pygame.draw.rect(screen, ACCENT if typing else (BUTTON_HOT if hot else BUTTON), rect, 2, border_radius=4)
+        caret = ("|" if int(time.time() * 2) % 2 == 0 else " ") if typing else ""
+        screen.blit(self.font.render(label + caret, True, TEXT if typing else ACCENT), (rect.x + 8, rect.y + 8))
 
     def draw_dropdown_button(self, screen, rect, label):
         """The closed dropdown: the current floor's name and an arrow, or a text box while renaming."""

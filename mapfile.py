@@ -22,6 +22,8 @@ cells where you give it a room; between two floors lies solid material (the floo
     floor_tex     tile id of the floor (also the riser of steps up to it)
     ceil_tex      tile id of the ceiling (also the drop where a ceiling gets lower)
     ramp          0 = none, else the direction the floor rises: 1 east, 2 west, 3 south, 4 north
+    site          0 = none, else the bomb site the floor belongs to (bomb defusal): 1 A, 2 B. The bomb can be
+                  planted standing on it.
 
 Entities (items in the world) are not a grid: the level keeps a list of them, each with a position,
 the floor it stands on, a sprite tile, what happens when the player touches it and how it behaves
@@ -49,7 +51,8 @@ FORMAT_VERSION = 6
 MAX_NAME_LENGTH = 24
 MIN_WALL_GAP = 0.05             # a wall this close to the ceiling is just a full-height wall
 
-SPAN_LAYERS = ("floor_tex", "ceil_tex", "floor_h", "ceil_h", "ramp")
+SPAN_LAYERS = ("floor_tex", "ceil_tex", "floor_h", "ceil_h", "ramp", "site")
+SITE_NAMES = {1: "A", 2: "B"}                                   # values of the site layer (0: not a bomb site)
 SIDES = "nesw"                                                  # the four sides of a cell: north, east, south, west
 SIDE_LAYERS = tuple(f"side_{side}" for side in SIDES)           # a wall's own texture on one side (0: the wall's tile)
 # The heights above the wall's base that a side's own texture covers, from and to (to 0: up to the top).
@@ -64,9 +67,9 @@ RAMP_DIRS = {1: (1, 0), 2: (-1, 0), 3: (0, 1), 4: (0, -1)}      # id -> (dx, dy)
 SOLID_OUTSIDE = 1       # walls value reported outside the grid: a wall
 
 _GROUND_DEFAULTS = {"walls": 0, "wall_h": 0.0, "wall_ceil": 0.0, "wall_floor": 0, "floor_tex": 5, "ceil_tex": 6,
-                    "floor_h": 0.0, "ceil_h": 1.0, "ramp": 0, **{name: 0 for name in SIDE_LAYERS},
+                    "floor_h": 0.0, "ceil_h": 1.0, "ramp": 0, "site": 0, **{name: 0 for name in SIDE_LAYERS},
                     **{name: 0.0 for name in SIDE_BAND_LAYERS}}
-_UPPER_DEFAULTS = {"floor_tex": 3, "ceil_tex": 6, "floor_h": 0.0, "ceil_h": 0.0, "ramp": 0}
+_UPPER_DEFAULTS = {"floor_tex": 3, "ceil_tex": 6, "floor_h": 0.0, "ceil_h": 0.0, "ramp": 0, "site": 0}
 
 
 ENTITY_MODES = ("once", "respawn", "persistent", "scenery")
@@ -94,6 +97,11 @@ ANIMATION_LABELS = {"float": "Float", "rotate": "Rotate"}
 
 
 MAX_SPAWN_ORDER = 99
+T_TEAM, CT_TEAM = 1, 2                          # bomb defusal: team 1 attacks (plants), team 2 defends (defuses)
+TEAM_NAMES = {T_TEAM: "T", CT_TEAM: "CT"}
+TEAM_TITLES = {T_TEAM: "Terrorists", CT_TEAM: "Counter-Terrorists"}
+SPAWN_TEAMS = (0, T_TEAM, CT_TEAM)
+SPAWN_TEAM_LABELS = {0: "Any team", T_TEAM: "T", CT_TEAM: "CT"}
 
 
 @dataclass
@@ -104,17 +112,22 @@ class Spawner:
     angle    the way a player there faces, radians (0 faces +x)
     order    which spawners are used first: every player comes in at a spawner of the lowest order that has
              one not yet used in this round, picked at random among those; when all have been used the round
-             starts over (see game.SpawnOrder). A map without spawners uses its start instead."""
+             starts over (see game.SpawnOrder). A map without spawners uses its start instead.
+    team     0: anyone comes in here; T_TEAM / CT_TEAM: in a mode with teams, only that team's players (and a
+             team with no spawn points of its own uses the others)"""
     x: float
     y: float
     span: int = 0
     angle: float = 0.0
     order: int = 0
+    team: int = 0
 
     @classmethod
     def from_dict(cls, data):
+        team = data.get("team", 0)
         return cls(float(data["x"]), float(data["y"]), max(0, int(data.get("span", 0))),
-                   float(data.get("angle", 0.0)), max(0, min(MAX_SPAWN_ORDER, int(data.get("order", 0)))))
+                   float(data.get("angle", 0.0)), max(0, min(MAX_SPAWN_ORDER, int(data.get("order", 0)))),
+                   team if team in SPAWN_TEAMS else 0)
 
 
 @dataclass
@@ -570,6 +583,188 @@ class Entity:
                        elevation=max(-MAX_ELEVATION, min(MAX_ELEVATION, float(data.get("elevation", 0.0)))))
 
 
+GAME_MODES = ("ffa", "teams", "coop", "bomb")
+GAME_MODE_LABELS = {"ffa": "Free for all", "teams": "Two teams", "coop": "Co-op", "bomb": "Bomb defusal"}
+BUY_COSTS = ("free", "money", "score")
+BUY_COST_LABELS = {"free": "Free", "money": "Money", "score": "Score"}
+BUY_KINDS = ("gun", "item", "health")         # (no ammo: guns come with theirs, filled up each bomb defusal round)
+BUY_KIND_LABELS = {"gun": "A gun", "item": "Inventory item", "health": "Health"}
+MAX_BUY_ITEMS = 40                              # entries a buy menu may have
+MAX_MONEY = 1000000.0
+DEFUSE_KIT = "Defuse kit"                       # the inventory item that makes defusing faster (sell it as an item)
+# Bomb defusal settings that are numbers: (lowest, highest). Their defaults are Counter-Strike's.
+BOMB_NUMBERS = {"freeze_time": (0.0, 120.0), "round_time": (10.0, 1800.0), "buy_time": (0.0, 1800.0),
+                "bomb_time": (5.0, 600.0), "plant_time": (0.0, 30.0), "defuse_time": (0.0, 60.0),
+                "kit_defuse_time": (0.0, 60.0), "round_end_time": (1.0, 60.0), "max_rounds": (1.0, 99.0),
+                "bomb_damage": (0.0, 100000.0), "bomb_radius": (1.0, 200.0), "win_money": (0.0, MAX_MONEY),
+                "bomb_win_money": (0.0, MAX_MONEY), "loss_money": (0.0, MAX_MONEY), "loss_bonus": (0.0, MAX_MONEY),
+                "max_loss_money": (0.0, MAX_MONEY), "plant_money": (0.0, MAX_MONEY),
+                "objective_money": (0.0, MAX_MONEY), "money_cap": (0.0, MAX_MONEY)}
+
+
+@dataclass
+class BuyItem:
+    """One entry of a map's buy menu (MapSettings.buy_items): what clicking it gives and what it costs.
+
+    name     what the button says ("" names it after what it gives)
+    kind     gun: hands out the gun named `gun` (as a "Give a gun" item does); item: `amount` of the inventory item
+             `item`; health: +`amount` health (up to the most). Ammo is not sold (an older map's ammo entries are
+             left out when it is read)
+    price    what it costs, in the menu's currency (MapSettings.buy_cost); nothing when the menu is free
+    tile     the atlas tile shown beside it (-1: the gun's own picture, or none)
+    team     0: everyone can buy it; T_TEAM / CT_TEAM: in a mode with teams, only that team's players see and can
+             buy it (in a mode without teams everyone can)"""
+    name: str = ""
+    kind: str = "gun"
+    gun: str = ""
+    item: str = ""
+    amount: float = 1.0
+    price: float = 100.0
+    tile: int = -1
+    team: int = 0
+
+    def offered_to(self, team, has_teams):
+        """Whether a player on `team` sees and can buy this entry (`has_teams`: the map's mode has teams)."""
+        return not has_teams or self.team == 0 or self.team == team
+
+    def label(self):
+        """What the button says: its name, or what it gives."""
+        if self.name:
+            return self.name
+        if self.kind == "gun":
+            return self.gun or "(no gun)"
+        if self.kind == "item":
+            return f"{self.amount:g} x {self.item or 'Item'}"
+        return f"+{self.amount:g} health"
+
+    @classmethod
+    def from_dict(cls, data):
+        base = cls()
+
+        def number(key, low, high):
+            try:
+                return max(low, min(high, float(data.get(key, getattr(base, key)))))
+            except (TypeError, ValueError):
+                return getattr(base, key)
+        return cls(name=str(data.get("name", ""))[:MAX_NAME],
+                   kind=data.get("kind") if data.get("kind") in BUY_KINDS else base.kind,
+                   gun=str(data.get("gun", ""))[:MAX_NAME],
+                   item=str(data.get("item", ""))[:MAX_NAME], amount=number("amount", 0.0, 100000.0),
+                   price=number("price", 0.0, MAX_MONEY), tile=int(number("tile", -1, 255)),
+                   team=data.get("team") if data.get("team") in SPAWN_TEAMS else 0)
+
+
+@dataclass
+class MapSettings:
+    """How a map is played, set in the editor's Map settings section and saved with the map.
+
+    mode           ffa: everyone against everyone; teams: players are split into two teams as they join (a
+                   teammate's name shows white); coop: everyone on one team
+    friendly_fire  whether bullets and blasts hurt teammates (a player's own blast always hurts them)
+    max_health     the health every player starts and comes back with
+    start_money    money a player has when they first join (money, like score, is kept when knocked out)
+    kill_score, kill_money   what knocking out an opponent earns
+    start_gun      the gun every player starts and comes back with ("" for none)
+    buy_menu       whether players can open the buy menu (B in the game)
+    buy_cost       free: everything in it is free; money / score: each entry costs its price in that, and is
+                   only given when the player has enough (score spent on buying goes down)
+    buy_items      the menu's entries (BuyItem), in the order they are listed
+
+    Bomb defusal (mode "bomb", see bomb.py): team 1 (T) plants the bomb in a bomb site (the site layer), team 2 (CT)
+    stops them or defuses it. Times are in seconds, distances in cells, and the defaults are Counter-Strike's.
+    freeze_time      at the start of a round nobody can move (they can look around and buy)
+    round_time       how long a round lasts after the freeze time; when it runs out without a plant, CT win
+    buy_time         how long after the freeze time the buy menu stays open (it is open during the freeze too)
+    bomb_time        a planted bomb explodes this long after it was planted
+    plant_time, defuse_time, kit_defuse_time   how long the use key (E) is held to plant, to defuse, and to
+                     defuse with a DEFUSE_KIT in the inventory
+    round_end_time   the pause after a round is decided, before the next one starts
+    max_rounds       rounds in a match: the teams swap sides after half of them, and the first team to win
+                     more than half wins the match (a new match then starts)
+    bomb_damage, bomb_radius   the explosion: full damage at the bomb, falling away to almost none at the radius;
+                     walls do not stop it
+    bomb_effect, bomb_light    the particle effect and light the explosion plays ("" for none)
+    win_money        every player of the team that won the round gets this (bomb_win_money for winning by the
+                     bomb exploding or being defused)
+    loss_money, loss_bonus, max_loss_money   the losing team gets loss_money, plus loss_bonus for each round
+                     lost in a row before this one, at most max_loss_money
+    plant_money      every T gets this when the bomb was planted but they lost the round
+    objective_money  the player who plants, or defuses, the bomb gets this
+    money_cap        nobody can have more money than this"""
+    mode: str = "ffa"
+    friendly_fire: bool = False
+    max_health: float = 100.0
+    start_money: float = 0.0
+    kill_score: float = 0.0
+    kill_money: float = 0.0
+    start_gun: str = ""
+    buy_menu: bool = False
+    buy_cost: str = "money"
+    buy_items: list = field(default_factory=list)
+    freeze_time: float = 15.0
+    round_time: float = 115.0
+    buy_time: float = 20.0
+    bomb_time: float = 40.0
+    plant_time: float = 3.2
+    defuse_time: float = 10.0
+    kit_defuse_time: float = 5.0
+    round_end_time: float = 7.0
+    max_rounds: float = 24.0
+    bomb_damage: float = 500.0
+    bomb_radius: float = 27.0
+    bomb_effect: str = ""
+    bomb_light: str = ""
+    win_money: float = 3250.0
+    bomb_win_money: float = 3500.0
+    loss_money: float = 1400.0
+    loss_bonus: float = 500.0
+    max_loss_money: float = 3400.0
+    plant_money: float = 800.0
+    objective_money: float = 300.0
+    money_cap: float = 16000.0
+
+    def copy(self):
+        return replace(self, buy_items=[replace(b) for b in self.buy_items])
+
+    def uses_money(self):
+        """True if money means anything on this map (so the HUD shows it)."""
+        return (self.buy_menu and self.buy_cost == "money") or self.start_money > 0 or self.kill_money > 0
+
+    def has_teams(self):
+        """True if players are split into two teams (two teams, and bomb defusal)."""
+        return self.mode in ("teams", "bomb")
+
+    def to_dict(self):
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data):
+        """Map settings from a file, replacing anything unusable with the default."""
+        base = cls()
+        if not isinstance(data, dict):
+            return base
+
+        def number(key, low, high):
+            try:
+                return max(low, min(high, float(data.get(key, getattr(base, key)))))
+            except (TypeError, ValueError):
+                return getattr(base, key)
+        items = data.get("buy_items", [])
+        return cls(mode=data.get("mode") if data.get("mode") in GAME_MODES else base.mode,
+                   friendly_fire=bool(data.get("friendly_fire", base.friendly_fire)),
+                   max_health=number("max_health", 1.0, 10000.0), start_money=number("start_money", 0.0, MAX_MONEY),
+                   kill_score=number("kill_score", 0.0, MAX_MONEY), kill_money=number("kill_money", 0.0, MAX_MONEY),
+                   start_gun=str(data.get("start_gun", ""))[:MAX_NAME],
+                   buy_menu=bool(data.get("buy_menu", base.buy_menu)),
+                   buy_cost=data.get("buy_cost") if data.get("buy_cost") in BUY_COSTS else base.buy_cost,
+                   buy_items=[BuyItem.from_dict(b) for b in items
+                              if isinstance(b, dict) and b.get("kind") != "ammo"][:MAX_BUY_ITEMS]
+                   if isinstance(items, list) else [],
+                   bomb_effect=str(data.get("bomb_effect", ""))[:MAX_NAME],
+                   bomb_light=str(data.get("bomb_light", ""))[:MAX_NAME],
+                   **{key: number(key, low, high) for key, (low, high) in BOMB_NUMBERS.items()})
+
+
 def mounted_position(cx, cy, wall):
     """(x, y) of an item in cell (cx, cy) hung on the wall on side `wall` of the cell (its middle for "")."""
     dx, dy = SIDE_VECTORS.get(wall, (0, 0))
@@ -626,8 +821,9 @@ def default_floor_name(index):
 class Level:
     def __init__(self, grids, start_x=1.5, start_y=1.5, start_angle=0.0, start_span=0, names=None,
                  entities=None, guns=None, ammo_types=None, prefabs=None, effects=None, lights=None, ambient=1.0,
-                 spawners=None):
+                 spawners=None, settings=None):
         self.grids = grids
+        self.settings = settings or MapSettings()   # how the map is played (see MapSettings)
         self.spawners = list(spawners or [])        # where players come into the game (see Spawner)
         self.lights = list(lights or [])            # lights defined for this map (see Light)
         self.ambient = ambient                      # how bright the map is without lights: 1 is as before, less is dark
@@ -663,7 +859,7 @@ class Level:
                      [e.clone() for e in self.entities], [replace(g) for g in self.guns],
                      [replace(a) for a in self.ammo_types], [p.clone() for p in self.prefabs],
                      [replace(f) for f in self.effects], [replace(light) for light in self.lights], self.ambient,
-                     [replace(s) for s in self.spawners])
+                     [replace(s) for s in self.spawners], self.settings.copy())
 
     def prefab_named(self, name):
         for prefab in self.prefabs:
@@ -1229,6 +1425,7 @@ def parse_level(data, label="level"):
     for entity in level.entities:                   # ammo pickups used to name a gun, not an ammo type
         if entity.effect == "ammo" and not entity.ammo and entity.gun:
             entity.ammo = next((g.ammo for g in level.guns if g.name == entity.gun), "")
+    level.settings = MapSettings.from_dict(data.get("settings", {}))
     level.apply_prefabs()
     return level
 
@@ -1242,8 +1439,9 @@ def level_text(level):
     """The map file's JSON as text, with one grid row per line so it is easy to read and diff."""
     blocks = []
     for name in level.grid_names():
-        if name in SIDE_LAYERS + SIDE_BAND_LAYERS and not any(any(row) for row in level.grids[name]):
-            continue                                # (no wall has a texture of its own on that side)
+        if (name in SIDE_LAYERS + SIDE_BAND_LAYERS or split_grid_name(name)[0] == "site") \
+                and not any(any(row) for row in level.grids[name]):
+            continue                                # (no wall has a texture of its own on that side; no bomb site)
         rows = ",\n".join("      " + json.dumps(row) for row in level.grids[name])
         blocks.append(f'    "{name}": [\n{rows}\n    ]')
     start = {"x": level.start_x, "y": level.start_y, "angle": level.start_angle,
@@ -1253,6 +1451,7 @@ def level_text(level):
         f'  "width": {level.width},\n  "height": {level.height},\n'
         f'  "floors": {json.dumps(level.names)},\n'
         f'  "start": {json.dumps(start)},\n'
+        + (f'  "settings": {json.dumps(level.settings.to_dict())},\n' if level.settings != MapSettings() else "")
         + ('  "spawners": [\n' + ",\n".join("    " + json.dumps(asdict(s)) for s in level.spawners) + "\n  ],\n"
            if level.spawners else "")
         + ('  "entities": [\n' + ",\n".join("    " + json.dumps(asdict(e)) for e in level.entities) + "\n  ],\n"
@@ -1271,6 +1470,110 @@ def level_text(level):
         '  "grids": {\n' + ",\n".join(blocks) + "\n  }\n}\n"
     )
     return text
+
+
+# --------------------------------------------------------------------------- copying an area of one floor
+
+WALL_LAYERS = ("walls", "wall_h", "wall_ceil") + SIDE_LAYERS + SIDE_BAND_LAYERS   # what a wall carries with it
+
+
+@dataclass
+class Area:
+    """A rectangle of one floor copied out of a map, to paste elsewhere (on any floor, in any map).
+
+    It holds what belongs to that floor only: its span grids (floor and ceiling textures and heights, ramps) and
+    the walls that start on it (their tile, height, the ceiling over them and their sides), and the items and spawn
+    points standing on it. Walls of other floors - a ground-floor wall fills every floor above it - are not part of
+    it. Positions are relative to the area's top-left cell."""
+    width: int
+    height: int
+    floor: int                                  # the floor it was copied from
+    span: dict = field(default_factory=dict)    # span layer -> rows of values
+    walls: dict = field(default_factory=dict)   # (dx, dy) -> {wall layer: value} of the walls in it
+    entities: list = field(default_factory=list)
+    spawners: list = field(default_factory=list)
+
+
+def area_rect(level, a, b):
+    """(x0, y0, x1, y1): the cells between corners a and b (inclusive, either way round), kept inside the map."""
+    x0, x1 = sorted((a[0], b[0]))
+    y0, y1 = sorted((a[1], b[1]))
+    return max(0, x0), max(0, y0), min(level.width - 1, x1), min(level.height - 1, y1)
+
+
+def _starts_on(level, x, y, floor):
+    """True if the cell holds a wall that starts on `floor` (the walls a floor owns)."""
+    return bool(level.walls[y][x]) and level.wall_floor(x, y) == floor
+
+
+def _in(thing, x0, y0, x1, y1, floor):
+    return thing.span == floor and x0 <= math.floor(thing.x) <= x1 and y0 <= math.floor(thing.y) <= y1
+
+
+def copy_area(level, a, b, floor):
+    """The Area of `floor` between cells a and b."""
+    x0, y0, x1, y1 = area_rect(level, a, b)
+    area = Area(x1 - x0 + 1, y1 - y0 + 1, floor)
+    for layer in SPAN_LAYERS:
+        grid = level.grids[grid_name(layer, floor)]
+        area.span[layer] = [row[x0:x1 + 1] for row in grid[y0:y1 + 1]]
+    for y in range(y0, y1 + 1):
+        for x in range(x0, x1 + 1):
+            if _starts_on(level, x, y, floor):
+                area.walls[(x - x0, y - y0)] = {layer: level.grids[layer][y][x] for layer in WALL_LAYERS}
+    area.entities = [e.clone(x=e.x - x0, y=e.y - y0) for e in level.entities if _in(e, x0, y0, x1, y1, floor)]
+    area.spawners = [replace(s, x=s.x - x0, y=s.y - y0) for s in level.spawners if _in(s, x0, y0, x1, y1, floor)]
+    return area
+
+
+def _clear_wall(level, x, y):
+    for layer in WALL_LAYERS + ("wall_floor",):
+        level.set(layer, x, y, default_for(layer))
+
+
+def clear_area(level, a, b, floor):
+    """Empty `floor` between cells a and b: its span grids back to the floor's defaults (no room on a higher floor),
+    its walls, items and spawn points gone. Other floors' walls stay."""
+    x0, y0, x1, y1 = area_rect(level, a, b)
+    for y in range(y0, y1 + 1):
+        for x in range(x0, x1 + 1):
+            for layer in SPAN_LAYERS:
+                name = grid_name(layer, floor)
+                level.set(name, x, y, default_for(name))
+            if _starts_on(level, x, y, floor):
+                _clear_wall(level, x, y)
+    level.entities = [e for e in level.entities if not _in(e, x0, y0, x1, y1, floor)]
+    level.spawners = [s for s in level.spawners if not _in(s, x0, y0, x1, y1, floor)]
+
+
+def paste_area(level, area, x, y, floor):
+    """Put `area` onto `floor` with its top-left cell at (x, y), in place of what that floor had there (cells off the
+    map are left out). Its walls start on `floor`; a wall of this floor where the area has none goes; walls of other
+    floors stay. Items and spawn points that stood there on this floor make way for the area's."""
+    x0, y0 = max(0, x), max(0, y)
+    x1, y1 = min(level.width - 1, x + area.width - 1), min(level.height - 1, y + area.height - 1)
+    if x1 < x0 or y1 < y0:
+        return
+    level.entities = [e for e in level.entities if not _in(e, x0, y0, x1, y1, floor)]
+    level.spawners = [s for s in level.spawners if not _in(s, x0, y0, x1, y1, floor)]
+    for cy in range(y0, y1 + 1):
+        for cx in range(x0, x1 + 1):
+            dx, dy = cx - x, cy - y
+            for layer in SPAN_LAYERS:
+                level.set(grid_name(layer, floor), cx, cy, area.span[layer][dy][dx])
+            wall = area.walls.get((dx, dy))
+            if wall is not None:
+                if level.walls[cy][cx] and level.wall_floor(cx, cy) < floor:
+                    continue                            # (a lower floor's wall already fills this cell)
+                for layer, value in wall.items():
+                    level.set(layer, cx, cy, value)
+                level.set("wall_floor", cx, cy, floor)
+            elif _starts_on(level, cx, cy, floor):
+                _clear_wall(level, cx, cy)
+    inside = lambda t: x0 <= math.floor(t.x + x) <= x1 and y0 <= math.floor(t.y + y) <= y1
+    level.entities += [e.clone(x=e.x + x, y=e.y + y, span=floor) for e in area.entities if inside(e)]
+    level.spawners += [replace(s, x=s.x + x, y=s.y + y, span=floor) for s in area.spawners if inside(s)]
+    level.apply_prefabs()
 
 
 # --------------------------------------------------------------------------- bringing things in from another map

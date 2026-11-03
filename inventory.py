@@ -57,6 +57,16 @@ class Inventory:
                 return state
         return None
 
+    def refill(self):
+        """Fresh ammo for the guns already carried (a new bomb defusal round): every magazine full, no reload
+        under way, and each ammo type's spare rounds back to what a gun of that type comes with (the most of them
+        when several guns share the type)."""
+        spare = {}
+        for state in self.guns:
+            state.mag, state.reload_left, state.cooldown = state.gun.capacity, 0.0, 0.0
+            spare[state.gun.ammo] = max(spare.get(state.gun.ammo, 0), state.gun.start_ammo)
+        self.ammo.update(spare)
+
     def give_gun(self, gun):
         """Pick up a gun. A new one comes loaded, with its starting spare rounds added to its ammo type's
         pool, and is equipped if nothing is; one already owned just adds the starting rounds again."""

@@ -20,6 +20,7 @@ class PlayerStats:
     score: float = 0
     health: float = MAX_HEALTH
     max_health: float = MAX_HEALTH
+    money: float = 0
 
 
 @dataclass
