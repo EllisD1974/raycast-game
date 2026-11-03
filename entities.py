@@ -91,7 +91,8 @@ class Entities:
         e = item.entity
         if math.hypot(player.x - e.x, player.y - e.y) > TOUCH_RADIUS:
             return False
-        return player.z < item.z + e.size and player.z + PLAYER_HEIGHT > item.z      # the heights overlap
+        top = player.z + getattr(player, "height", PLAYER_HEIGHT)
+        return player.z < item.z + e.size and top > item.z      # the heights overlap
 
     def advance(self, dt):
         """Move the clock on dt seconds and bring back the respawning items whose time is up."""

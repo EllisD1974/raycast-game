@@ -22,7 +22,7 @@ import net
 from bomb import BOMB_TILE, RoundView, bomb_sprite
 from entities import Entities, PlayerStats
 from koth import HillView, hill_sprite
-from constants import PLAYER_HEIGHT
+from constants import CROUCH_HEIGHT, PLAYER_HEIGHT
 from game import (MAX_STEP_DT, NO_TEAM, Events, Inputs, PlayerState, character_sprite, character_tile_for, clean_name,
                   move_body, shown_name)
 from inventory import GunState, Inventory
@@ -320,7 +320,7 @@ class ClientSession:
         or defusing; in King of the Hill, not while waiting to respawn (looking around is always ours)."""
         if self.round is None or self.round.may_move(self.id, self.me.body, wish.use, self.level):
             return wish
-        return Inputs(turn=wish.turn, tilt=wish.tilt)
+        return Inputs(turn=wish.turn, tilt=wish.tilt, crouch=wish.crouch)
 
     def round_view(self):
         return self.round
@@ -333,7 +333,7 @@ class ClientSession:
             if self.round is not None and pid not in self.round.alive:
                 continue
             x, y, z, *angle = interpolate(samples, self.game_time - INTERP_DELAY)
-            out.append((pid, Player(x, y, z, angle[0] if angle else 0.0), shown_name(self.names.get(pid, ("", 0))[0], pid)))
+            out.append((pid, sample_body(x, y, z, *angle), shown_name(self.names.get(pid, ("", 0))[0], pid)))
         return out
 
     def out_of_round(self, pid):
@@ -407,7 +407,8 @@ class ClientSession:
         for pid, fields in players.items():
             if pid != self.id:
                 samples = self.history.setdefault(pid, [])
-                samples.append((now, fields[0], fields[1], fields[2], fields[3]))
+                crouched = fields[BODY_FIELDS.index("crouched")] if len(fields) > BODY_FIELDS.index("crouched") else False
+                samples.append((now, fields[0], fields[1], fields[2], fields[3], 1.0 if crouched else 0.0))
                 del samples[:-MAX_SAMPLES]
                 hit = fields[len(BODY_FIELDS)] if len(fields) > len(BODY_FIELDS) else 0.0
                 self.hits[pid] = (now, float(hit) if isinstance(hit, (int, float)) else 0.0)
@@ -463,8 +464,9 @@ class ClientSession:
                     continue
                 shown_at = self.game_time - INTERP_DELAY
                 x, y, z, *angle = interpolate(samples, shown_at)
-                body = Player(x, y, z, angle[0] if angle else 0.0)
-                tile = character_tile_for(self.character_tile, pid, self.me.body.angle, angle[0] if angle else None)
+                body = sample_body(x, y, z, *angle)
+                tile = character_tile_for(self.character_tile, pid, self.me.body.angle, angle[0] if angle else None,
+                                          body.crouched)
                 since, hit = self.hits.get(pid, (shown_at, 0.0))
                 sprite = character_sprite(body, self.character_tile, pid, hit=hit - max(0.0, shown_at - since))
                 sprites.append(sprite[:4] + (tile,) + sprite[5:])
@@ -480,9 +482,9 @@ class ClientSession:
         for pid, samples in self.history.items():
             if self.out_of_round(pid) or pid == hide:
                 continue
-            x, y, z, *_angle = interpolate(samples, self.game_time - INTERP_DELAY)
+            body = sample_body(*interpolate(samples, self.game_time - INTERP_DELAY))
             name, team = self.names.get(pid, ("", NO_TEAM))
-            out.append((x, y, z + PLAYER_HEIGHT, shown_name(name, pid), team))
+            out.append((body.x, body.y, body.z + body.height, shown_name(name, pid), team))
         return out
 
     def lighting(self):
@@ -516,7 +518,14 @@ def interpolate(samples, t):
 
 # ------------------------------------------------------------------ what goes in a snapshot
 
-BODY_FIELDS = ("x", "y", "z", "angle", "pitch", "span", "vx", "vy", "vz", "on_ground")
+BODY_FIELDS = ("x", "y", "z", "angle", "pitch", "span", "vx", "vy", "vz", "on_ground", "crouched", "view_h")
+
+
+def sample_body(x, y, z, angle=0.0, crouched=0.0):
+    """Another player's body as a joiner sees it, from an interpolated (x, y, z[, angle[, crouched]]) sample (crouched
+    is blended between 0 and 1 across a change: past halfway counts)."""
+    return Player(x, y, z, angle, crouched=crouched > 0.5,
+                  view_h=CROUCH_HEIGHT if crouched > 0.5 else PLAYER_HEIGHT)
 
 
 def body_fields(body):

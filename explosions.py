@@ -10,25 +10,32 @@ import math
 from constants import PLAYER_HEIGHT, PLAYER_RADIUS
 
 LIFT = 0.35                     # upward lean added to the throw, so a blast at your feet launches you up
-SAMPLES = (0.1, PLAYER_HEIGHT / 2, PLAYER_HEIGHT - 0.1)     # heights above the feet that are checked for cover
+SAMPLES = (0.1, 0.5, 1.0)       # where up the body (from the feet 0 to the head 1) is checked for cover, ends 0.1 in
+
+
+def height_of(body):
+    """How tall a player's body is now (shorter while crouched)."""
+    return getattr(body, "height", PLAYER_HEIGHT)
 
 
 def body_distance(x, y, z, body):
     """How far (x, y, z) is from the nearest point of the player's upright cylinder."""
     flat = max(0.0, math.hypot(x - body.x, y - body.y) - PLAYER_RADIUS)
-    up = max(body.z - z, z - (body.z + PLAYER_HEIGHT), 0.0)
+    up = max(body.z - z, z - (body.z + height_of(body)), 0.0)
     return math.hypot(flat, up)
 
 
 def exposure(world, x, y, z, body):
     """The share (0 to 1) of the player's body in sight of the blast."""
-    seen = sum(world.line_clear((x, y, z), (body.x, body.y, body.z + h)) for h in SAMPLES)
+    height = height_of(body)
+    seen = sum(world.line_clear((x, y, z), (body.x, body.y, body.z + min(max(f * height, 0.1), height - 0.1)))
+               for f in SAMPLES)
     return seen / len(SAMPLES)
 
 
 def throw(x, y, z, body, speed):
     """(vx, vy, vz) of a throw of `speed` from the blast at (x, y, z) to the player's middle, leaning upward."""
-    dx, dy, dz = body.x - x, body.y - y, body.z + PLAYER_HEIGHT / 2 - z + LIFT
+    dx, dy, dz = body.x - x, body.y - y, body.z + height_of(body) / 2 - z + LIFT
     length = math.sqrt(dx * dx + dy * dy + dz * dz)
     if length < 1e-9:
         return 0.0, 0.0, speed

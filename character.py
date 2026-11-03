@@ -2,9 +2,9 @@
 
 Sprites are tiles in the texture array, so these are made here and appended after the atlas's own
 tiles (see main.py). The pictures are drawn in assets/character.png (see make_character.py); each
-shirt color (so players can be told apart) gets its own copy with the shirt recolored, VIEWS
-pictures per shirt from the front round to the back, and the one drawn follows which way the player
-faces relative to the viewer.
+shirt color (so players can be told apart) gets its own copy with the shirt recolored: VIEWS
+pictures standing, from the front round to the back, then VIEWS crouching (PICTURES per shirt). The one
+drawn follows which way the player faces relative to the viewer, and whether they crouch.
 """
 import math
 import os
@@ -12,10 +12,13 @@ import os
 import pygame
 
 from constants import TILE
+from make_character import draw_crouched_view
 
 SHIRTS = [(200, 60, 60), (60, 120, 210), (70, 170, 80), (225, 190, 60),
           (160, 90, 200), (230, 130, 50), (70, 190, 190), (210, 210, 210)]
-VIEWS = 8                                           # pictures per shirt: 45 degrees apart
+VIEWS = 8                                           # pictures per pose: 45 degrees apart
+POSES = 2                                           # standing, crouching
+PICTURES = VIEWS * POSES                            # pictures per shirt
 SHEET_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "character.png")
 SHEET_TILE = 32                                     # the sheet's tiles; scaled to TILE when that differs
 SHEET_VIEWS = VIEWS // 2 + 1                        # front, turned, profile, turned away, back
@@ -23,15 +26,21 @@ SHIRT_MARK = (255, 0, 255)                          # the sheet's pixels of this
 
 
 def character_tiles(path=SHEET_PATH):
-    """VIEWS pictures per shirt color (shirt by shirt, see character_view), transparent around the figure."""
+    """PICTURES pictures per shirt color (shirt by shirt: VIEWS standing then VIEWS crouching, see character_view),
+    transparent around the figure. A sheet from before there were crouching pictures (one row) gets the ones
+    make_character.py draws."""
     sheet = pygame.image.load(path)
-    if sheet.get_width() != SHEET_TILE * SHEET_VIEWS or sheet.get_height() != SHEET_TILE:
-        raise ValueError(f"{path} should be {SHEET_VIEWS} tiles of {SHEET_TILE}x{SHEET_TILE} in one row")
+    if sheet.get_width() != SHEET_TILE * SHEET_VIEWS or sheet.get_height() not in (SHEET_TILE, SHEET_TILE * POSES):
+        raise ValueError(f"{path} should be {SHEET_VIEWS} tiles of {SHEET_TILE}x{SHEET_TILE} in a row, standing, "
+                         "and the same again crouching under them")
     sheet = sheet.convert_alpha() if pygame.display.get_surface() else sheet.convert(32, pygame.SRCALPHA)
-    turned = [sheet.subsurface((view * SHEET_TILE, 0, SHEET_TILE, SHEET_TILE)).copy() for view in range(SHEET_VIEWS)]
+    poses = [[sheet.subsurface((view * SHEET_TILE, row * SHEET_TILE, SHEET_TILE, SHEET_TILE)).copy()
+              for view in range(SHEET_VIEWS)] for row in range(sheet.get_height() // SHEET_TILE)]
+    if len(poses) < POSES:
+        poses.append([draw_crouched_view(view) for view in range(SHEET_VIEWS)])
     if SHEET_TILE != TILE:
-        turned = [pygame.transform.scale(view, (TILE, TILE)) for view in turned]
-    return [view for shirt in SHIRTS for view in draw_views(turned, shirt)]
+        poses = [[pygame.transform.scale(view, (TILE, TILE)) for view in pose] for pose in poses]
+    return [picture for shirt in SHIRTS for pose in poses for picture in draw_views(pose, shirt)]
 
 
 def character_view(viewer_angle, angle):

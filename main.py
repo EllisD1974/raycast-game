@@ -4,7 +4,7 @@ Run:  python make_atlas.py   (once: creates assets/textures.png, the 32x32 textu
       python main.py         the home screen: host a game (pick a map, a password and the most players), join one
                              (the host's IP address, port and password), or change the settings; then, in the game:
           mouse            look around (left/right turns, up/down tilts the view, up to 45 degrees)
-          WASD / arrows    move (the left/right arrows turn too); hold SHIFT to sprint
+          WASD / arrows    move (the left/right arrows turn too); hold SHIFT to sprint, CTRL to crouch
           SPACE jump, TAB let go of / take back the mouse, F11 fullscreen
           ESC the menu: resume, settings (mouse sensitivity, fullscreen), host settings (the host can
                         move everyone to another map) and exit
@@ -213,6 +213,11 @@ def read_movement(keys):
     turn = int(keys[pygame.K_RIGHT]) - int(keys[pygame.K_LEFT])
     sprint = bool(keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT])
     return forward, strafe, turn, sprint
+
+
+def read_crouch(keys):
+    """Whether either Ctrl key is held (crouch)."""
+    return bool(keys[pygame.K_LCTRL] or keys[pygame.K_RCTRL])
 
 
 def arg_values(flag, count):
@@ -466,7 +471,8 @@ def play(screen, clock, graphics, settings, session, map_path, from_home=False):
         mouse_turn, tilt = mouse.take()
         wish = Inputs(forward, strafe, key_turn * TURN_SPEED * dt + mouse_turn, tilt, jump_pressed, sprint,
                       mouse.captured and pygame.mouse.get_pressed()[0], reload_pressed, tuple(equips), cycle,
-                      tuple(buys), use=bool(pygame.key.get_pressed()[pygame.K_e]), drop=drop_pressed)
+                      tuple(buys), use=bool(pygame.key.get_pressed()[pygame.K_e]), drop=drop_pressed,
+                      crouch=read_crouch(pygame.key.get_pressed()))
         if menu.open:
             wish = Inputs()                                     # (the player stands still while in the menu)
         jump_pressed = reload_pressed = drop_pressed = False

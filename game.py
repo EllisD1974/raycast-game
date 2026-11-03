@@ -9,7 +9,7 @@ import random
 from dataclasses import dataclass, field
 
 from bomb import Round
-from character import SHIRTS, VIEWS, character_view
+from character import PICTURES, SHIRTS, VIEWS, character_view
 from constants import PLAYER_HEIGHT
 from entities import Entities, PlayerStats
 from explosions import blast_results
@@ -44,12 +44,13 @@ class Inputs:
     buy: tuple = ()                 # entries of the map's buy menu (0 based) to buy, in order
     use: bool = False               # the use key (E) is held: plants or defuses the bomb
     drop: bool = False              # throw the bomb (G), the way the player looks
+    crouch: bool = False            # Ctrl is held: crouch (see physics.set_crouch)
 
     def to_dict(self):
         return {"forward": self.forward, "strafe": self.strafe, "turn": self.turn, "tilt": self.tilt,
                 "jump": self.jump, "sprint": self.sprint, "fire": self.fire, "reload": self.reload,
                 "equip": list(self.equip), "cycle": self.cycle, "buy": list(self.buy), "use": self.use,
-                "drop": self.drop}
+                "drop": self.drop, "crouch": self.crouch}
 
     @classmethod
     def from_dict(cls, data):
@@ -67,13 +68,13 @@ class Inputs:
                    number("cycle", int, -9, 9),
                    tuple(i for i in buy if isinstance(i, int) and not isinstance(i, bool)
                          and 0 <= i < MAX_BUY_ITEMS)[:8] if isinstance(buy, (list, tuple)) else (),
-                   bool(data.get("use")), bool(data.get("drop")))
+                   bool(data.get("use")), bool(data.get("drop")), bool(data.get("crouch")))
 
 
 def move_body(world, body, wish, dt):
     """Move and turn a player's body by what `wish` asked for over dt seconds. A joiner runs this too,
     ahead of the host, to predict where its own moves will put it."""
-    step(world, body, wish.forward, wish.strafe, wish.turn, wish.jump, dt, wish.sprint)
+    step(world, body, wish.forward, wish.strafe, wish.turn, wish.jump, dt, wish.sprint, wish.crouch)
     look(body, wish.tilt)
 
 
@@ -88,11 +89,11 @@ def muzzle_event(effect, body, offset=None, shift=(0.0, 0.0, 0.0)):
     return event + tuple(offset) if offset is not None else event
 
 
-def character_tile_for(first_tile, player_id, viewer_angle=None, angle=None):
+def character_tile_for(first_tile, player_id, viewer_angle=None, angle=None, crouched=False):
     """The picture of a player seen by someone else: the shirt color follows their id, the side shown
     which way they face (`angle`) as seen looking along `viewer_angle` (the front if either is unknown)."""
     view = 0 if viewer_angle is None or angle is None else character_view(viewer_angle, angle)
-    return first_tile + (player_id % len(SHIRTS)) * VIEWS + view
+    return first_tile + (player_id % len(SHIRTS)) * PICTURES + (VIEWS if crouched else 0) + view
 
 
 def clean_name(text):
@@ -123,8 +124,10 @@ def hit_tint(hit):
 
 
 def character_sprite(body, first_tile, player_id, viewer_angle=None, hit=0.0):
-    """(x, y, z, size, tile) of a player seen by someone else, tinted red while `hit` (see hit_tint) lasts."""
-    sprite = (body.x, body.y, body.z, PLAYER_HEIGHT, character_tile_for(first_tile, player_id, viewer_angle, body.angle))
+    """(x, y, z, size, tile) of a player seen by someone else, tinted red while `hit` (see hit_tint) lasts. A crouching
+    player is drawn with the crouching pictures, on the same size of sprite (the figure in them is shorter)."""
+    sprite = (body.x, body.y, body.z, PLAYER_HEIGHT,
+              character_tile_for(first_tile, player_id, viewer_angle, body.angle, body.crouched))
     tint = hit_tint(hit)
     return sprite if tint is None else sprite + (0.0, 1.0, 0.0, tint)
 
@@ -429,7 +432,8 @@ class Game:
         self.clock += dt
         for state in self.players.values():
             state.hit = max(0.0, state.hit - dt)
-        targets = [(pid, state.body.x, state.body.y, state.body.z) for pid, state in self.players.items() if state.alive]
+        targets = [(pid, state.body.x, state.body.y, state.body.z, state.body.height)
+                   for pid, state in self.players.items() if state.alive]
         for hit in self.projectiles.update(self.world, dt, targets):
             for effect in hit.effects:                  # sprays back the way the bullet came
                 self.fx.append((effect, hit.x, hit.y, hit.z, -hit.dx, -hit.dy, -hit.dz))
@@ -467,7 +471,7 @@ class Game:
 
     def labels(self, viewer=None, hide=None):
         """(x, y, z of the top of the head, name, team) of each player other than `viewer`, for their names."""
-        return [(s.body.x, s.body.y, s.body.z + PLAYER_HEIGHT, shown_name(s.name, pid), s.team)
+        return [(s.body.x, s.body.y, s.body.z + s.body.height, shown_name(s.name, pid), s.team)
                 for pid, s in self.players.items() if pid not in (viewer, hide) and s.alive]
 
     def player_sprites(self, viewer=None, hide=None):

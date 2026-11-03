@@ -239,7 +239,7 @@ round time runs out without a plant. A player knocked out stays out until the ne
   who lived keeping what they carry (with every gun's magazine full and its spare rounds back to what the gun comes
   with), the others coming back with the starting gun.
 - **The bomb**: hold `E` standing in a bomb site to plant it (you cannot move meanwhile; letting go starts over).
-  `G` drops it; it also drops where its carrier is knocked out, and any T walking over it picks it up. A CT holds `E`
+  `G` throws it the way you look; it also drops where its carrier is knocked out, and any T walking over it picks it up. A CT holds `E`
   at the planted bomb to defuse it, faster with a **Defuse kit** (an inventory item of that name: sell it in the buy
   menu). The explosion hurts everyone in its radius, most at the bomb, through walls.
 - **Buying**: the buy menu is open during the freeze time and the buy time after it.

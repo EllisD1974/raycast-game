@@ -15,7 +15,7 @@ import net
 import physics
 import session
 from atlas import unpack_atlas
-from character import SHIRTS, VIEWS, character_tiles, character_view
+from character import PICTURES, SHIRTS, VIEWS, character_tiles, character_view
 from game import Game, Inputs
 from mapfile import Entity, Gun, Level
 from session import ClientSession, HostSession, LocalSession
@@ -183,10 +183,10 @@ def test_the_joiners_keys_move_them_on_the_host(host_session):
 def test_each_sees_the_other_as_a_character(host_session):
     client = join(host_session)
     run([host_session, client], until=lambda: client.history)
-    assert [(s[4] - FIRST_CHARACTER) // VIEWS for s in client.sprites() if s[4] >= FIRST_CHARACTER] == [0]    # the host: id 0
+    assert [(s[4] - FIRST_CHARACTER) // PICTURES for s in client.sprites() if s[4] >= FIRST_CHARACTER] == [0]    # the host: id 0
     assert all(s[3] == pytest.approx(0.8) for s in client.sprites() if s[4] >= FIRST_CHARACTER)
     seen_by_host = [s for s in host_session.sprites() if s[4] >= FIRST_CHARACTER]
-    assert [(s[4] - FIRST_CHARACTER) // VIEWS for s in seen_by_host] == [1]
+    assert [(s[4] - FIRST_CHARACTER) // PICTURES for s in seen_by_host] == [1]
     assert seen_by_host[0][:2] == (host_session.game.players[1].body.x, host_session.game.players[1].body.y)
 
 
@@ -297,7 +297,7 @@ def test_other_players_are_drawn_a_little_in_the_past(host_session):
     client = join(host_session)
     client.history = {5: [(1.0, 0.0, 2.0, 0.0), (2.0, 10.0, 2.0, 0.0)]}
     client.game_time = 1.5 + session.INTERP_DELAY
-    drawn = [s for s in client.sprites() if (s[4] - FIRST_CHARACTER) // VIEWS == 5 and s[4] >= FIRST_CHARACTER]
+    drawn = [s for s in client.sprites() if (s[4] - FIRST_CHARACTER) // PICTURES == 5 and s[4] >= FIRST_CHARACTER]
     assert len(drawn) == 1 and drawn[0][:3] == pytest.approx((5.0, 2.0, 0.0))
 
 
@@ -363,16 +363,18 @@ def test_junk_from_a_joiner_does_not_hurt_the_host(host_session):
 
 def test_character_pictures_are_see_through_around_the_figure():
     tiles = character_tiles()
-    assert len(tiles) == len(SHIRTS) * VIEWS
-    for tile in tiles:
-        assert tile.get_at((0, 0)).a == 0 and tile.get_at((16, 8)).a == 255      # corner empty, head solid
+    assert len(tiles) == len(SHIRTS) * PICTURES
+    for i, tile in enumerate(tiles):
+        head = (16, 8) if i % PICTURES < VIEWS else (16, 14)                    # (a crouching head is lower)
+        assert tile.get_at((0, 0)).a == 0 and tile.get_at(head).a == 255       # corner empty, head solid
 
 
 def test_each_shirt_color_replaces_the_sheets_marker():
     tiles = character_tiles()
-    for shirt, first in zip(SHIRTS, range(0, len(tiles), VIEWS)):
-        pixels = {tuple(tiles[first].get_at((x, y)))[:3] for x in range(32) for y in range(32)}
-        assert shirt in pixels and (255, 0, 255) not in pixels
+    for shirt, first in zip(SHIRTS, range(0, len(tiles), PICTURES)):
+        for picture in (tiles[first], tiles[first + VIEWS]):                     # standing and crouching
+            pixels = {tuple(picture.get_at((x, y)))[:3] for x in range(32) for y in range(32)}
+            assert shirt in pixels and (255, 0, 255) not in pixels
 
 
 def test_the_side_shown_follows_which_way_they_face():
@@ -389,7 +391,7 @@ def test_the_picture_drawn_turns_with_the_other_player(host_session):
     client.history = {1: [(1.0, 0.0, 2.0, 0.0, 0.0), (2.0, 0.0, 2.0, 0.0, 0.0)]}
     client.game_time = 1.5 + session.INTERP_DELAY
     client.me.body.angle = 0.0
-    drawn = lambda: [s[4] for s in client.sprites() if s[4] >= FIRST_CHARACTER][0] - FIRST_CHARACTER - VIEWS
+    drawn = lambda: [s[4] for s in client.sprites() if s[4] >= FIRST_CHARACTER][0] - FIRST_CHARACTER - PICTURES
     assert drawn() == 4                                                 # they face the way we look: their back
     client.me.body.angle = math.pi
     assert drawn() == 0
