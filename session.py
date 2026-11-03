@@ -296,7 +296,7 @@ class ClientSession:
             ours = self.predicted(wish)
             self.pending.append((self.seq, ours, dt))
             self.sent_at[self.seq] = time.monotonic()
-            move_body(self.world, self.me.body, ours, dt)
+            move_body(self.world.for_team(self.me.team), self.me.body, ours, dt)
         if self.items:
             self.items.clock += dt              # (only the bobbing: the host decides what is picked up)
         if self.game_time is not None:
@@ -393,7 +393,7 @@ class ClientSession:
         self.sent_at = {seq: t for seq, t in self.sent_at.items() if seq > mine["ack"]}
         self.pending = [step for step in self.pending if step[0] > mine["ack"]]
         for _, wish, dt in self.pending:
-            move_body(self.world, body, wish, dt)
+            move_body(self.world.for_team(self.me.team), body, wish, dt)
         self.me.body = body
         money = mine.get("money", 0.0)
         self.me.stats = PlayerStats(mine["score"], mine["health"], mine["max_health"],

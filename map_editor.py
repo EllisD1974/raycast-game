@@ -210,7 +210,7 @@ from mapfile import (ANIMATION_KINDS, ANIMATION_LABELS, DEFAULTS, EDIT_LAYERS, E
                      things_named, with_needs, area_rect, clear_area, copy_area, paste_area,
                      BUY_COST_LABELS, BUY_COSTS, BUY_KIND_LABELS, BUY_KINDS, GAME_MODE_LABELS, GAME_MODES, MAX_BUY_ITEMS,
                      BOMB_NUMBERS, SITE_NAMES, SPAWN_TEAMS, SPAWN_TEAM_LABELS, CT_TEAM, T_TEAM,
-                     HILL_SITE, KOTH_NAMES, KOTH_NUMBERS,
+                     BARRIER_SITES, HILL_SITE, KOTH_NAMES, KOTH_NUMBERS,
                      MAX_MONEY, BuyItem)
 from buymenu import entry_tile, price_text
 import details
@@ -282,9 +282,12 @@ VALUE_LAYERS = ROOM_HEIGHT_LAYERS + ("wall_h",)             # every layer painte
 LAYER_LABELS = {"walls": "Walls", "floor_tex": "FloorTex", "ceil_tex": "CeilTex",
                 "floor_h": "FloorH", "ceil_h": "CeilH", "ramp": "Ramps", "site": "Sites", "wall_h": "WallH",
                 "sides": "WallSide"}
-SITE_COLORS = {1: (255, 150, 40), 2: (60, 200, 255), HILL_SITE: (110, 225, 110)}   # bomb sites A, B and the hill
-SITE_MARKS = {1: "A", 2: "B", HILL_SITE: "H"}                 # ... and their letters on the Sites layer
-SITE_BRUSHES = {1: "bomb site A", 2: "bomb site B", HILL_SITE: "the hill (King of the Hill's capture point)"}
+SITE_COLORS = {1: (255, 150, 40), 2: (60, 200, 255), HILL_SITE: (110, 225, 110),      # bomb sites A, B, the hill
+               4: (235, 80, 60), 5: (70, 120, 255)}                                     # and the barriers
+SITE_MARKS = {1: "A", 2: "B", HILL_SITE: "H", 4: "|1", 5: "|2"}  # ... and their marks on the Sites layer
+SITE_BRUSHES = {1: "bomb site A", 2: "bomb site B", HILL_SITE: "the hill (King of the Hill's capture point)",
+                4: "a barrier only team 1 (T, RED) and its bullets get through (ground floor)",
+                5: "a barrier only team 2 (CT, BLU) and its bullets get through (ground floor)"}
 SPAWN_TEAM_FILLS = {0: (90, 170, 255), T_TEAM: (235, 160, 60), CT_TEAM: (80, 140, 255)}   # spawn points by team
 # Bomb defusal settings in the Map settings section: (label, step) for each number, in the order shown.
 BOMB_FIELDS = (("freeze_time", "Freeze time (s)", 1.0), ("round_time", "Round time (s)", 5.0),
@@ -1836,8 +1839,8 @@ class Editor:
         elif self.layer == "ramp":
             row2 += [("btn", "Rotate(R)", "dir"), ("txt", f"rises {RAMP_NAMES[self.ramp_dir]}", ACCENT)]
         elif self.layer == "site":
-            row2 += [("btn", "A / B / Hill (R)", "dir"), ("txt", f"paints {SITE_BRUSHES[self.site_brush]}", ACCENT),
-                     ("txt", "erase (E) clears; used by Bomb defusal and King of the Hill (Map settings)", DIM)]
+            row2 += [("btn", "A / B / Hill / Barrier (R)", "dir"),
+                     ("txt", f"paints {SITE_BRUSHES[self.site_brush]}", ACCENT), ("txt", "erase (E) clears", DIM)]
         elif self.layer == "sides":
             row2 += [("btn", "From-", "side_from-"), ("btn", "From+", "side_from+"),
                      ("txt", f"from {fmt(self.side_from)}", ACCENT),
@@ -2175,6 +2178,8 @@ class Editor:
             level.set(self.gname(), cx, cy, self.brush_value())        # base (FloorH) or top (CeilH) of the wall
         elif layer in ROOM_HEIGHT_LAYERS:
             self.set_height(cx, cy, layer, self.brush_value())
+        elif layer == "site" and self.brush_value() in BARRIER_SITES and self.floor > 0:
+            self.say("Barriers only work on the ground floor (floor 1)")
         else:
             level.set(self.gname(), cx, cy, self.brush_value())
 
@@ -2276,6 +2281,9 @@ class Editor:
                 level.set("wall_h", x, y, value)
             return
         if not level.in_bounds(*cell) or level.get(grid, *cell) == value:
+            return
+        if self.layer == "site" and value in BARRIER_SITES and self.floor > 0:
+            self.say("Barriers only work on the ground floor (floor 1)")
             return
         self.begin_edit()
         if self.layer in ROOM_HEIGHT_LAYERS and self.floor >= 1:
@@ -4972,6 +4980,8 @@ class Editor:
             entries.append(("site_a", "Bomb site A (plant here)"))
             entries.append(("site_b", "Bomb site B (plant here)"))
             entries.append(("site_hill", "Hill: King of the Hill point"))
+            entries.append(("site_bar1", "Barrier: only team 1 passes"))
+            entries.append(("site_bar2", "Barrier: only team 2 passes"))
         if self.layer in VALUE_LAYERS or self.layer in ("ramp", "site"):
             entries.append(("heat", "Height: blue low, yellow high"))
         return entries
@@ -5072,8 +5082,8 @@ class Editor:
         elif kind == "ramp":
             pygame.draw.rect(screen, tuple(c // 2 for c in heat(1.0, *HEIGHT_RANGE["floor_h"])), box)
             self.draw_arrow(screen, box, 1, ACCENT)
-        elif kind in ("site_a", "site_b", "site_hill"):
-            site = {"site_a": 1, "site_b": 2, "site_hill": HILL_SITE}[kind]
+        elif kind in ("site_a", "site_b", "site_hill", "site_bar1", "site_bar2"):
+            site = {"site_a": 1, "site_b": 2, "site_hill": HILL_SITE, "site_bar1": 4, "site_bar2": 5}[kind]
             pygame.draw.rect(screen, SITE_COLORS[site], box)
             text = self.small.render(SITE_MARKS[site], True, (10, 10, 20))
             screen.blit(text, text.get_rect(center=box.center))

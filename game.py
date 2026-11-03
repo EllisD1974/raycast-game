@@ -353,10 +353,10 @@ class Game:
             inventory.equip(slot)
         if wish.cycle:
             inventory.cycle(wish.cycle)
-        move_body(self.world, body, wish, dt)
+        move_body(self.world.for_team(state.team), body, wish, dt)     # (through their own team's barriers only)
         fired = inventory.update(dt, wish.fire, wish.reload)
         for gun in fired:
-            self.projectiles.fire(body, gun, self.level.ammo_for(gun), player_id)
+            self.projectiles.fire(body, gun, self.level.ammo_for(gun), player_id, state.team)
             shift = muzzle_shift(gun, body.angle)
             if gun.muzzle:
                 self.fx.append(muzzle_event(gun.muzzle, body, (gun.muzzle_offset_x, gun.muzzle_offset_y, gun.muzzle_offset_z)

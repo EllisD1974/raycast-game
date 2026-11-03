@@ -294,6 +294,17 @@ All of these are **Map settings** with King of the Hill chosen. In the editor, p
 RED or BLU, and the buy menu works as in the other modes. The marker's pictures are tiles 27-29 of `textures.png`
 (neutral, RED, BLU).
 
+## Barriers (spawn protection)
+
+A barrier lets one team through and stops everyone else, as Team Fortress 2's spawn room doors do: that team's players
+walk through it and its bullets fly through it, while other teams' players, and their bullets, are stopped as by glass.
+Blasts, the bomb and particles do not go through it at all, and a player on no team (free for all) is always stopped.
+It is drawn as a see-through, striped field in the team's color (tiles 30 and 31 of `textures.png`).
+
+In the editor, paint barriers on the **Sites** layer (`9`): `R` steps through bomb site A, B, the hill, then **barrier
+team 1** (T, RED; marked |1) and **barrier team 2** (CT, BLU; marked |2). Put them across the doorways of a team's spawn
+room. Barriers only work on the ground floor (floor 1); they fill its room from floor to ceiling.
+
 ## Layout
 
     main.py, map_editor.py, ...   game and editor source

@@ -23,7 +23,9 @@ cells where you give it a room; between two floors lies solid material (the floo
     ceil_tex      tile id of the ceiling (also the drop where a ceiling gets lower)
     ramp          0 = none, else the direction the floor rises: 1 east, 2 west, 3 south, 4 north
     site          0 = none, else the bomb site the floor belongs to (bomb defusal): 1 A, 2 B. The bomb can be
-                  planted standing on it. 3 (HILL_SITE): the capture point of King of the Hill.
+                  planted standing on it. 3 (HILL_SITE): the capture point of King of the Hill. 4 / 5
+                  (BARRIER_SITES, ground floor only): a barrier only team 1 / team 2, and its bullets, get through
+                  (spawn protection; see world.World).
 
 Entities (items in the world) are not a grid: the level keeps a list of them, each with a position,
 the floor it stands on, a sprite tile, what happens when the player touches it and how it behaves
@@ -52,9 +54,10 @@ MAX_NAME_LENGTH = 24
 MIN_WALL_GAP = 0.05             # a wall this close to the ceiling is just a full-height wall
 
 SPAN_LAYERS = ("floor_tex", "ceil_tex", "floor_h", "ceil_h", "ramp", "site")
-SITE_NAMES = {1: "A", 2: "B", 3: "Hill"}                        # values of the site layer (0: not a site)
+SITE_NAMES = {1: "A", 2: "B", 3: "Hill", 4: "Barrier 1", 5: "Barrier 2"}    # values of the site layer (0: none)
 BOMB_SITES = (1, 2)                                             # ... where the bomb can be planted
-HILL_SITE = 3                                                   # ... and King of the Hill's capture point
+HILL_SITE = 3                                                   # ... King of the Hill's capture point
+BARRIER_SITES = {4: 1, 5: 2}                                    # ... and barriers: value -> the team they let through
 SIDES = "nesw"                                                  # the four sides of a cell: north, east, south, west
 SIDE_LAYERS = tuple(f"side_{side}" for side in SIDES)           # a wall's own texture on one side (0: the wall's tile)
 # The heights above the wall's base that a side's own texture covers, from and to (to 0: up to the top).

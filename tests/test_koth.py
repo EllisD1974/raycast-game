@@ -393,7 +393,7 @@ def test_the_sites_layer_paints_the_hill_too(tmp_path):
     ed.paint_at(3, 3)
     assert ed.level.get("site", 3, 3) == HILL_SITE
     ed.do("dir")
-    assert ed.brush_value() == 1                                    # R goes round A, B, the hill
+    assert ed.brush_value() == HILL_SITE + 1                        # R goes on from the hill to the barriers
 
 
 def test_the_map_settings_show_the_hill_settings_only_in_king_of_the_hill(tmp_path):

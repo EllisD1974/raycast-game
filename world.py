@@ -1,17 +1,24 @@
 """A Level turned into numpy arrays: what the renderer and the physics read."""
+import copy
 import math
 
 import numpy as np
 
 from constants import STEP_HEIGHT
-from mapfile import SIDE_LAYERS, SIDES, grid_name, side_band
+from mapfile import BARRIER_SITES, SIDE_LAYERS, SIDES, grid_name, side_band
 from raykernel import plane_z
 
 EPS = 1e-6
+BARRIER_TILES = {1: 29, 2: 30}      # the see-through pane a barrier of team 1 / 2 is drawn with (atlas tile ids 30, 31)
 
 
 class World:
-    """Arrays for every floor of a level; the first axis of the per-floor arrays is the floor."""
+    """Arrays for every floor of a level; the first axis of the per-floor arrays is the floor.
+
+    A barrier (the site layer's BARRIER_SITES on the ground floor; spawn protection) lets only one team through: its
+    players walk through it and its bullets fly through it, while it stops everyone and everything else like glass.
+    for_team(team) is the world as that team's players and bullets meet it; the World itself (team None) is how
+    everything else meets it (blasts, the bomb, particles), which no barrier lets through."""
 
     def __init__(self, level, tile_count, transparent_tiles=None):
         """`transparent_tiles` is a boolean per atlas tile (see atlas.transparent_tiles): walls
@@ -57,6 +64,38 @@ class World:
         # floor leaves the floors below it open. The renderer and span_at read this.
         self.solid_from = np.where(self.solid != 0, wall_floor, floors).astype(np.int32)
         self._hang_upper_walls(level, wall_floor)
+        self.team = None                                        # the team this world lets through barriers
+        self._teams = {None: self}                              # team -> its for_team view (shared by all views)
+        self.barrier = np.zeros((h, w), np.int32)               # the team a ground floor barrier lets through, or 0
+        self._add_barriers(level, tile_count)
+        self.has_barriers = bool(self.barrier.any())
+
+    def _add_barriers(self, level, tile_count):
+        """Barriers on the ground floor: open cells that only their team gets through, drawn as a see-through pane
+        of the team's color (when the atlas has that tile)."""
+        for y, row in enumerate(level.grids.get(grid_name("site", 0), [])):
+            for x, value in enumerate(row):
+                team = BARRIER_SITES.get(value)
+                if not team or not self.span_on[0, y, x] or self.solid_from[y, x] == 0:
+                    continue
+                self.barrier[y, x] = team
+                if self.pane_tex[y, x] < 0 and BARRIER_TILES[team] < tile_count:
+                    self.pane_tex[y, x] = BARRIER_TILES[team]
+
+    def for_team(self, team):
+        """This world as the players and bullets of `team` meet it: its barriers let them through, the others' stop
+        them. It shares every array with this one (nothing is copied but the team)."""
+        view = self._teams.get(team)
+        if view is None:
+            view = copy.copy(self)
+            view.team = team
+            self._teams[team] = view
+        return view
+
+    def barred(self, cx, cy):
+        """True if a barrier in cell (cx, cy) stops this world's team."""
+        team = self.barrier[cy, cx]
+        return bool(team) and team != self.team
 
     def _hang_upper_walls(self, level, wall_floor):
         """A wall that starts on a higher floor has its base at that floor's floor height. The rooms
@@ -131,7 +170,10 @@ class World:
         cx, cy = math.floor(x), math.floor(y)
         if not (0 <= cx < self.width and 0 <= cy < self.height):
             return False
-        if self.pane_tex[cy, cx] >= 0 and z < self.pane_top[cy, cx]:
+        if self.barrier[cy, cx]:
+            if self.barred(cx, cy) and z < plane_z(self.ceil_plane, 0, cx, cy, x - cx, y - cy):
+                return False                    # (a barrier fills the ground floor's room, not the floors above)
+        elif self.pane_tex[cy, cx] >= 0 and z < self.pane_top[cy, cx]:
             return False
         fx, fy = x - cx, y - cy
         for s in range(self.floors):
@@ -173,7 +215,15 @@ class World:
         player's feet, preferring `current` if it does. Sticking to the floor under the player's
         center would be wrong over a hole in one floor: the far side of the hole would then be
         judged against the floor below, whose ceiling there is inside the slab the player is
-        jumping onto, and the jump would be stopped dead."""
+        jumping onto, and the jump would be stopped dead.
+
+        A barrier that does not let this world's team through blocks the ground floor of its cell (only)."""
+        s = self._span_at(x, y, z, current, grounded)
+        if s == 0 and self.has_barriers and self.barred(math.floor(x), math.floor(y)):
+            return -1
+        return s
+
+    def _span_at(self, x, y, z, current=None, grounded=True):
         cx, cy = math.floor(x), math.floor(y)
         if self.is_blocked(cx, cy):
             return -1
