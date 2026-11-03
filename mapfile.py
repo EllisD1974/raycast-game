@@ -23,7 +23,9 @@ cells where you give it a room; between two floors lies solid material (the floo
     ceil_tex      tile id of the ceiling (also the drop where a ceiling gets lower)
     ramp          0 = none, else the direction the floor rises: 1 east, 2 west, 3 south, 4 north
     site          0 = none, else the bomb site the floor belongs to (bomb defusal): 1 A, 2 B. The bomb can be
-                  planted standing on it.
+                  planted standing on it. 3 (HILL_SITE): the capture point of King of the Hill. 4 / 5
+                  (BARRIER_SITES, ground floor only): a barrier only team 1 / team 2, and its bullets, get through
+                  (spawn protection; see world.World).
 
 Entities (items in the world) are not a grid: the level keeps a list of them, each with a position,
 the floor it stands on, a sprite tile, what happens when the player touches it and how it behaves
@@ -52,7 +54,10 @@ MAX_NAME_LENGTH = 24
 MIN_WALL_GAP = 0.05             # a wall this close to the ceiling is just a full-height wall
 
 SPAN_LAYERS = ("floor_tex", "ceil_tex", "floor_h", "ceil_h", "ramp", "site")
-SITE_NAMES = {1: "A", 2: "B"}                                   # values of the site layer (0: not a bomb site)
+SITE_NAMES = {1: "A", 2: "B", 3: "Hill", 4: "Barrier 1", 5: "Barrier 2"}    # values of the site layer (0: none)
+BOMB_SITES = (1, 2)                                             # ... where the bomb can be planted
+HILL_SITE = 3                                                   # ... King of the Hill's capture point
+BARRIER_SITES = {4: 1, 5: 2}                                    # ... and barriers: value -> the team they let through
 SIDES = "nesw"                                                  # the four sides of a cell: north, east, south, west
 SIDE_LAYERS = tuple(f"side_{side}" for side in SIDES)           # a wall's own texture on one side (0: the wall's tile)
 # The heights above the wall's base that a side's own texture covers, from and to (to 0: up to the top).
@@ -102,6 +107,7 @@ TEAM_NAMES = {T_TEAM: "T", CT_TEAM: "CT"}
 TEAM_TITLES = {T_TEAM: "Terrorists", CT_TEAM: "Counter-Terrorists"}
 SPAWN_TEAMS = (0, T_TEAM, CT_TEAM)
 SPAWN_TEAM_LABELS = {0: "Any team", T_TEAM: "T", CT_TEAM: "CT"}
+KOTH_NAMES = {T_TEAM: "RED", CT_TEAM: "BLU"}    # King of the Hill: team 1 is RED, team 2 BLU (as in Team Fortress 2)
 
 
 @dataclass
@@ -583,8 +589,9 @@ class Entity:
                        elevation=max(-MAX_ELEVATION, min(MAX_ELEVATION, float(data.get("elevation", 0.0)))))
 
 
-GAME_MODES = ("ffa", "teams", "coop", "bomb")
-GAME_MODE_LABELS = {"ffa": "Free for all", "teams": "Two teams", "coop": "Co-op", "bomb": "Bomb defusal"}
+GAME_MODES = ("ffa", "teams", "coop", "bomb", "koth")
+GAME_MODE_LABELS = {"ffa": "Free for all", "teams": "Two teams", "coop": "Co-op", "bomb": "Bomb defusal",
+                    "koth": "King of the Hill"}
 BUY_COSTS = ("free", "money", "score")
 BUY_COST_LABELS = {"free": "Free", "money": "Money", "score": "Score"}
 BUY_KINDS = ("gun", "item", "health")         # (no ammo: guns come with theirs, filled up each bomb defusal round)
@@ -600,6 +607,10 @@ BOMB_NUMBERS = {"freeze_time": (0.0, 120.0), "round_time": (10.0, 1800.0), "buy_
                 "bomb_win_money": (0.0, MAX_MONEY), "loss_money": (0.0, MAX_MONEY), "loss_bonus": (0.0, MAX_MONEY),
                 "max_loss_money": (0.0, MAX_MONEY), "plant_money": (0.0, MAX_MONEY),
                 "objective_money": (0.0, MAX_MONEY), "money_cap": (0.0, MAX_MONEY)}
+# King of the Hill settings: (lowest, highest). Their defaults are Team Fortress 2's.
+KOTH_NUMBERS = {"hill_time": (10.0, 3600.0), "unlock_time": (0.0, 600.0), "capture_time": (0.5, 300.0),
+                "capture_bonus": (0.0, 600.0), "decay_time": (1.0, 600.0), "respawn_time": (0.0, 60.0),
+                "win_limit": (1.0, 99.0)}
 
 
 @dataclass
@@ -690,7 +701,19 @@ class MapSettings:
                      lost in a row before this one, at most max_loss_money
     plant_money      every T gets this when the bomb was planted but they lost the round
     objective_money  the player who plants, or defuses, the bomb gets this
-    money_cap        nobody can have more money than this"""
+    money_cap        nobody can have more money than this
+
+    King of the Hill (mode "koth", see koth.py): team 1 (RED) and team 2 (BLU) fight over one capture point (the
+    site layer's HILL_SITE cells). Owning it runs down the owner's own clock; the first team whose clock reaches
+    zero wins the round. Defaults are Team Fortress 2's, but for capture_bonus, which it does not have.
+    hill_time        each team's clock at the start of a round
+    unlock_time      the point is locked (nobody can capture it) this long after a round starts
+    capture_time     how long one player standing on the point alone takes to capture it (more players are faster)
+    capture_bonus    seconds added to a team's clock (up to hill_time) each time it captures the point
+    decay_time       how long capture progress takes to drain away when nobody stands on the point
+    respawn_time     how long a knocked out player waits before coming back at their team's spawn points
+    win_limit        rounds a team has to win to win the match (a new match then starts)
+    round_end_time   (shared with bomb defusal) the pause after a round is won, before the next one"""
     mode: str = "ffa"
     friendly_fire: bool = False
     max_health: float = 100.0
@@ -722,6 +745,13 @@ class MapSettings:
     plant_money: float = 800.0
     objective_money: float = 300.0
     money_cap: float = 16000.0
+    hill_time: float = 180.0
+    unlock_time: float = 30.0
+    capture_time: float = 10.0
+    capture_bonus: float = 10.0
+    decay_time: float = 90.0
+    respawn_time: float = 5.0
+    win_limit: float = 2.0
 
     def copy(self):
         return replace(self, buy_items=[replace(b) for b in self.buy_items])
@@ -731,8 +761,8 @@ class MapSettings:
         return (self.buy_menu and self.buy_cost == "money") or self.start_money > 0 or self.kill_money > 0
 
     def has_teams(self):
-        """True if players are split into two teams (two teams, and bomb defusal)."""
-        return self.mode in ("teams", "bomb")
+        """True if players are split into two teams (two teams, bomb defusal and King of the Hill)."""
+        return self.mode in ("teams", "bomb", "koth")
 
     def to_dict(self):
         return asdict(self)
@@ -762,7 +792,8 @@ class MapSettings:
                    if isinstance(items, list) else [],
                    bomb_effect=str(data.get("bomb_effect", ""))[:MAX_NAME],
                    bomb_light=str(data.get("bomb_light", ""))[:MAX_NAME],
-                   **{key: number(key, low, high) for key, (low, high) in BOMB_NUMBERS.items()})
+                   **{key: number(key, low, high) for key, (low, high) in BOMB_NUMBERS.items()},
+                   **{key: number(key, low, high) for key, (low, high) in KOTH_NUMBERS.items()})
 
 
 def mounted_position(cx, cy, wall):
@@ -1441,7 +1472,7 @@ def level_text(level):
     for name in level.grid_names():
         if (name in SIDE_LAYERS + SIDE_BAND_LAYERS or split_grid_name(name)[0] == "site") \
                 and not any(any(row) for row in level.grids[name]):
-            continue                                # (no wall has a texture of its own on that side; no bomb site)
+            continue                                # (no wall has a texture of its own on that side; no site)
         rows = ",\n".join("      " + json.dumps(row) for row in level.grids[name])
         blocks.append(f'    "{name}": [\n{rows}\n    ]')
     start = {"x": level.start_x, "y": level.start_y, "angle": level.start_angle,

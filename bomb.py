@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 
 from constants import GRAVITY
 
-from mapfile import CT_TEAM, DEFUSE_KIT, MAX_MONEY, SITE_NAMES, T_TEAM, TEAM_TITLES, grid_name
+from mapfile import BOMB_SITES, CT_TEAM, DEFUSE_KIT, MAX_MONEY, SITE_NAMES, T_TEAM, TEAM_TITLES, grid_name
 
 BOMB_REACH = 0.6                # how close (cells) a T has to walk to a dropped bomb to pick it up
 DEFUSE_REACH = 1.0              # how close (cells, across) a CT has to stand to the bomb to defuse it
@@ -47,13 +47,19 @@ def clock_text(seconds):
     return f"{seconds // 60}:{seconds % 60:02d}"
 
 
-def site_under(level, body):
-    """The bomb site (1 A, 2 B) of the floor a player stands on, 0 for none."""
+def area_under(level, body):
+    """The site layer's value (a bomb site, King of the Hill's point) of the floor a player stands on, 0 for none."""
     x, y = int(math.floor(body.x)), int(math.floor(body.y))
     name = grid_name("site", body.span)
     if name not in level.grids or not level.in_bounds(x, y):
         return 0
     return level.grids[name][y][x]
+
+
+def site_under(level, body):
+    """The bomb site (1 A, 2 B) of the floor a player stands on, 0 for none."""
+    site = area_under(level, body)
+    return site if site in BOMB_SITES else 0
 
 
 def bomb_damage(settings, distance):
@@ -145,6 +151,9 @@ class RoundView:
     can_buy: bool = True
     message: str = ""               # the last round's result, or the match's
     message_left: float = 0.0
+
+    def may_move(self, pid, body, use, level):
+        return may_move(self, pid, body, use, level)
 
     def to_dict(self):
         b = self.bomb
@@ -515,10 +524,11 @@ class Round:
                     return
             self.decide()
 
-    def sprite(self, tile, clock):
+    def sprites(self, clock):
         """The bomb as the renderer draws it, when it lies on the ground or is planted (blinking faster as it runs
-        out), else None."""
-        return bomb_sprite(self.bomb, tile, clock)
+        out): a list of none or one sprite."""
+        bomb = bomb_sprite(self.bomb, BOMB_TILE, clock)
+        return [bomb] if bomb else []
 
 
 def bomb_sprite(bomb, tile, clock):

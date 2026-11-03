@@ -1,7 +1,8 @@
 """Bullets in flight. No pygame: main.py draws them as sprites that face the player.
 
 A projectile flies in a straight line, in small steps so it cannot skip through a thin wall, until
-it runs out of range or is no longer in open space (inside a wall, a floor, a ceiling or glass).
+it runs out of range or is no longer in open space (inside a wall, a floor, a ceiling, glass or another
+team's barrier).
 A bullet also stops in any player it passes through other than the one who fired it (a player is an
 upright cylinder PLAYER_RADIUS wide and PLAYER_HEIGHT tall). Either way a hit removes the bullet and is
 reported (position, the damage it carries, who fired it and who it struck) for the game to act on.
@@ -47,6 +48,7 @@ class Projectile:
     world_effects: tuple = ()   # ... and where it strikes anything else
     world_lights: tuple = ()
     blast: AmmoType = None      # the ammo type it explodes as when it strikes something, None if it does not
+    team: int = None            # the team of the player who fired it: that team's barriers let it through (None: none do)
 
 
 def struck_player(targets, owner, x, y, z):
@@ -80,16 +82,16 @@ class Projectiles:
         self.next_ident = 1
         self.rng = rng or random.Random()
 
-    def fire(self, player, gun, ammo=None, owner=None):
+    def fire(self, player, gun, ammo=None, owner=None, team=None):
         """One pull of the trigger: shoot `gun` from the player's eye, along where they are looking (a
         little off if it has spread). `ammo` is the AmmoType it fires (what the bullet looks like and
         how it flies); None is a plain default bullet. A multi shot sends all its pellets, each aimed on
-        its own. `owner` is the id of the player firing."""
+        its own. `owner` is the id of the player firing, `team` their team (its barriers let the bullets through)."""
         ammo = ammo or AmmoType()
         for _ in range(max(1, gun.pellets) if gun.shot == "multi" else 1):
-            self.fire_one(player, gun, ammo, owner)
+            self.fire_one(player, gun, ammo, owner, team)
 
-    def fire_one(self, player, gun, ammo, owner=None):
+    def fire_one(self, player, gun, ammo, owner=None, team=None):
         yaw, pitch = player.angle, player.pitch
         if gun.spread > 0.0:
             spread = math.radians(gun.spread)
@@ -104,7 +106,7 @@ class Projectiles:
             ammo.tile, ammo.size, gun.damage * ammo.damage_mult, ammo.range, self.next_ident, ammo.trail, ammo.light,
             (ammo.trail_offset_x, ammo.trail_offset_y, ammo.trail_offset_z) if ammo.trail_override else None, owner,
             ammo.player_hit_effects, ammo.player_hit_lights, ammo.world_hit_effects, ammo.world_hit_lights,
-            ammo if ammo.explodes else None))
+            ammo if ammo.explodes else None, team))
         self.next_ident += 1
 
     def update(self, world, dt, targets=()):
@@ -112,6 +114,7 @@ class Projectiles:
         the players a bullet can strike, (id, x, y, z of the feet)."""
         hits, alive = [], []
         for b in self.bullets:
+            space = world.for_team(b.team)          # (a barrier lets only its own team's bullets through)
             speed = math.sqrt(b.vx * b.vx + b.vy * b.vy + b.vz * b.vz)
             distance = min(speed * dt, b.range_left)
             steps = max(1, math.ceil(distance / MAX_STEP))
@@ -120,7 +123,7 @@ class Projectiles:
             for _ in range(steps):
                 move = distance / steps
                 nx, ny, nz = (b.x + b.vx / speed * move, b.y + b.vy / speed * move, b.z + b.vz / speed * move)
-                if not world.point_open(nx, ny, nz):
+                if not space.point_open(nx, ny, nz):
                     hits.append(Hit(b.x, b.y, b.z, b.damage, b.owner, None, b.world_effects, b.world_lights, *heading, b.blast))
                     struck = True
                     break

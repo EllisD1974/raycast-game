@@ -6,7 +6,7 @@ No pygame. The three sessions look the same to main.py:
     session.me                          # their PlayerState (body, stats, inventory) to draw and show
     session.sprites()                   # what the renderer draws around them (items, bullets, others)
     session.ended                       # None, or why the game is over for them (host left, kicked...)
-    session.round_view()                # bomb defusal: the round as they are shown it (bomb.RoundView), else None
+    session.round_view()                # the round as they are shown it (bomb.RoundView, koth.HillView), else None
     session.watchable()                 # [(id, body, name)] of the others still in the round, to watch when out
 
 The host runs the real Game. Joiners send their steps and get back snapshots of it, which they draw;
@@ -19,8 +19,9 @@ import time
 from collections import deque
 
 import net
-from bomb import BOMB_TILE, RoundView, bomb_sprite, may_move
+from bomb import BOMB_TILE, RoundView, bomb_sprite
 from entities import Entities, PlayerStats
+from koth import HillView, hill_sprite
 from constants import PLAYER_HEIGHT
 from game import (MAX_STEP_DT, NO_TEAM, Events, Inputs, PlayerState, character_sprite, character_tile_for, clean_name,
                   move_body, shown_name)
@@ -278,7 +279,7 @@ class ClientSession:
         self.ready = False                      # the host has sent the map and a first snapshot
         self.sent_at = {}                       # seq -> when it was sent, until the host acknowledges it
         self.ping = 0.0                         # seconds from sending a step to hearing the host has run it
-        self.round = None                       # bomb defusal: the last RoundView the host sent (None otherwise)
+        self.round = None                       # the last RoundView / HillView the host sent (None in other modes)
 
     def step(self, wish, dt, elapsed=None):
         elapsed = dt if elapsed is None else elapsed
@@ -295,7 +296,7 @@ class ClientSession:
             ours = self.predicted(wish)
             self.pending.append((self.seq, ours, dt))
             self.sent_at[self.seq] = time.monotonic()
-            move_body(self.world, self.me.body, ours, dt)
+            move_body(self.world.for_team(self.me.team), self.me.body, ours, dt)
         if self.items:
             self.items.clock += dt              # (only the bobbing: the host decides what is picked up)
         if self.game_time is not None:
@@ -316,8 +317,8 @@ class ClientSession:
 
     def predicted(self, wish):
         """The step as the host will run it: in bomb defusal, without moving while frozen, out of the round, planting
-        or defusing (looking around is always ours)."""
-        if self.round is None or may_move(self.round, self.id, self.me.body, wish.use, self.level):
+        or defusing; in King of the Hill, not while waiting to respawn (looking around is always ours)."""
+        if self.round is None or self.round.may_move(self.id, self.me.body, wish.use, self.level):
             return wish
         return Inputs(turn=wish.turn, tilt=wish.tilt)
 
@@ -392,7 +393,7 @@ class ClientSession:
         self.sent_at = {seq: t for seq, t in self.sent_at.items() if seq > mine["ack"]}
         self.pending = [step for step in self.pending if step[0] > mine["ack"]]
         for _, wish, dt in self.pending:
-            move_body(self.world, body, wish, dt)
+            move_body(self.world.for_team(self.me.team), body, wish, dt)
         self.me.body = body
         money = mine.get("money", 0.0)
         self.me.stats = PlayerStats(mine["score"], mine["health"], mine["max_health"],
@@ -429,7 +430,10 @@ class ClientSession:
                     self.names[int(pid)] = (clean_name(entry[0]), entry[1])
             self.me.name, self.me.team = self.names.get(self.id, (self.name, NO_TEAM))
         if "round" in message:
-            self.round = RoundView.from_dict(message["round"], {pid: team for pid, (_, team) in self.names.items()})
+            teams = {pid: team for pid, (_, team) in self.names.items()}
+            data = message["round"]
+            kind = HillView if isinstance(data, dict) and data.get("mode") == HillView.mode else RoundView
+            self.round = kind.from_dict(data, teams)
             self.me.alive = self.round is None or self.id in self.round.alive
         else:
             self.round, self.me.alive = None, True
@@ -445,10 +449,14 @@ class ClientSession:
         sprites = self.items.sprites()
         for bullet, (x, y, z) in self.bullets_now():
             sprites.append((x, y, z - bullet[6] / 2, bullet[6], bullet[7], 0.0, 1.0, 1.0 if bullet[10] else 0.0))
-        if self.round is not None:
+        if isinstance(self.round, RoundView):
             bomb = bomb_sprite(self.round.bomb, BOMB_TILE, self.game_time or 0.0)
             if bomb:
                 sprites.append(bomb)
+        elif isinstance(self.round, HillView):
+            marker = hill_sprite(self.round, self.game_time or 0.0)
+            if marker:
+                sprites.append(marker)
         if self.character_tile is not None and self.game_time is not None:
             for pid, samples in self.history.items():
                 if self.out_of_round(pid) or pid == hide:

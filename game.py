@@ -8,12 +8,13 @@ import math
 import random
 from dataclasses import dataclass, field
 
-from bomb import BOMB_TILE, Round
+from bomb import Round
 from character import SHIRTS, VIEWS, character_view
 from constants import PLAYER_HEIGHT
 from entities import Entities, PlayerStats
 from explosions import blast_results
 from inventory import Inventory
+from koth import HillRound
 from mapfile import MAX_BUY_ITEMS, MAX_MONEY
 from physics import look, spawn, spawn_at, step
 from projectiles import MUZZLE, Projectiles, muzzle_shift
@@ -184,7 +185,8 @@ class SpawnOrder:
 class PlayerState:
     """One player: where they are (body), what pickups changed (stats) and what they carry, how much longer they
     show red to the others after being hurt (hit, seconds), their name and their team (NO_TEAM for none). `alive` is
-    False while they are out of a round (bomb defusal): they are not drawn, hit or moved until the next round."""
+    False while they are out of a round (bomb defusal) or waiting to respawn (King of the Hill): they are not drawn,
+    hit or moved meanwhile."""
     body: object
     stats: PlayerStats = field(default_factory=PlayerStats)
     inventory: Inventory = field(default_factory=Inventory)
@@ -200,6 +202,16 @@ class Events:
     fired: int = 0                  # shots fired
     picked: list = field(default_factory=list)      # messages of the pickups made
     hurt: float = 0.0               # damage taken (the screen flashes red)
+
+
+def make_round(game):
+    """The rounds of the game's map mode: bomb defusal's Round, King of the Hill's HillRound, or None."""
+    mode = game.level.settings.mode
+    if mode == "bomb":
+        return Round(game)
+    if mode == "koth":
+        return HillRound(game)
+    return None
 
 
 class Game:
@@ -219,7 +231,7 @@ class Game:
         self.flashes = []           # lights to flash, (name, x, y, z), until take_flashes()
         self.notes = {}             # player id -> messages for them (what they bought), until advance_world()
         self.clock = 0.0            # seconds the world has run (the planted bomb blinks by it)
-        self.round = Round(self) if level.settings.mode == "bomb" else None     # bomb defusal's rounds
+        self.round = make_round(self)       # bomb defusal's or King of the Hill's rounds (None in the other modes)
 
     def load_level(self, level, world, character_tile=None):
         """Swap in a new map while the game runs. Everything in flight is dropped and every player is back at
@@ -240,7 +252,7 @@ class Game:
         for pid, state in sorted(self.players.items()):
             state.team = self.team_for(pid)
             self.respawn(state)
-        self.round = Round(self) if level.settings.mode == "bomb" else None     # a new match
+        self.round = make_round(self)                   # a new match
 
     def add_player(self, player_id):
         """Put a new player in the game, at the next spawner (or the level's start), on a team if the map's mode
@@ -341,10 +353,10 @@ class Game:
             inventory.equip(slot)
         if wish.cycle:
             inventory.cycle(wish.cycle)
-        move_body(self.world, body, wish, dt)
+        move_body(self.world.for_team(state.team), body, wish, dt)     # (through their own team's barriers only)
         fired = inventory.update(dt, wish.fire, wish.reload)
         for gun in fired:
-            self.projectiles.fire(body, gun, self.level.ammo_for(gun), player_id)
+            self.projectiles.fire(body, gun, self.level.ammo_for(gun), player_id, state.team)
             shift = muzzle_shift(gun, body.angle)
             if gun.muzzle:
                 self.fx.append(muzzle_event(gun.muzzle, body, (gun.muzzle_offset_x, gun.muzzle_offset_y, gun.muzzle_offset_z)
@@ -369,10 +381,10 @@ class Game:
             winner = self.players.get(attacker)
             if winner is not None and attacker != player_id and not same_team(winner.team, state.team):
                 winner.stats.score += settings.kill_score
-                cap = min(MAX_MONEY, settings.money_cap) if self.round is not None else MAX_MONEY
+                cap = min(MAX_MONEY, settings.money_cap) if settings.mode == "bomb" else MAX_MONEY
                 winner.stats.money = min(cap, winner.stats.money + settings.kill_money)
             if self.round is not None:
-                self.round.killed(player_id)            # out until the next round
+                self.round.killed(player_id)            # out until the next round (or the respawn time)
             else:
                 self.respawn(state)                     # in place: sessions hold on to this PlayerState
 
@@ -448,11 +460,10 @@ class Game:
         return events
 
     def sprites(self, viewer=None, hide=None):
-        """Items, bullets, the bomb and the players other than `viewer` (and `hide`: the one being watched, whose eyes
-        the picture is seen from) as the renderer wants them."""
-        bomb = self.round.sprite(BOMB_TILE, self.clock) if self.round is not None else None
+        """Items, bullets, the bomb (or the hill's marker) and the players other than `viewer` (and `hide`: the one
+        being watched, whose eyes the picture is seen from) as the renderer wants them."""
         return (self.items.sprites() + self.projectiles.sprites() + self.player_sprites(viewer, hide)
-                + ([bomb] if bomb else []))
+                + (self.round.sprites(self.clock) if self.round is not None else []))
 
     def labels(self, viewer=None, hide=None):
         """(x, y, z of the top of the head, name, team) of each player other than `viewer`, for their names."""

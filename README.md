@@ -207,7 +207,7 @@ The editor's **Map settings** section (`J`) says how a map is played; the settin
 
 | Setting | |
 | --- | --- |
-| Game mode | **Free for all** (everyone against everyone), **Two teams** (players are split between team 1 and team 2 as they join; a teammate's name shows white), **Co-op** (everyone on one team) or **Bomb defusal** (rounds, as in Counter-Strike: see below) |
+| Game mode | **Free for all** (everyone against everyone), **Two teams** (players are split between team 1 and team 2 as they join; a teammate's name shows white), **Co-op** (everyone on one team), **Bomb defusal** (rounds, as in Counter-Strike: see below) or **King of the Hill** (a capture point, as in Team Fortress 2: see below) |
 | Friendly fire | whether bullets and blasts hurt teammates (your own blast always hurts you) |
 | Max health | the health every player starts and comes back with |
 | Start money | money a player has when they join |
@@ -261,6 +261,49 @@ switches) on each floor, and erase it the same way. The Spawn tool's **Team** bu
 the CTs (or anyone); a team without spawn points of its own uses the others. `maps/sand2.json` is set up for it:
 both bomb sites, spawn points for each team, and a buy menu with a defuse kit. The bomb's picture is tile 26 of
 `textures.png`.
+
+## King of the Hill
+
+Team Fortress 2's mode. Players are split into **RED** (team 1) and **BLU** (team 2), who fight over one capture point,
+the hill. Each team has its own clock (3:00). Owning the point runs your own clock down while the other team's stands
+still, and the first team whose clock reaches zero wins the round.
+
+- **The point** is neutral and locked for the first 30 seconds of a round (the timer at the top says when it unlocks).
+- **Capturing**: stand on the point with nobody from the other team on it. One player alone takes the **capture time**;
+  more take less, as in Team Fortress 2 (two players are 1.5 times as fast, three 1.83 times, and so on). With players
+  of both teams on it the point is **contested** and the capture stands still. The owners standing on their point push
+  the other team's capture back, and on a neutral point a team first pushes back what the other team has captured.
+  With nobody on it, capture progress drains away over the **capture decay** time (90 s for a whole capture).
+- **Time added per capture**: each capture adds a few seconds (10 by default) to the capturing team's clock, never past
+  its full time, so a team that loses the point late has to hold it a little longer when it takes it back. (Team
+  Fortress 2 does not do this: set it to 0 for its rules.)
+- **Overtime**: when the owners' clock runs out while the other team has capture progress or stands on the point, the
+  round goes on until that progress has drained away (six times faster than usual) or the other team captures.
+- **Respawning**: a knocked out player comes back at their team's spawn points after the **respawn time** (5 s),
+  watching a teammate meanwhile (click for the next one).
+- **Rounds**: the round's result shows for the round end pause, during which the losers cannot shoot. Then everyone
+  starts the next round at their spawn points with what a new player carries. The first team to win the **rounds to
+  win** (2) wins the match, and a new one starts.
+
+The game shows both clocks at the top (the running one bright and outlined) either side of the point, which is drawn in
+its owner's color and ringed by the capture progress; standing on the point shows a capture bar. A marker floats over
+the point in the world, in its owner's color.
+
+All of these are **Map settings** with King of the Hill chosen. In the editor, paint the point on the **Sites** layer
+(`9`): `R` steps through bomb site A, B and **Hill** (green, marked H). The Spawn tool's **Team** button gives spawn points to
+RED or BLU, and the buy menu works as in the other modes. The marker's pictures are tiles 27-29 of `textures.png`
+(neutral, RED, BLU).
+
+## Barriers (spawn protection)
+
+A barrier lets one team through and stops everyone else, as Team Fortress 2's spawn room doors do: that team's players
+walk through it and its bullets fly through it, while other teams' players, and their bullets, are stopped as by glass.
+Blasts, the bomb and particles do not go through it at all, and a player on no team (free for all) is always stopped.
+It is drawn as a see-through, striped field in the team's color (tiles 30 and 31 of `textures.png`).
+
+In the editor, paint barriers on the **Sites** layer (`9`): `R` steps through bomb site A, B, the hill, then **barrier
+team 1** (T, RED; marked |1) and **barrier team 2** (CT, BLU; marked |2). Put them across the doorways of a team's spawn
+room. Barriers only work on the ground floor (floor 1); they fill its room from floor to ceiling.
 
 ## Layout
 
