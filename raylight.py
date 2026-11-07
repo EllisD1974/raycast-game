@@ -1,6 +1,6 @@
 """Lighting, compiled with numba: point lights that color what the renderer has drawn.
 
-The scene is drawn first (raykernel.py / raypitch.py) with its distance fog and a depth picture. Lighting is
+The scene is drawn first (raykernel.py / raytilt.py) with its distance fog and a depth picture. Lighting is
 a pass over that picture. Each pixel's place in the world is found from its depth and its ray, and every
 light near enough adds to it:
 

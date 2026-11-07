@@ -1,5 +1,8 @@
 """Renderer for a camera that is tilted up or down: one real 3D ray per pixel.
 
+The game draws tilted views with raytilt.py, which is faster and gives the same picture to within half a pixel;
+this one is the exact picture it is checked against.
+
 raykernel.py draws a column at a time and fakes looking up and down by sliding the picture (a
 shear). That is right when the camera is level and increasingly wrong as it tilts: wall edges stay
 vertical instead of leaning, and floors and ceilings stretch. This file draws the same world with the

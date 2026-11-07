@@ -15,8 +15,8 @@ too long. Floors/ceilings are planes (flat or sloped); 1/distance is linear in s
 across a plane, which gives perspective-correct texturing without per-pixel ray casting.
 
 This is the renderer for a level view, and for one tilted only a little (renderer.SHEAR_PITCH), where moving
-the horizon up or down the screen looks the same as tilting. A camera tilted further is drawn by raypitch.py
-instead (one real 3D ray per pixel), because the column approach can only fake tilting by shifting the picture.
+the horizon up or down the screen looks the same as tilting. A camera tilted further is drawn by raytilt.py
+instead (this method along lines through the vanishing point), because shifting a column only fakes tilting.
 
 Transparent walls (fences, windows, glass) are cells the ray passes straight through. Each face the
 ray passes is remembered, and after the column is drawn the faces are blended over it, farthest
@@ -434,7 +434,7 @@ def draw_sprites(fb, zb, px, py, eye_z, dir_x, dir_y, pitch, horizon, focal,
                  sp_x, sp_y, sp_z, sp_size, sp_tex, sp_spin, sp_face, sp_alpha, sp_lit, sp_glow, sp_color, ambient,
                  textures, max_dist, fog_dist):
     """Draw flat sprites that always face the camera, over a picture already drawn by
-    render_scene_depth (or raypitch.render_scene_pitch). The camera looks along (dir_x, dir_y),
+    render_scene_depth (or raytilt.render_scene_tilt). The camera looks along (dir_x, dir_y),
     tilted up by `pitch` radians, with the middle of its view at screen row `horizon` (see
     raylight.apply_lights). The sprites must be sorted farthest first. sp_z is the height of a sprite's bottom, sp_size its height and width in world units. A sprite pixel shows only where it
     is nearer than what is already there (zb), so walls, ledges and floors hide it; texture alpha
