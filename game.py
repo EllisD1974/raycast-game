@@ -15,6 +15,7 @@ from entities import Entities, PlayerStats
 from explosions import blast_results
 from inventory import Inventory
 from koth import HillRound
+from respawn import RESPAWN_MODES, Respawns
 from mapfile import MAX_BUY_ITEMS, MAX_MONEY
 from physics import look, spawn, spawn_at, step
 from projectiles import MUZZLE, Projectiles, muzzle_shift
@@ -116,13 +117,13 @@ def same_team(a, b):
 
 def watchable_ids(settings, viewer, team, alive, teams):
     """The players a knocked-out `viewer` on `team` may watch (the map's death camera), in the order clicking goes
-    through them: nobody with the death camera off, else their living teammates, then (death_cam_who "all") the
-    other living players. `alive` is the ids still in, `teams` player id -> team."""
+    through them: nobody with the death camera off, else their living teammates, then (death_cam_who "all", or free
+    for all, which has no teammates) the other living players. `alive` is the ids still in, `teams` id -> team."""
     if not settings.death_cam:
         return []
     others = sorted(pid for pid in alive if pid != viewer)
     mates = [pid for pid in others if same_team(teams.get(pid, NO_TEAM), team)]
-    if settings.death_cam_who == "all":
+    if settings.death_cam_who == "all" or settings.mode == "ffa":
         return mates + [pid for pid in others if pid not in mates]
     return mates
 
@@ -231,12 +232,15 @@ class Events:
 
 
 def make_round(game):
-    """The rounds of the game's map mode: bomb defusal's Round, King of the Hill's HillRound, or None."""
+    """The rounds of the game's map mode: bomb defusal's Round, King of the Hill's HillRound, Respawns for the other
+    modes on a map with a respawn delay, or None (players come straight back)."""
     mode = game.level.settings.mode
     if mode == "bomb":
         return Round(game)
     if mode == "koth":
         return HillRound(game)
+    if mode in RESPAWN_MODES and game.level.settings.respawn_delay > 0:
+        return Respawns(game)
     return None
 
 

@@ -24,6 +24,7 @@ import net
 from bomb import BOMB_TILE, RoundView, bomb_sprite
 from entities import Entities, PlayerStats
 from koth import HillView, hill_sprite
+from respawn import RespawnView
 from constants import CROUCH_HEIGHT, PLAYER_HEIGHT
 from game import (MAX_STEP_DT, NO_TEAM, Events, Inputs, PlayerState, character_sprite, character_tile_for, clean_name,
                   move_body, shown_name, watchable_ids)
@@ -477,7 +478,8 @@ class ClientSession:
         if "round" in message:
             teams = {pid: team for pid, (_, team) in self.names.items()}
             data = message["round"]
-            kind = HillView if isinstance(data, dict) and data.get("mode") == HillView.mode else RoundView
+            kinds = {HillView.mode: HillView, RespawnView.mode: RespawnView}
+            kind = kinds.get(data.get("mode"), RoundView) if isinstance(data, dict) else RoundView
             self.round = kind.from_dict(data, teams)
             self.me.alive = self.round is None or self.id in self.round.alive
         else:

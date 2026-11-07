@@ -1503,10 +1503,12 @@ class Editor:
         if rules.mode == "koth":
             fields.append(Field("koth_note", "Teams", "info", (lambda: "1 = RED, 2 = BLU; the hill: Sites layer (R)"),
                                 None))
-        if rules.mode in ("bomb", "koth"):                  # (the modes where a knocked-out player is out for a while)
+        if rules.mode in ("ffa", "teams", "coop"):
+            fields.append(field("respawn_delay", "Respawn time (s)", "num", step=1.0, low=0.0, high=60.0))
+        if rules.has_waiting():                             # (a knocked-out player is out for a while)
             fields.append(field("death_cam", "Death camera", "enum", choices=(False, True),
                                 labels={False: "Off", True: "On (watch others when out)"}))
-            if rules.death_cam:
+            if rules.death_cam and rules.mode != "ffa":     # (free for all: no teammates, everyone can be watched)
                 fields.append(field("death_cam_who", "Who can be watched", "enum", choices=DEATH_CAM_WHO,
                                     labels=DEATH_CAM_WHO_LABELS))
         fields += [field("max_health", "Max health", "num", step=10.0, low=1.0, high=10000.0),
@@ -4691,8 +4693,10 @@ class Editor:
         if rules.mode == "koth":
             text += (f"   hold {rules.hill_time:g}s, capture {rules.capture_time:g}s (+{rules.capture_bonus:g}s),"
                      f" {rules.win_limit:g} rounds to win")
-        if rules.mode in ("bomb", "koth"):
-            who = DEATH_CAM_WHO_LABELS[rules.death_cam_who].lower()
+        if rules.mode in ("ffa", "teams", "coop") and rules.respawn_delay > 0:
+            text += f"   respawn {rules.respawn_delay:g}s"
+        if rules.has_waiting():
+            who = "everyone" if rules.mode == "ffa" else DEATH_CAM_WHO_LABELS[rules.death_cam_who].lower()
             text += f"   death cam: {who}" if rules.death_cam else "   no death cam"
         return text
 
