@@ -38,6 +38,7 @@ MIN_SHADE = 0.2
 SIDE_SHADE = 0.7        # walls facing along y are darker than those facing along x
 EPS = 1e-6
 MAX_PANES = 24          # see-through wall faces remembered per screen column (the nearest ones)
+MAX_BRANCHES = 32       # spans a column can see into at once (two slabs, one behind the other, already make 4)
 
 
 @njit(cache=True)
@@ -208,12 +209,12 @@ def _render_column(fb, zb, x, px, py, eye_z, eye_span, rdx, rdy, horizon, focal,
         step_y, side_y = 1, (cy + 1.0 - py) * ddy
 
     # Branches active in the current cell (span index and visible window), and for the next cell.
-    cur_s = np.empty(nspans, np.int64)
-    cur_top = np.empty(nspans, np.int64)
-    cur_bot = np.empty(nspans, np.int64)
-    nxt_s = np.empty(nspans, np.int64)
-    nxt_top = np.empty(nspans, np.int64)
-    nxt_bot = np.empty(nspans, np.int64)
+    cur_s = np.empty(MAX_BRANCHES, np.int64)
+    cur_top = np.empty(MAX_BRANCHES, np.int64)
+    cur_bot = np.empty(MAX_BRANCHES, np.int64)
+    nxt_s = np.empty(MAX_BRANCHES, np.int64)
+    nxt_top = np.empty(MAX_BRANCHES, np.int64)
+    nxt_bot = np.empty(MAX_BRANCHES, np.int64)
     # See-through wall faces met by this ray, nearest first (see _composite_panes).
     pane_t = np.empty(MAX_PANES, np.float64)
     pane_tx = np.empty(MAX_PANES, np.int64)
@@ -340,7 +341,7 @@ def _render_column(fb, zb, x, px, py, eye_z, eye_span, rdx, rdy, horizon, focal,
                             n_panes += 1
                     ntop = max(ytop, int(math.ceil(_proj(hi, t1, eye_z, horizon, focal))))
                     nbot = min(ybot, int(math.ceil(_proj(cur, t1, eye_z, horizon, focal))))
-                    if ntop < nbot:
+                    if ntop < nbot and n_next < MAX_BRANCHES:
                         nxt_s[n_next], nxt_top[n_next], nxt_bot[n_next] = k, ntop, nbot
                         n_next += 1
                     cur = hi
