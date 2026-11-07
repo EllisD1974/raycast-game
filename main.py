@@ -35,7 +35,7 @@ from atlas import ATLAS_PATH, atlas_array, transparent_tiles, unpack_atlas
 from buymenu import BuyMenu
 from character import character_tiles
 from constants import FPS_CAP, HEIGHT, MOUSE_SENSITIVITY, TURN_SPEED, WIDTH
-from game import NO_TEAM, Events, Game, Inputs
+from game import NO_TEAM, Events, Game, Inputs, next_watch
 from hud import draw_hud, draw_hurt, draw_names, draw_round, hurt_flash
 from home import Home
 from mapfile import KOTH_NAMES, MAP_PATH, TEAM_TITLES, load_or_default
@@ -399,7 +399,7 @@ def play(screen, clock, graphics, settings, session, map_path, from_home=False):
     print("Compiling the renderer (first run only; later runs use the cache)...")
     jump_pressed = reload_pressed = drop_pressed = False
     equips, cycle, buys = [], 0, []
-    watch = 0                                    # out of a round (or respawning): which of the others we watch
+    watching_id, watch_step = None, 0            # out of a round (or respawning): who we watch, and clicks to move on
     loads = getattr(session, "loads", 0)
     running, quit_all, why = True, False, None
     while running:
@@ -451,9 +451,9 @@ def play(screen, clock, graphics, settings, session, map_path, from_home=False):
                     mouse.set_captured(False)
             elif event.type == pygame.KEYDOWN and event.key == pygame.K_g:
                 drop_pressed = True                             # drop the bomb
-            elif (event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and mouse.captured
+            elif (event.type == pygame.MOUSEBUTTONDOWN and event.button in (1, 3) and mouse.captured
                   and session.round_view() is not None and session.id not in session.round_view().alive):
-                watch += 1                                      # out of the round: watch the next player
+                watch_step += 1 if event.button == 1 else -1    # out of the round: watch the next / previous player
             elif event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
                 jump_pressed = True
             elif event.type == pygame.KEYDOWN and event.key == pygame.K_TAB:
@@ -506,12 +506,18 @@ def play(screen, clock, graphics, settings, session, map_path, from_home=False):
         message_left = max(0.0, message_left - dt)
 
         me = session.me
-        camera, hidden, watching = me.body, None, None
+        camera, hidden, watching, shown = me.body, None, None, me
         if view is not None and session.id not in view.alive:   # out of the round: see through a teammate's eyes
-            others = session.watchable()
-            others = [o for o in others if view.teams.get(o[0]) == me.team] or others
-            if others:
-                hidden, camera, watching = others[watch % len(others)]
+            others = session.watchable()                    # (who the map's death camera allows, teammates first)
+            watching_id = next_watch([o[0] for o in others], watching_id, watch_step)
+            if watching_id is not None:
+                hidden, camera, watching = next(o for o in others if o[0] == watching_id)
+                shown = session.watched(watching_id)        # their health, guns and ammo (None until a host sends them)
+            # else: nobody to watch, so the view stays where we were knocked out
+        else:
+            watching_id = None
+        watch_step = 0
+        session.watch(watching_id)
         picture = graphics.renderer.draw(session.world, camera, session.sprites(hidden), session.lighting())
         draw_names(picture, name_font, graphics.renderer, camera, session.labels(hidden), me.team)
         draw_hurt(picture, hurt)                            # (under the HUD, which stays easy to read)
@@ -519,10 +525,14 @@ def play(screen, clock, graphics, settings, session, map_path, from_home=False):
         team = None
         if me.team != NO_TEAM and rules.has_teams():
             team = {"bomb": TEAM_TITLES, "koth": KOTH_NAMES}.get(rules.mode, {}).get(me.team, me.team)
-        draw_hud(picture, font, me.stats, message if message_left > 0 else "", me.inventory if hidden is None and
-                 (view is None or session.id in view.alive) else None, graphics.tiles, kick,
-                 money=rules.uses_money(), team=team,
-                 buy_key=rules.buy_menu and not buy.open and (view is None or view.can_buy))
+        if hidden is not None and shown is not None:        # watching someone: their HUD and the gun in their hand
+            draw_hud(picture, font, shown.stats, message if message_left > 0 else "", shown.inventory, graphics.tiles,
+                     money=rules.uses_money())
+        else:
+            draw_hud(picture, font, me.stats, message if message_left > 0 else "", me.inventory if hidden is None and
+                     (view is None or session.id in view.alive) else None, graphics.tiles, kick,
+                     money=rules.uses_money(), team=team,
+                     buy_key=rules.buy_menu and not buy.open and (view is None or view.can_buy))
         draw_round(picture, font, big_font, view, session.id, me, session.level, watching)
         overlay = None
         if menu.open or buy.open:

@@ -188,7 +188,7 @@ def draw_round(picture, font, big, view, me_id, me, level, watching=None):
     if me_id not in view.alive:
         text = "You are out until the next round"
         if watching:
-            text += f" - watching {watching} (click: next)"
+            text += f" - watching {watching} (left / right click: next / previous)"
         shadowed(picture, font, text, (middle, HEIGHT - 70), DIM, center=True)
         return
     body = me.body
@@ -257,7 +257,7 @@ def draw_hill(picture, font, big, view, me_id, me, level, watching=None):
         left = view.respawns.get(me_id)
         text = f"Respawning in {max(1, math.ceil(left))}" if left is not None else "Waiting to respawn"
         if watching:
-            text += f" - watching {watching} (click: next)"
+            text += f" - watching {watching} (left / right click: next / previous)"
         shadowed(picture, font, text, (middle, HEIGHT - 70), DIM, center=True)
         return
     if view.phase == "over" and view.winner and me.team != view.winner:

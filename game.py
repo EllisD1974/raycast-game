@@ -114,6 +114,29 @@ def same_team(a, b):
     return a != NO_TEAM and a == b
 
 
+def watchable_ids(settings, viewer, team, alive, teams):
+    """The players a knocked-out `viewer` on `team` may watch (the map's death camera), in the order clicking goes
+    through them: nobody with the death camera off, else their living teammates, then (death_cam_who "all") the
+    other living players. `alive` is the ids still in, `teams` player id -> team."""
+    if not settings.death_cam:
+        return []
+    others = sorted(pid for pid in alive if pid != viewer)
+    mates = [pid for pid in others if same_team(teams.get(pid, NO_TEAM), team)]
+    if settings.death_cam_who == "all":
+        return mates + [pid for pid in others if pid not in mates]
+    return mates
+
+
+def next_watch(ids, current, step=0):
+    """Who to watch out of `ids`: `current` moved `step` along them (round and round), or the first of them when
+    `current` can no longer be watched (they were knocked out too). None when there is nobody."""
+    if not ids:
+        return None
+    if current not in ids:
+        return ids[0]
+    return ids[(ids.index(current) + step) % len(ids)]
+
+
 def hit_tint(hit):
     """The color matrix of a player hurt `hit` seconds of HIT_FLASH ago from the end: red, fading back to their own
     colors as hit runs out (None when it has)."""

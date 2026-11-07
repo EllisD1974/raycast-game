@@ -209,6 +209,7 @@ from mapfile import (ANIMATION_KINDS, ANIMATION_LABELS, DEFAULTS, EDIT_LAYERS, E
                      IMPORT_KINDS, TAKEN_CHOICES, grid_name, import_things, load_level, save_level, split_grid_name,
                      things_named, with_needs, area_rect, clear_area, copy_area, paste_area,
                      BUY_COST_LABELS, BUY_COSTS, BUY_KIND_LABELS, BUY_KINDS, GAME_MODE_LABELS, GAME_MODES, MAX_BUY_ITEMS,
+                     DEATH_CAM_WHO, DEATH_CAM_WHO_LABELS,
                      BOMB_NUMBERS, SITE_NAMES, SPAWN_TEAMS, SPAWN_TEAM_LABELS, CT_TEAM, T_TEAM,
                      BARRIER_SITES, HILL_SITE, KOTH_NAMES, KOTH_NUMBERS,
                      MAX_MONEY, BuyItem)
@@ -1502,6 +1503,12 @@ class Editor:
         if rules.mode == "koth":
             fields.append(Field("koth_note", "Teams", "info", (lambda: "1 = RED, 2 = BLU; the hill: Sites layer (R)"),
                                 None))
+        if rules.mode in ("bomb", "koth"):                  # (the modes where a knocked-out player is out for a while)
+            fields.append(field("death_cam", "Death camera", "enum", choices=(False, True),
+                                labels={False: "Off", True: "On (watch others when out)"}))
+            if rules.death_cam:
+                fields.append(field("death_cam_who", "Who can be watched", "enum", choices=DEATH_CAM_WHO,
+                                    labels=DEATH_CAM_WHO_LABELS))
         fields += [field("max_health", "Max health", "num", step=10.0, low=1.0, high=10000.0),
                    field("start_money", "Start money", "num", step=50.0, low=0.0, high=MAX_MONEY),
                    field("kill_score", "Score / kill", "num", step=1.0, low=0.0, high=MAX_MONEY),
@@ -4684,6 +4691,9 @@ class Editor:
         if rules.mode == "koth":
             text += (f"   hold {rules.hill_time:g}s, capture {rules.capture_time:g}s (+{rules.capture_bonus:g}s),"
                      f" {rules.win_limit:g} rounds to win")
+        if rules.mode in ("bomb", "koth"):
+            who = DEATH_CAM_WHO_LABELS[rules.death_cam_who].lower()
+            text += f"   death cam: {who}" if rules.death_cam else "   no death cam"
         return text
 
     def buy_summary(self):
