@@ -243,3 +243,31 @@ def test_sprites_land_where_the_rotated_camera_puts_them_and_hide_behind_walls()
     blocked_level.set("walls", 6, 8, 1)                        # a wall between the camera and the sprite
     fb2, _ = frame(World(blocked_level, 16), pitch, renderer=renderer, sprites=[sprite])
     assert not ((fb2[..., 0] > 150) & (fb2[..., 1] > 150) & (fb2[..., 2] < 80)).any()
+
+
+@pytest.mark.parametrize("name", ["koth_test1.json", "pvp_v1.json", "stacked.json"])
+def test_jumping_across_open_blocks_draws_the_same_picture(name):
+    """Rays skip whole blocks of open air (raypitch.skip_blocks); with no block to skip the picture is the same, but
+    for distances worked out a hair differently (a shade one step brighter or darker here and there)."""
+    from atlas import atlas_array, unpack_atlas
+    renderer = Renderer(atlas_array(unpack_atlas()))
+    world = World(load_level(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "maps", name)),
+                  256)
+    never = np.stack((np.full_like(renderer.skip_blocks(world)[0], np.inf),
+                      np.full_like(renderer.skip_blocks(world)[1], -np.inf)))
+    rng = np.random.default_rng(3)
+    spots = np.argwhere(world.span_on > 0)
+    for k in rng.choice(len(spots), 3):
+        span, cy, cx = (int(v) for v in spots[k])
+        player = physics.Player(cx + 0.37, cy + 0.61, world.floor_of(span, cx + 0.37, cy + 0.61), 0.0)
+        player.span = span
+        for pitch in (0.3, -0.6, 1.2):
+            for angle in (0.1, 2.2, 4.3):
+                player.pitch, player.angle = pitch, angle
+                renderer.draw(world, player)
+                skipped = np.array(renderer.framebuffer).astype(int)
+                renderer._blocks = (world.floor_plane, never)
+                renderer.draw(world, player)
+                walked = np.array(renderer.framebuffer).astype(int)
+                renderer._blocks = (None, None)
+                assert np.abs(skipped - walked).max() <= 1

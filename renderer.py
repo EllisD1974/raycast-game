@@ -9,7 +9,7 @@ from constants import FOG_DIST, FOV_DEG, HEIGHT, MAX_DEPTH, WIDTH
 from raykernel import draw_sprites, render_scene_depth
 from particles import IDENTITY
 from raylight import apply_lights, sprite_light
-from raypitch import render_scene_pitch
+from raypitch import render_scene_pitch, skip_blocks
 
 BACKGROUND = np.array((18, 18, 26), np.uint8)       # shown only where the view distance ends
 SHEAR_PITCH = math.radians(5)                       # a view tilted less than this is drawn by the faster column renderer
@@ -23,6 +23,15 @@ class Renderer:
         self.depth = np.zeros((WIDTH, HEIGHT), np.float32)           # distance of what is drawn in each pixel
         self.half_fov_tan = math.tan(math.radians(FOV_DEG) / 2)
         self.focal = (WIDTH / 2) / self.half_fov_tan                 # focal length in pixels
+        self._blocks = (None, None)                                  # (floor_plane, skip_blocks of its map)
+
+    def skip_blocks(self, world):
+        """raypitch.skip_blocks for `world`, worked out again only when it is a different map (a new World has new
+        arrays; a team's view of one shares them)."""
+        if self._blocks[0] is not world.floor_plane:
+            self._blocks = (world.floor_plane, skip_blocks(world.floor_plane, world.ceil_plane, world.span_on,
+                                                           world.solid_from, world.pane_tex))
+        return self._blocks[1]
 
     def horizon(self, player):
         """Screen row of the horizon: where the level ground meets the sky. Looking up moves it down the
@@ -68,7 +77,8 @@ class Renderer:
             pitch, horizon = player.pitch, HEIGHT / 2
             render_scene_pitch(
                 self.framebuffer, self.depth, player.x, player.y, player.eye_z, player.span, dir_x, dir_y,
-                player.pitch, self.focal, *scene, self.textures, MAX_DEPTH, FOG_DIST, BACKGROUND)
+                player.pitch, self.focal, *scene, self.textures, MAX_DEPTH, FOG_DIST, BACKGROUND,
+                self.skip_blocks(world))
         ambient = 1.0
         if lighting is not None:
             ambient = lighting.ambient
