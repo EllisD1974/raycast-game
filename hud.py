@@ -8,6 +8,7 @@ import pygame
 from bomb import can_defuse, can_plant, clock_text, site_under
 from constants import HEIGHT, WIDTH
 from koth import HillView, on_hill
+from respawn import RespawnView
 from mapfile import CT_TEAM, DEFUSE_KIT, KOTH_NAMES, SITE_NAMES, T_TEAM, TEAM_NAMES
 
 TEXT = (255, 255, 255)
@@ -159,6 +160,9 @@ def draw_round(picture, font, big, view, me_id, me, level, watching=None):
     if isinstance(view, HillView):
         draw_hill(picture, font, big, view, me_id, me, level, watching)
         return
+    if isinstance(view, RespawnView):
+        draw_respawn(picture, font, view, me_id, watching)
+        return
     settings = level.settings
     middle = WIDTH // 2
     # the score either side of the timer
@@ -188,7 +192,7 @@ def draw_round(picture, font, big, view, me_id, me, level, watching=None):
     if me_id not in view.alive:
         text = "You are out until the next round"
         if watching:
-            text += f" - watching {watching} (click: next)"
+            text += f" - watching {watching} (left / right click: next / previous)"
         shadowed(picture, font, text, (middle, HEIGHT - 70), DIM, center=True)
         return
     body = me.body
@@ -205,6 +209,18 @@ def draw_round(picture, font, big, view, me_id, me, level, watching=None):
     if view.bomb.state == "carried" and view.bomb.carrier == me_id:
         shadowed(picture, font, "You have the bomb: plant it in a site (G throws it)", (middle, HEIGHT - 70),
                  TEAM_COLORS[T_TEAM], center=True)
+
+
+def draw_respawn(picture, font, view, me_id, watching=None):
+    """Free for all, two teams and co-op with a respawn delay: how long until this player comes back (and who they
+    are watching meanwhile)."""
+    if me_id in view.alive:
+        return
+    left = view.respawns.get(me_id)
+    text = f"Respawning in {max(1, math.ceil(left))}" if left is not None else "Waiting to respawn"
+    if watching:
+        text += f" - watching {watching} (left / right click: next / previous)"
+    shadowed(picture, font, text, (WIDTH // 2, HEIGHT - 70), DIM, center=True)
 
 
 def draw_hill(picture, font, big, view, me_id, me, level, watching=None):
@@ -257,7 +273,7 @@ def draw_hill(picture, font, big, view, me_id, me, level, watching=None):
         left = view.respawns.get(me_id)
         text = f"Respawning in {max(1, math.ceil(left))}" if left is not None else "Waiting to respawn"
         if watching:
-            text += f" - watching {watching} (click: next)"
+            text += f" - watching {watching} (left / right click: next / previous)"
         shadowed(picture, font, text, (middle, HEIGHT - 70), DIM, center=True)
         return
     if view.phase == "over" and view.winner and me.team != view.winner:

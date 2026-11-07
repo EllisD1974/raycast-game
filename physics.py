@@ -2,8 +2,8 @@
 import math
 from dataclasses import dataclass
 
-from constants import (EYE_HEIGHT, GRAVITY, JUMP_SPEED, MAX_PITCH_DEG, MOVE_SPEED, PLAYER_HEIGHT,
-                       PLAYER_RADIUS, SPRINT_MULTIPLIER, STEP_HEIGHT)
+from constants import (CROUCH_HEIGHT, CROUCH_MULTIPLIER, CROUCH_VIEW_SPEED, EYE_HEIGHT, GRAVITY, JUMP_SPEED,
+                       MAX_PITCH_DEG, MOVE_SPEED, PLAYER_HEIGHT, PLAYER_RADIUS, SPRINT_MULTIPLIER, STEP_HEIGHT)
 
 EPS = 1e-6
 # The player's box is a hair smaller than PLAYER_RADIUS, so a box that merely touches an edge
@@ -17,6 +17,7 @@ MAX_PITCH = math.radians(MAX_PITCH_DEG)
 AIR_ACCEL = 15.0            # cells/s^2 the player can steer toward the keys in the air
 PUSH_SPEED = MOVE_SPEED     # cells/s the player is slid sideways out of a ceiling edge
 PUSH_STEPS = tuple(round(0.01 * i, 2) for i in range(1, int(PLAYER_RADIUS * 100) + 6))
+CROUCH_DROP = PLAYER_HEIGHT - CROUCH_HEIGHT     # how much shorter crouching makes the player
 
 
 @dataclass
@@ -31,10 +32,17 @@ class Player:
     vx: float = 0.0             # horizontal velocity, cells per second. On the ground it simply
     vy: float = 0.0             # follows the keys; in the air it is momentum (see step)
     pitch: float = 0.0          # radians; positive looks up. Only affects the view
+    crouched: bool = False      # holding Ctrl: the body is CROUCH_HEIGHT tall instead of PLAYER_HEIGHT
+    view_h: float = PLAYER_HEIGHT   # the height the view follows: it moves to the body's height over a moment
+
+    @property
+    def height(self):
+        """How tall the body is now (what hits it and what has to fit under a ceiling)."""
+        return CROUCH_HEIGHT if self.crouched else PLAYER_HEIGHT
 
     @property
     def eye_z(self):
-        return self.z + EYE_HEIGHT
+        return self.z + self.view_h - (PLAYER_HEIGHT - EYE_HEIGHT)
 
 
 def look(p, pitch_delta):
@@ -53,9 +61,9 @@ def spawn_at(world, x, y, span, angle):
     return Player(x, y, world.floor_of(span, x, y), angle=angle, span=span)
 
 
-def can_stand(world, x, y, z, span=None, grounded=True):
+def can_stand(world, x, y, z, span=None, grounded=True, height=PLAYER_HEIGHT):
     """True if the player's box fits at (x, y) with feet at height z: every corner must have
-    a floor no higher than a step above the feet, and room for the player's height. Which
+    a floor no higher than a step above the feet, and room for the player's `height`. Which
     floor a corner stands on depends on z and the floor the player is on (see World.span_at),
     so the player walks under an upper floor at z = 0 and on top of it at its own height."""
     for ox, oy in CORNERS:
@@ -66,9 +74,35 @@ def can_stand(world, x, y, z, span=None, grounded=True):
         ceiling = world.ceil_of(s, x + ox, y + oy)
         if floor - z > STEP_HEIGHT + EPS:
             return False
-        if ceiling - max(z, floor) < PLAYER_HEIGHT:
+        if ceiling - max(z, floor) < height:
             return False
     return True
+
+
+def set_crouch(world, p, crouch, dt):
+    """Crouch while `crouch` (Ctrl) is held, and stand up again once it is let go and there is room to. On the
+    ground crouching lowers the head; in the air it pulls the legs up instead (the head stays), so a crouch-jump
+    clears higher ledges, and standing up in the air lets the legs back down. The view follows the body's
+    height over a moment rather than jumping (view_h)."""
+    if crouch and not p.crouched:
+        p.crouched = True
+        if not p.on_ground:
+            p.z += CROUCH_DROP
+            p.view_h -= CROUCH_DROP                 # (the eye stays where it was)
+    elif not crouch and p.crouched:
+        if p.on_ground:
+            p.crouched = not can_stand(world, p.x, p.y, p.z, p.span, True, PLAYER_HEIGHT)
+        else:
+            span = world.span_at(p.x, p.y, p.z, p.span, False)
+            floor = world.floor_of(span, p.x, p.y) if span >= 0 else p.z
+            z = max(p.z - CROUCH_DROP, min(floor, p.z))
+            if can_stand(world, p.x, p.y, z, p.span, False, PLAYER_HEIGHT):     # the legs come back down
+                p.view_h += p.z - z
+                p.z, p.crouched = z, False
+            elif can_stand(world, p.x, p.y, p.z, p.span, False, PLAYER_HEIGHT):  # no room under: the head goes up
+                p.crouched = False
+    target, most = p.height, CROUCH_VIEW_SPEED * dt
+    p.view_h += max(-most, min(most, target - p.view_h))
 
 
 def ledge_floor(world, x, y, z, span, grounded):
@@ -105,7 +139,7 @@ def push_out(world, p, dt):
             z = world.floor_of(span, nx, ny)        # they would be standing on the floor there
             if z < p.z - 0.005:
                 continue                            # that is a way back down, not a way out
-            if z - p.z <= STEP_HEIGHT and can_stand(world, nx, ny, z, p.span, True):
+            if z - p.z <= STEP_HEIGHT and can_stand(world, nx, ny, z, p.span, True, p.height):
                 if best is None or m < best[0]:
                     best = (m, ux, uy)
                 break
@@ -116,19 +150,23 @@ def push_out(world, p, dt):
         p.y += uy * m
 
 
-def step(world, p, forward, strafe, turn, jump, dt, sprint=False):
+def step(world, p, forward, strafe, turn, jump, dt, sprint=False, crouch=False):
     """Advance the player by dt seconds. forward/strafe/turn are in -1..1.
 
     On the ground the horizontal velocity follows the keys at once, SPRINT_MULTIPLIER times
-    faster while `sprint` is held together with a movement key. In the air it is momentum:
+    faster while `sprint` is held together with a movement key, CROUCH_MULTIPLIER times as fast
+    while crouched (`crouch` held: see set_crouch; no sprinting then). In the air it is momentum:
     leaving a ledge or jumping keeps the speed you had (sprint speed included), you can steer
     toward the keys at AIR_ACCEL, and letting go of the keys does not stop you. You cannot
     start sprinting in the air. Hitting a wall stops that component of the velocity."""
     p.angle += turn
+    set_crouch(world, p, crouch, dt)
+    height = p.height
     wish_x = math.cos(p.angle) * forward - math.sin(p.angle) * strafe
     wish_y = math.sin(p.angle) * forward + math.cos(p.angle) * strafe
     if p.on_ground:
-        speed = MOVE_SPEED * (SPRINT_MULTIPLIER if sprint and (forward or strafe) else 1.0)
+        speed = MOVE_SPEED * (CROUCH_MULTIPLIER if p.crouched else
+                              SPRINT_MULTIPLIER if sprint and (forward or strafe) else 1.0)
         p.vx, p.vy = wish_x * speed, wish_y * speed
     elif forward or strafe:
         # Steer each axis whose key is held (forward/back, left/right) in the direction the player
@@ -152,11 +190,11 @@ def step(world, p, forward, strafe, turn, jump, dt, sprint=False):
             p.vx, p.vy = p.vx * limit / speed, p.vy * limit / speed
 
     dx, dy = p.vx * dt, p.vy * dt
-    if can_stand(world, p.x + dx, p.y, p.z, p.span, p.on_ground):   # axes separately: slide along walls
+    if can_stand(world, p.x + dx, p.y, p.z, p.span, p.on_ground, height):   # axes separately: slide along walls
         p.x += dx
     else:
         p.vx = 0.0
-    if can_stand(world, p.x, p.y + dy, p.z, p.span, p.on_ground):
+    if can_stand(world, p.x, p.y + dy, p.z, p.span, p.on_ground, height):
         p.y += dy
     else:
         p.vy = 0.0
@@ -172,7 +210,7 @@ def step(world, p, forward, strafe, turn, jump, dt, sprint=False):
         # is still on the ledge the player stays up. Otherwise they would drop into the gap with
         # part of their body still inside the floor slab they walked off.
         held = ledge_floor(world, p.x, p.y, p.z, p.span, True)
-        if held is not None and can_stand(world, p.x, p.y, held, p.span, True):
+        if held is not None and can_stand(world, p.x, p.y, held, p.span, True, height):
             ground = held       # (only if that is a place the box fits: else falling clears the ceiling)
     if p.on_ground and jump:
         p.vz, p.on_ground = JUMP_SPEED, False
@@ -186,9 +224,9 @@ def step(world, p, forward, strafe, turn, jump, dt, sprint=False):
         p.z += p.vz * dt
         if p.z <= ground:
             p.z, p.vz, p.on_ground = ground, 0.0, True
-        elif p.z + PLAYER_HEIGHT > ceiling:         # bumped the head
-            p.z = ceiling - PLAYER_HEIGHT
+        elif p.z + height > ceiling:                # bumped the head
+            p.z = ceiling - height
             p.vz = min(p.vz, 0.0)
 
-    if p.on_ground and not can_stand(world, p.x, p.y, p.z, p.span, True):
+    if p.on_ground and not can_stand(world, p.x, p.y, p.z, p.span, True, height):
         push_out(world, p, dt)                      # wedged between a rising ramp and a ceiling edge

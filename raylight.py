@@ -1,6 +1,6 @@
 """Lighting, compiled with numba: point lights that color what the renderer has drawn.
 
-The scene is drawn first (raykernel.py / raypitch.py) with its distance fog and a depth picture. Lighting is
+The scene is drawn first (raykernel.py / raytilt.py) with its distance fog and a depth picture. Lighting is
 a pass over that picture. Each pixel's place in the world is found from its depth and its ray, and every
 light near enough adds to it:
 
@@ -147,6 +147,13 @@ def apply_lights(fb, zb, px, py, eye_z, dir_x, dir_y, pitch, horizon, focal, lig
     and blended between those for the pixels in between. Where the samples around a pixel are not all on its
     surface (their depths differ: the edge of a wall, a sprite's outline), the pixel is worked out on its own."""
     width, height = fb.shape[0], fb.shape[1]
+    if lights.shape[0] == 0:                                 # only the dark: every drawn pixel is just dimmed
+        for x in prange(width):
+            for y in range(height):
+                if zb[x, y] <= 1e8:
+                    for c in range(3):
+                        fb[x, y, c] = np.uint8(min(255.0, fb[x, y, c] * ambient))
+        return
     cp, sp = math.cos(pitch), math.sin(pitch)
     fx, fy, fz = dir_x * cp, dir_y * cp, sp                  # where the camera looks
     rx, ry = -dir_y, dir_x                                   # to the right of the picture

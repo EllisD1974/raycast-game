@@ -9,7 +9,7 @@ from constants import FOG_DIST, FOV_DEG, HEIGHT, MAX_DEPTH, WIDTH
 from raykernel import draw_sprites, render_scene_depth
 from particles import IDENTITY
 from raylight import apply_lights, sprite_light
-from raypitch import render_scene_pitch
+from raytilt import TiltScratch, render_scene_tilt
 
 BACKGROUND = np.array((18, 18, 26), np.uint8)       # shown only where the view distance ends
 SHEAR_PITCH = math.radians(5)                       # a view tilted less than this is drawn by the faster column renderer
@@ -23,6 +23,7 @@ class Renderer:
         self.depth = np.zeros((WIDTH, HEIGHT), np.float32)           # distance of what is drawn in each pixel
         self.half_fov_tan = math.tan(math.radians(FOV_DEG) / 2)
         self.focal = (WIDTH / 2) / self.half_fov_tan                 # focal length in pixels
+        self.tilt_scratch = TiltScratch()                            # the tilted renderer's buffers, kept
 
     def horizon(self, player):
         """Screen row of the horizon: where the level ground meets the sky. Looking up moves it down the
@@ -53,8 +54,8 @@ class Renderer:
         `lighting` (lighting.Lighting, or None for a map with no lights and full ambient) lights the picture.
 
         A view within SHEAR_PITCH of level is drawn a column at a time (fast), with the horizon moved up or down
-        the screen: a shear, which near level looks the same as tilting. A view tilted further is drawn with one
-        real 3D ray per pixel (raypitch.py), so looking well up and down is a true rotation."""
+        the screen: a shear, which near level looks the same as tilting. A view tilted further is drawn as a true
+        rotation, a line at a time through the vanishing point (raytilt.py), so looking well up and down is right."""
         dir_x, dir_y = math.cos(player.angle), math.sin(player.angle)
         scene = (world.floor_plane, world.ceil_plane, world.span_on, world.solid_from, world.pane_tex,
                  world.pane_top, world.wall_tex, world.wall_sides, world.floor_tex, world.ceil_tex)
@@ -66,9 +67,9 @@ class Renderer:
                 horizon, self.focal, *scene, self.textures, MAX_DEPTH, FOG_DIST, BACKGROUND)
         else:
             pitch, horizon = player.pitch, HEIGHT / 2
-            render_scene_pitch(
+            render_scene_tilt(
                 self.framebuffer, self.depth, player.x, player.y, player.eye_z, player.span, dir_x, dir_y,
-                player.pitch, self.focal, *scene, self.textures, MAX_DEPTH, FOG_DIST, BACKGROUND)
+                player.pitch, self.focal, *scene, self.textures, MAX_DEPTH, FOG_DIST, BACKGROUND, self.tilt_scratch)
         ambient = 1.0
         if lighting is not None:
             ambient = lighting.ambient

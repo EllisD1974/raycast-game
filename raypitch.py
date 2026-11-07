@@ -1,5 +1,8 @@
 """Renderer for a camera that is tilted up or down: one real 3D ray per pixel.
 
+The game draws tilted views with raytilt.py, which is faster and gives the same picture to within half a pixel;
+this one is the exact picture it is checked against.
+
 raykernel.py draws a column at a time and fakes looking up and down by sliding the picture (a
 shear). That is right when the camera is level and increasingly wrong as it tilts: wall edges stay
 vertical instead of leaning, and floors and ceilings stretch. This file draws the same world with the
@@ -18,6 +21,12 @@ See-through walls are remembered along the way and blended over the result, fart
 Rays are scaled so that their distance t is the depth along the camera's viewing axis. That is the
 same meaning of "distance" the column renderer uses, so fog, shading and the depth picture that
 sprites hide behind agree between the two.
+
+Most of a big open map is empty air, and a ray climbing gently or looking out over a high place would otherwise
+walk it one cell at a time. skip_blocks() sums the map up in SKIP_BLOCK x SKIP_BLOCK blocks of cells: for each span,
+the highest floor and lowest ceiling anywhere in a block whose cells are all plain open space on that span (no
+walls, no panes). A ray that is between those two heights where it enters a block and where it would leave it
+cannot hit anything inside, so it jumps straight to the block's edge.
 """
 import math
 
@@ -25,6 +34,28 @@ import numpy as np
 from numba import njit, prange
 
 from raykernel import MAX_PANES, SIDE_SHADE, _clamp01, _shade, plane_z, side_of
+
+SKIP_BLOCK = 4          # cells along each side of a block that rays can jump across (see skip_blocks)
+
+
+def skip_blocks(floor_plane, ceil_plane, span_on, solid_from, pane_tex):
+    """float64 [2, span, block row, block column]: [0] the highest floor and [1] the lowest ceiling of span s anywhere
+    in each SKIP_BLOCK x SKIP_BLOCK block of cells, sloped planes included. A block where any cell is not open on
+    span s (the span missing, a wall, a pane, or off the map) has floor +inf and ceiling -inf: never skipped."""
+    spans, h, w = span_on.shape
+    b = SKIP_BLOCK
+    bh, bw = -(-h // b), -(-w // b)
+    a, sx, sy = (floor_plane[..., i].astype(np.float64) for i in range(3))
+    top = a + np.maximum(sx, 0.0) + np.maximum(sy, 0.0)                 # a plane's highest corner in its cell
+    a, sx, sy = (ceil_plane[..., i].astype(np.float64) for i in range(3))
+    low = a + np.minimum(sx, 0.0) + np.minimum(sy, 0.0)                 # and lowest
+    closed = (span_on == 0) | (np.arange(spans)[:, None, None] >= solid_from[None]) | (pane_tex[None] >= 0)
+    floor = np.full((spans, bh * b, bw * b), np.inf)
+    ceil = np.full((spans, bh * b, bw * b), -np.inf)
+    floor[:, :h, :w] = np.where(closed, np.inf, top)
+    ceil[:, :h, :w] = np.where(closed, -np.inf, low)
+    return np.stack((floor.reshape(spans, bh, b, bw, b).max(axis=(2, 4)),
+                     ceil.reshape(spans, bh, b, bw, b).min(axis=(2, 4))))
 
 
 @njit(cache=True)
@@ -61,7 +92,7 @@ def _own_tile(wall_sides, x, y, face, z):
 @njit(cache=True, inline="always")
 def _trace_pixel(fb, zb, x, y, px, py, eye_z, eye_span, dx, dy, dz,
                  floor_plane, ceil_plane, span_on, solid_from, pane_tex, pane_top, wall_tex, wall_sides, floor_tex, ceil_tex,
-                 textures, max_dist, fog_dist, bg, pane_t, pane_tx, pane_ty, pane_id, pane_shade):
+                 textures, max_dist, fog_dist, bg, blocks, pane_f, pane_i):
     nspans = span_on.shape[0]
     mh, mw = solid_from.shape
     tsize = textures.shape[1]
@@ -88,7 +119,32 @@ def _trace_pixel(fb, zb, x, y, px, py, eye_z, eye_span, dx, dy, dz,
         return
     s = eye_span
     t0 = 1e-3
+    last_bx = last_by = -1                                          # the block the ray last tried to jump across
     while True:
+        bx, by = cx // SKIP_BLOCK, cy // SKIP_BLOCK
+        if bx != last_bx or by != last_by:
+            # Just into a new block: jump across it if the ray stays clear of its floors and ceilings all the way.
+            last_bx, last_by = bx, by
+            lo, hi = blocks[0, s, by, bx], blocks[1, s, by, bx]
+            z0 = eye_z + dz * t0
+            if lo < z0 and z0 < hi:
+                tbx = ((bx + 1) * SKIP_BLOCK - px) * ddx if step_x > 0 else (px - bx * SKIP_BLOCK) * ddx
+                tby = ((by + 1) * SKIP_BLOCK - py) * ddy if step_y > 0 else (py - by * SKIP_BLOCK) * ddy
+                te = min(tbx, tby)
+                ze = eye_z + dz * min(te, max_dist)
+                if te > t0 and lo < ze and ze < hi:
+                    if te >= max_dist:
+                        break                                       # nothing in the rest of the view distance
+                    # Carry on from the block's last cell along the ray, about to leave it.
+                    if tbx <= tby:
+                        cx = (bx + 1) * SKIP_BLOCK - 1 if step_x > 0 else bx * SKIP_BLOCK
+                        cy = min(max(int(math.floor(py + dy * te)), by * SKIP_BLOCK), (by + 1) * SKIP_BLOCK - 1)
+                    else:
+                        cy = (by + 1) * SKIP_BLOCK - 1 if step_y > 0 else by * SKIP_BLOCK
+                        cx = min(max(int(math.floor(px + dx * te)), bx * SKIP_BLOCK), (bx + 1) * SKIP_BLOCK - 1)
+                    side_x = (cx + 1.0 - px) * ddx if step_x > 0 else (px - cx) * ddx
+                    side_y = (cy + 1.0 - py) * ddy if step_y > 0 else (py - cy) * ddy
+                    t0 = te
         if side_x < side_y:
             t1 = side_x
             side_x += ddx
@@ -107,17 +163,17 @@ def _trace_pixel(fb, zb, x, y, px, py, eye_z, eye_span, dx, dy, dz,
         e1y = _clamp01(py + dy * t1c - cy)
         z0 = eye_z + dz * t0
         z1 = eye_z + dz * t1c
-        g0 = z0 - plane_z(floor_plane, s, cx, cy, e0x, e0y)          # height above the floor
-        g1 = z1 - plane_z(floor_plane, s, cx, cy, e1x, e1y)
-        h0 = plane_z(ceil_plane, s, cx, cy, e0x, e0y) - z0           # height below the ceiling
-        h1 = plane_z(ceil_plane, s, cx, cy, e1x, e1y) - z1
+        g1 = z1 - plane_z(floor_plane, s, cx, cy, e1x, e1y)          # height above the floor where it leaves
+        h1 = plane_z(ceil_plane, s, cx, cy, e1x, e1y) - z1           # height below the ceiling
 
         hit_floor = g1 < 0.0
         hit_ceil = h1 < 0.0
         t_floor = t_ceil = 1e30
         if hit_floor:
+            g0 = z0 - plane_z(floor_plane, s, cx, cy, e0x, e0y)      # (worked out only when it is needed)
             t_floor = t0 if g0 <= 0.0 else t0 + (t1c - t0) * g0 / (g0 - g1)
         if hit_ceil:
+            h0 = plane_z(ceil_plane, s, cx, cy, e0x, e0y) - z0
             t_ceil = t0 if h0 <= 0.0 else t0 + (t1c - t0) * h0 / (h0 - h1)
         if hit_floor or hit_ceil:
             on_floor = t_floor <= t_ceil
@@ -182,9 +238,8 @@ def _trace_pixel(fb, zb, x, y, px, py, eye_z, eye_span, dx, dy, dz,
             depth = t1
             break
         if found == 0 and pane_tex[ny, nx] >= 0 and z1 < pane_top[ny, nx] and n_panes < MAX_PANES:
-            pane_t[n_panes], pane_tx[n_panes] = t1, wtx
-            pane_ty[n_panes], pane_id[n_panes] = _wall_ty(z1, tsize), pane_tex[ny, nx]
-            pane_shade[n_panes] = shade
+            pane_f[0, n_panes], pane_f[1, n_panes] = t1, shade
+            pane_i[0, n_panes], pane_i[1, n_panes], pane_i[2, n_panes] = wtx, _wall_ty(z1, tsize), pane_tex[ny, nx]
             n_panes += 1
         s = found
         cx, cy = nx, ny
@@ -192,11 +247,11 @@ def _trace_pixel(fb, zb, x, y, px, py, eye_z, eye_span, dx, dy, dz,
 
     # Blend the see-through faces the ray went through over what it finally hit, farthest first.
     for p in range(n_panes - 1, -1, -1):
-        alpha = textures[pane_id[p], pane_ty[p], pane_tx[p], 3]
+        alpha = textures[pane_i[2, p], pane_i[1, p], pane_i[0, p], 3]
         if alpha == 0:
             continue
         a = alpha / 255.0
-        pr, pg, pb = _fetch(textures, pane_id[p], pane_tx[p], pane_ty[p], pane_shade[p])
+        pr, pg, pb = _fetch(textures, pane_i[2, p], pane_i[0, p], pane_i[1, p], pane_f[1, p])
         red, green, blue = pr * a + red * (1.0 - a), pg * a + green * (1.0 - a), pb * a + blue * (1.0 - a)
     fb[x, y, 0], fb[x, y, 1], fb[x, y, 2] = np.uint8(red), np.uint8(green), np.uint8(blue)
     zb[x, y] = depth
@@ -205,24 +260,22 @@ def _trace_pixel(fb, zb, x, y, px, py, eye_z, eye_span, dx, dy, dz,
 @njit(cache=True, parallel=True)
 def render_scene_pitch(fb, zb, px, py, eye_z, eye_span, dir_x, dir_y, pitch, focal,
                        floor_plane, ceil_plane, span_on, solid_from, pane_tex, pane_top, wall_tex, wall_sides, floor_tex,
-                       ceil_tex, textures, max_dist, fog_dist, bg):
+                       ceil_tex, textures, max_dist, fog_dist, bg, blocks):
     """Fill `fb` (W, H, 3) and `zb` (W, H) for a camera looking along (dir_x, dir_y) tilted up by `pitch`
-    radians (negative looks down), with `focal` the focal length in pixels."""
+    radians (negative looks down), with `focal` the focal length in pixels. `blocks` is skip_blocks() of the same
+    map."""
     width, height = fb.shape[0], fb.shape[1]
     cp, sp = math.cos(pitch), math.sin(pitch)
     fx, fy, fz = dir_x * cp, dir_y * cp, sp                  # where the camera looks
     rx, ry = -dir_y, dir_x                                   # to the right of the picture
     ux, uy, uz = -dir_x * sp, -dir_y * sp, cp                # up the picture
     for x in prange(width):
-        pane_t = np.empty(MAX_PANES, np.float64)
-        pane_tx = np.empty(MAX_PANES, np.int64)
-        pane_ty = np.empty(MAX_PANES, np.int64)
-        pane_id = np.empty(MAX_PANES, np.int64)
-        pane_shade = np.empty(MAX_PANES, np.float64)
+        pane_f = np.empty((2, MAX_PANES), np.float64)       # see-through faces met by a ray: distance, shading
+        pane_i = np.empty((3, MAX_PANES), np.int64)         # and texture column, row and tile
         u = (x + 0.5 - width * 0.5) / focal
         for y in range(height):
             v = (height * 0.5 - (y + 0.5)) / focal
             _trace_pixel(fb, zb, x, y, px, py, eye_z, eye_span,
                          fx + u * rx + v * ux, fy + u * ry + v * uy, fz + v * uz,
                          floor_plane, ceil_plane, span_on, solid_from, pane_tex, pane_top, wall_tex, wall_sides, floor_tex,
-                         ceil_tex, textures, max_dist, fog_dist, bg, pane_t, pane_tx, pane_ty, pane_id, pane_shade)
+                         ceil_tex, textures, max_dist, fog_dist, bg, blocks, pane_f, pane_i)

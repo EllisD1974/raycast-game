@@ -11,7 +11,7 @@ import math
 import random
 from dataclasses import dataclass
 
-from constants import PLAYER_HEIGHT, PLAYER_RADIUS
+from constants import CROUCH_SPREAD, PLAYER_HEIGHT, PLAYER_RADIUS
 from mapfile import AmmoType
 
 MAX_STEP = 0.1                  # cells a bullet moves between collision checks
@@ -52,9 +52,10 @@ class Projectile:
 
 
 def struck_player(targets, owner, x, y, z):
-    """The id of the player (other than `owner`) whose body contains the point, or None."""
-    for pid, tx, ty, tz in targets:
-        if (pid != owner and tz <= z <= tz + PLAYER_HEIGHT
+    """The id of the player (other than `owner`) whose body contains the point, or None. A target is (id, x, y, z of
+    the feet[, height]): PLAYER_HEIGHT tall unless it says (a crouching player is shorter)."""
+    for pid, tx, ty, tz, *height in targets:
+        if (pid != owner and tz <= z <= tz + (height[0] if height else PLAYER_HEIGHT)
                 and (x - tx) ** 2 + (y - ty) ** 2 <= PLAYER_RADIUS * PLAYER_RADIUS):
             return pid
     return None
@@ -94,7 +95,8 @@ class Projectiles:
     def fire_one(self, player, gun, ammo, owner=None, team=None):
         yaw, pitch = player.angle, player.pitch
         if gun.spread > 0.0:
-            spread = math.radians(gun.spread)
+            steady = getattr(player, "crouched", False) and getattr(player, "on_ground", False)
+            spread = math.radians(gun.spread) * (CROUCH_SPREAD if steady else 1.0)     # (crouched: steadier)
             yaw += self.rng.uniform(-spread, spread)
             pitch += self.rng.uniform(-spread, spread)
         cp = math.cos(pitch)

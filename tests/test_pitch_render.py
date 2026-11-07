@@ -1,4 +1,4 @@
-"""Looking up and down: the tilted-camera renderer (raypitch.py) draws a real rotation, not a shear."""
+"""Looking up and down: the tilted-camera renderer (raytilt.py) draws a real rotation, not a shear."""
 import glob
 import math
 import os
@@ -243,3 +243,75 @@ def test_sprites_land_where_the_rotated_camera_puts_them_and_hide_behind_walls()
     blocked_level.set("walls", 6, 8, 1)                        # a wall between the camera and the sprite
     fb2, _ = frame(World(blocked_level, 16), pitch, renderer=renderer, sprites=[sprite])
     assert not ((fb2[..., 0] > 150) & (fb2[..., 1] > 150) & (fb2[..., 2] < 80)).any()
+
+
+def spots(world, count, seed):
+    """`count` places to stand (x, y, floor), picked at random among the open cells of every floor."""
+    rng = np.random.default_rng(seed)
+    cells = np.argwhere(world.span_on > 0)
+    return [(int(cx) + 0.37, int(cy) + 0.61, int(span)) for span, cy, cx in cells[rng.choice(len(cells), count)]]
+
+
+def map_world(name):
+    from atlas import atlas_array, unpack_atlas
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "maps", name)
+    return World(load_level(path), 256), atlas_array(unpack_atlas())
+
+
+def scene_of(world):
+    return (world.floor_plane, world.ceil_plane, world.span_on, world.solid_from, world.pane_tex, world.pane_top,
+            world.wall_tex, world.wall_sides, world.floor_tex, world.ceil_tex)
+
+
+@pytest.mark.parametrize("name", ["koth_test1.json", "pvp_v1.json", "stacked.json"])
+def test_jumping_across_open_blocks_draws_the_same_picture(name):
+    """raypitch's rays skip whole blocks of open air (skip_blocks); with no block to skip the picture is the same, but
+    for distances worked out a hair differently (a shade one step brighter or darker here and there)."""
+    import raypitch
+    from constants import FOG_DIST, MAX_DEPTH
+    from renderer import BACKGROUND
+    world, textures = map_world(name)
+    renderer = Renderer(textures)
+    scene = scene_of(world)
+    blocks = raypitch.skip_blocks(*scene[:5])
+    never = np.stack((np.full_like(blocks[0], np.inf), np.full_like(blocks[1], -np.inf)))
+    skipped, walked = np.zeros((WIDTH, HEIGHT, 3), np.uint8), np.zeros((WIDTH, HEIGHT, 3), np.uint8)
+    depth = np.zeros((WIDTH, HEIGHT), np.float32)
+    for x, y, span in spots(world, 3, 3):
+        eye = world.floor_of(span, x, y) + 0.5
+        for pitch in (0.3, -0.6, 1.2):
+            for angle in (0.1, 2.2, 4.3):
+                args = (x, y, eye, span, math.cos(angle), math.sin(angle), pitch, renderer.focal, *scene,
+                        renderer.textures, MAX_DEPTH, FOG_DIST, BACKGROUND)
+                raypitch.render_scene_pitch(skipped, depth, *args, blocks)
+                raypitch.render_scene_pitch(walked, depth, *args, never)
+                assert np.abs(skipped.astype(int) - walked.astype(int)).max() <= 1
+
+
+@pytest.mark.parametrize("name", ["koth_test1.json", "pvp_v1.json", "stacked.json", "map.json"])
+def test_drawing_a_line_at_a_time_matches_a_ray_per_pixel(name):
+    """raytilt (the game's tilted renderer) draws what raypitch's ray per pixel sees, give or take half a pixel in
+    where the samples fall: only the edges of things and the finest texture detail may differ."""
+    import raypitch
+    import raytilt
+    from constants import FOG_DIST, MAX_DEPTH
+    from renderer import BACKGROUND
+    world, textures = map_world(name)
+    renderer = Renderer(textures)
+    scene = scene_of(world)
+    blocks = raypitch.skip_blocks(*scene[:5])
+    exact, lines = np.zeros((WIDTH, HEIGHT, 3), np.uint8), np.zeros((WIDTH, HEIGHT, 3), np.uint8)
+    exact_depth, lines_depth = np.zeros((WIDTH, HEIGHT), np.float32), np.zeros((WIDTH, HEIGHT), np.float32)
+    scratch = raytilt.TiltScratch()
+    for x, y, span in spots(world, 2, 5):
+        eye = world.floor_of(span, x, y) + 0.5
+        for pitch in (0.1, 0.35, -0.8, 1.4, -1.55):        # the vanishing point far off, near, and on the picture
+            for angle in (0.3, 2.0, 4.1):
+                args = (x, y, eye, span, math.cos(angle), math.sin(angle), pitch, renderer.focal, *scene,
+                        renderer.textures, MAX_DEPTH, FOG_DIST, BACKGROUND)
+                raypitch.render_scene_pitch(exact, exact_depth, *args, blocks)
+                raytilt.render_scene_tilt(lines, lines_depth, *args, scratch)
+                close = (np.abs(exact.astype(int) - lines.astype(int)) <= 24).all(axis=2)
+                assert close.mean() > 0.96, f"{close.mean():.3f} of the pixels agree at ({x}, {y}, {pitch}, {angle})"
+                near = np.abs(exact_depth - lines_depth) <= 0.05 * np.minimum(exact_depth, lines_depth) + 1e-3
+                assert near.mean() > 0.96

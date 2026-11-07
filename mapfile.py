@@ -594,6 +594,8 @@ GAME_MODE_LABELS = {"ffa": "Free for all", "teams": "Two teams", "coop": "Co-op"
                     "koth": "King of the Hill"}
 BUY_COSTS = ("free", "money", "score")
 BUY_COST_LABELS = {"free": "Free", "money": "Money", "score": "Score"}
+DEATH_CAM_WHO = ("team", "all")                 # who a knocked-out player may watch (MapSettings.death_cam_who)
+DEATH_CAM_WHO_LABELS = {"team": "Teammates only", "all": "All teams"}
 BUY_KINDS = ("gun", "item", "health")         # (no ammo: guns come with theirs, filled up each bomb defusal round)
 BUY_KIND_LABELS = {"gun": "A gun", "item": "Inventory item", "health": "Health"}
 MAX_BUY_ITEMS = 40                              # entries a buy menu may have
@@ -680,6 +682,12 @@ class MapSettings:
     buy_cost       free: everything in it is free; money / score: each entry costs its price in that, and is
                    only given when the player has enough (score spent on buying goes down)
     buy_items      the menu's entries (BuyItem), in the order they are listed
+    respawn_delay  free for all, two teams and co-op: how long a knocked-out player waits before coming back (0: at
+                   once). King of the Hill has its own respawn_time
+    death_cam      whether a player out of a round (bomb defusal) or waiting to respawn can watch the living players
+                   through their eyes; off, they only see where they were knocked out
+    death_cam_who  team: only their teammates can be watched; all: their teammates first, then the other team (free
+                   for all has no teammates: everyone can be watched)
 
     Bomb defusal (mode "bomb", see bomb.py): team 1 (T) plants the bomb in a bomb site (the site layer), team 2 (CT)
     stops them or defuses it. Times are in seconds, distances in cells, and the defaults are Counter-Strike's.
@@ -724,6 +732,9 @@ class MapSettings:
     buy_menu: bool = False
     buy_cost: str = "money"
     buy_items: list = field(default_factory=list)
+    respawn_delay: float = 0.0
+    death_cam: bool = True
+    death_cam_who: str = "team"
     freeze_time: float = 15.0
     round_time: float = 115.0
     buy_time: float = 20.0
@@ -760,6 +771,11 @@ class MapSettings:
         """True if money means anything on this map (so the HUD shows it)."""
         return (self.buy_menu and self.buy_cost == "money") or self.start_money > 0 or self.kill_money > 0
 
+    def has_waiting(self):
+        """True if knocked-out players are out for a while (bomb defusal, King of the Hill, or a respawn delay), so
+        the death camera means something."""
+        return self.mode in ("bomb", "koth") or (self.mode in ("ffa", "teams", "coop") and self.respawn_delay > 0)
+
     def has_teams(self):
         """True if players are split into two teams (two teams, bomb defusal and King of the Hill)."""
         return self.mode in ("teams", "bomb", "koth")
@@ -790,6 +806,10 @@ class MapSettings:
                    buy_items=[BuyItem.from_dict(b) for b in items
                               if isinstance(b, dict) and b.get("kind") != "ammo"][:MAX_BUY_ITEMS]
                    if isinstance(items, list) else [],
+                   respawn_delay=number("respawn_delay", 0.0, 60.0),
+                   death_cam=bool(data.get("death_cam", base.death_cam)),
+                   death_cam_who=data.get("death_cam_who") if data.get("death_cam_who") in DEATH_CAM_WHO
+                   else base.death_cam_who,
                    bomb_effect=str(data.get("bomb_effect", ""))[:MAX_NAME],
                    bomb_light=str(data.get("bomb_light", ""))[:MAX_NAME],
                    **{key: number(key, low, high) for key, (low, high) in BOMB_NUMBERS.items()},

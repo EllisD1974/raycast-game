@@ -421,7 +421,7 @@ class Round:
         if may_move(self.view(), pid, body, wish.use, self.game.level):
             return wish
         return Inputs(turn=wish.turn, tilt=wish.tilt, equip=wish.equip, cycle=wish.cycle, buy=wish.buy,
-                      reload=wish.reload, use=wish.use)
+                      reload=wish.reload, use=wish.use, crouch=wish.crouch)
 
     def plant(self, pid):
         body = self.game.players[pid].body

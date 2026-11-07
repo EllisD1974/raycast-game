@@ -534,7 +534,7 @@ def test_a_joiner_sees_the_round_and_is_held_still_during_the_freeze():
 
 
 def test_a_joiner_out_of_the_round_can_watch_the_others():
-    level = bomb_level()
+    level = bomb_level(death_cam_who="all")                         # (the host is on the other team)
     host = HostSession(Game(level, World(level, 32), random.Random(1)), net.Host("pw", port=0))
     client = ClientSession(net.Client("127.0.0.1", host.host.port, "pw"), make_world, FIRST_CHARACTER)
     try:

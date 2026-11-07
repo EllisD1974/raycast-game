@@ -7,7 +7,9 @@ No pygame. The three sessions look the same to main.py:
     session.sprites()                   # what the renderer draws around them (items, bullets, others)
     session.ended                       # None, or why the game is over for them (host left, kicked...)
     session.round_view()                # the round as they are shown it (bomb.RoundView, koth.HillView), else None
-    session.watchable()                 # [(id, body, name)] of the others still in the round, to watch when out
+    session.watchable()                 # [(id, body, name)] of the players the map's death camera lets us watch when out
+    session.watch(pid)                  # who we watch now (None: nobody), so a host knows whose HUD to send us
+    session.watched(pid)                # their PlayerState for the HUD (stats, inventory), or None if not known yet
 
 The host runs the real Game. Joiners send their steps and get back snapshots of it, which they draw;
 a joiner predicts its own movement and smooths everyone else's (see ClientSession).
@@ -22,9 +24,10 @@ import net
 from bomb import BOMB_TILE, RoundView, bomb_sprite
 from entities import Entities, PlayerStats
 from koth import HillView, hill_sprite
-from constants import PLAYER_HEIGHT
+from respawn import RespawnView
+from constants import CROUCH_HEIGHT, PLAYER_HEIGHT
 from game import (MAX_STEP_DT, NO_TEAM, Events, Inputs, PlayerState, character_sprite, character_tile_for, clean_name,
-                  move_body, shown_name)
+                  move_body, shown_name, watchable_ids)
 from inventory import GunState, Inventory
 from lighting import LightSystem, follow as follow_lights, item_lights
 from mapfile import level_text, parse_level
@@ -105,8 +108,16 @@ class LocalSession:
         return self.game.round.view() if self.game.round is not None else None
 
     def watchable(self):
-        return [(pid, s.body, shown_name(s.name, pid)) for pid, s in sorted(self.game.players.items())
-                if pid != LOCAL_ID and s.alive]
+        players = self.game.players
+        ids = watchable_ids(self.level.settings, LOCAL_ID, self.me.team, {pid for pid, s in players.items() if s.alive},
+                            {pid: s.team for pid, s in players.items()})
+        return [(pid, players[pid].body, shown_name(players[pid].name, pid)) for pid in ids]
+
+    def watch(self, pid):
+        pass                                    # (everything about the others is here already)
+
+    def watched(self, pid):
+        return self.game.players.get(pid)
 
     def lighting(self):
         """The Lighting to draw this player's view with (None when the map has no lights and is fully lit)."""
@@ -142,6 +153,7 @@ class HostSession(LocalSession):
         self.time = 0.0                         # game time, stamped on snapshots for interpolating
         self.fx_out = []                        # effects to tell joiners to play, until the next snapshot
         self.flashes_out = []                   # lights to tell joiners to flash, until the next snapshot
+        self.watching = {}                      # joiner -> the player they say they watch while out of the round
 
     def step(self, wish, dt, elapsed=None):
         elapsed = dt if elapsed is None else elapsed
@@ -153,12 +165,15 @@ class HostSession(LocalSession):
                 self.host.send(peer, {"type": "welcome", "id": peer, "level": self.level_text, "atlas": self.atlas})
             elif kind == "disconnect":
                 self.game.remove_player(peer)
-                for table in (self.queue, self.credit, self.acked, self.owed):
+                for table in (self.queue, self.credit, self.acked, self.owed, self.watching):
                     table.pop(peer, None)
             elif kind == "message" and payload.get("type") == "input" and peer in self.queue:
                 self.accept(peer, payload)
             elif kind == "message" and payload.get("type") == "hello" and peer in self.game.players:
                 self.game.players[peer].name = clean_name(payload.get("name"))     # what they want to be called
+            elif kind == "message" and payload.get("type") == "watch" and peer in self.queue:
+                pid = payload.get("id")
+                self.watching[peer] = pid if isinstance(pid, int) and not isinstance(pid, bool) else None
         events = Events(fired=self.game.move_player(LOCAL_ID, wish, dt))
         for peer, queue in self.queue.items():
             self.credit[peer] = min(self.credit[peer] + elapsed, MAX_CREDIT)     # real time, not the capped dt
@@ -210,10 +225,10 @@ class HostSession(LocalSession):
         return queue[-1][0] if queue else self.acked[peer]
 
     def send_snapshots(self):
+        players = {str(pid): body_fields(state.body) + [round(state.hit, 3)]           # (+ the red flash left)
+                   for pid, state in self.game.players.items()}
         common = {
-            "type": "state", "time": self.time,
-            "players": {str(pid): body_fields(state.body) + [round(state.hit, 3)]       # (+ the red flash left)
-                        for pid, state in self.game.players.items()},
+            "type": "state", "time": self.time, "players": players,
             "bullets": [[b.x, b.y, b.z, b.vx, b.vy, b.vz, b.size, b.tile, b.ident, b.trail, b.light,
                          list(b.trail_offset) if b.trail_offset else None]
                         for b in self.game.projectiles.bullets],
@@ -226,9 +241,23 @@ class HostSession(LocalSession):
             common["round"] = self.game.round.view().to_dict()
         for peer, owed in self.owed.items():
             state = self.game.players[peer]
-            self.host.send(peer, dict(common, you=private_fields(state, owed, self.acked[peer])))
+            message = dict(common, you=private_fields(state, owed, self.acked[peer]))
+            if self.game.round is not None and not state.alive:
+                allowed = self.allowed_to_watch(peer)
+                if not allowed:                 # nobody to watch: they are told nothing of where the others are
+                    message["players"] = {str(peer): players[str(peer)]}
+                watching = self.watching.get(peer)
+                if watching in allowed:
+                    message["watched"] = dict(watched_fields(self.game.players[watching]), id=watching)
+            self.host.send(peer, message)
             self.owed[peer] = Events()
         self.fx_out, self.flashes_out = [], []
+
+    def allowed_to_watch(self, peer):
+        """The players a joiner out of the round may watch, by the map's death camera settings."""
+        players = self.game.players
+        return watchable_ids(self.level.settings, peer, players[peer].team,
+                             {pid for pid, s in players.items() if s.alive}, {pid: s.team for pid, s in players.items()})
 
     def status(self):
         return f" - hosting {len(self.queue)} joined, backlog {self.backlog() * 1000:.0f} ms"
@@ -280,6 +309,8 @@ class ClientSession:
         self.sent_at = {}                       # seq -> when it was sent, until the host acknowledges it
         self.ping = 0.0                         # seconds from sending a step to hearing the host has run it
         self.round = None                       # the last RoundView / HillView the host sent (None in other modes)
+        self.watching = None                    # who we last told the host we watch
+        self.watched_state = None               # (id, PlayerState) of who we watch, from the last snapshot
 
     def step(self, wish, dt, elapsed=None):
         elapsed = dt if elapsed is None else elapsed
@@ -320,21 +351,32 @@ class ClientSession:
         or defusing; in King of the Hill, not while waiting to respawn (looking around is always ours)."""
         if self.round is None or self.round.may_move(self.id, self.me.body, wish.use, self.level):
             return wish
-        return Inputs(turn=wish.turn, tilt=wish.tilt)
+        return Inputs(turn=wish.turn, tilt=wish.tilt, crouch=wish.crouch)
 
     def round_view(self):
         return self.round
 
     def watchable(self):
-        if self.game_time is None:
+        if self.game_time is None or self.level is None:
             return []
+        alive = self.round.alive if self.round is not None else set(self.history)
+        teams = {pid: team for pid, (_, team) in self.names.items()}
         out = []
-        for pid, samples in sorted(self.history.items()):
-            if self.round is not None and pid not in self.round.alive:
-                continue
-            x, y, z, *angle = interpolate(samples, self.game_time - INTERP_DELAY)
-            out.append((pid, Player(x, y, z, angle[0] if angle else 0.0), shown_name(self.names.get(pid, ("", 0))[0], pid)))
+        for pid in watchable_ids(self.level.settings, self.id, self.me.team, alive, teams):
+            if pid in self.history:             # (the host only sends who we may watch)
+                body = sample_body(*interpolate(self.history[pid], self.game_time - INTERP_DELAY))
+                out.append((pid, body, shown_name(self.names.get(pid, ("", 0))[0], pid)))
         return out
+
+    def watch(self, pid):
+        if pid != self.watching and self.ready and not self.ended:
+            self.watching = pid
+            self.client.send(net.HOST_ID, {"type": "watch", "id": pid})
+
+    def watched(self, pid):
+        if self.watched_state is not None and self.watched_state[0] == pid:
+            return self.watched_state[1]
+        return None
 
     def out_of_round(self, pid):
         return self.round is not None and pid not in self.round.alive
@@ -380,6 +422,7 @@ class ClientSession:
         self.lights = LightSystem(level, world)
         self.loads += 1
         self.history, self.bullets, self.game_time = {}, [], None
+        self.watching = self.watched_state = None
         self.ready = False                      # until the first snapshot of the new map
 
     def apply_snapshot(self, message):
@@ -407,7 +450,10 @@ class ClientSession:
         for pid, fields in players.items():
             if pid != self.id:
                 samples = self.history.setdefault(pid, [])
-                samples.append((now, fields[0], fields[1], fields[2], fields[3]))
+                crouched = fields[BODY_FIELDS.index("crouched")] if len(fields) > BODY_FIELDS.index("crouched") else False
+                pitch = fields[BODY_FIELDS.index("pitch")]
+                samples.append((now, fields[0], fields[1], fields[2], fields[3], 1.0 if crouched else 0.0,
+                                float(pitch) if isinstance(pitch, (int, float)) else 0.0))
                 del samples[:-MAX_SAMPLES]
                 hit = fields[len(BODY_FIELDS)] if len(fields) > len(BODY_FIELDS) else 0.0
                 self.hits[pid] = (now, float(hit) if isinstance(hit, (int, float)) else 0.0)
@@ -432,11 +478,13 @@ class ClientSession:
         if "round" in message:
             teams = {pid: team for pid, (_, team) in self.names.items()}
             data = message["round"]
-            kind = HillView if isinstance(data, dict) and data.get("mode") == HillView.mode else RoundView
+            kinds = {HillView.mode: HillView, RespawnView.mode: RespawnView}
+            kind = kinds.get(data.get("mode"), RoundView) if isinstance(data, dict) else RoundView
             self.round = kind.from_dict(data, teams)
             self.me.alive = self.round is None or self.id in self.round.alive
         else:
             self.round, self.me.alive = None, True
+        self.watched_state = watched_from(message.get("watched"), self.level, self.names)
         self.owed.fired += mine["fired"]
         self.owed.picked += mine["picked"]
         hurt = mine.get("hurt", 0.0)
@@ -463,8 +511,9 @@ class ClientSession:
                     continue
                 shown_at = self.game_time - INTERP_DELAY
                 x, y, z, *angle = interpolate(samples, shown_at)
-                body = Player(x, y, z, angle[0] if angle else 0.0)
-                tile = character_tile_for(self.character_tile, pid, self.me.body.angle, angle[0] if angle else None)
+                body = sample_body(x, y, z, *angle)
+                tile = character_tile_for(self.character_tile, pid, self.me.body.angle, angle[0] if angle else None,
+                                          body.crouched)
                 since, hit = self.hits.get(pid, (shown_at, 0.0))
                 sprite = character_sprite(body, self.character_tile, pid, hit=hit - max(0.0, shown_at - since))
                 sprites.append(sprite[:4] + (tile,) + sprite[5:])
@@ -480,9 +529,9 @@ class ClientSession:
         for pid, samples in self.history.items():
             if self.out_of_round(pid) or pid == hide:
                 continue
-            x, y, z, *_angle = interpolate(samples, self.game_time - INTERP_DELAY)
+            body = sample_body(*interpolate(samples, self.game_time - INTERP_DELAY))
             name, team = self.names.get(pid, ("", NO_TEAM))
-            out.append((x, y, z + PLAYER_HEIGHT, shown_name(name, pid), team))
+            out.append((body.x, body.y, body.z + body.height, shown_name(name, pid), team))
         return out
 
     def lighting(self):
@@ -516,7 +565,14 @@ def interpolate(samples, t):
 
 # ------------------------------------------------------------------ what goes in a snapshot
 
-BODY_FIELDS = ("x", "y", "z", "angle", "pitch", "span", "vx", "vy", "vz", "on_ground")
+BODY_FIELDS = ("x", "y", "z", "angle", "pitch", "span", "vx", "vy", "vz", "on_ground", "crouched", "view_h")
+
+
+def sample_body(x, y, z, angle=0.0, crouched=0.0, pitch=0.0):
+    """Another player's body as a joiner sees it, from an interpolated (x, y, z[, angle[, crouched[, pitch]]]) sample
+    (crouched is blended between 0 and 1 across a change: past halfway counts)."""
+    return Player(x, y, z, angle, pitch=pitch, crouched=crouched > 0.5,
+                  view_h=CROUCH_HEIGHT if crouched > 0.5 else PLAYER_HEIGHT)
 
 
 def body_fields(body):
@@ -539,6 +595,34 @@ def private_fields(state, owed, ack):
         "guns": [{"name": g.gun.name, "mag": g.mag, "reload_left": g.reload_left} for g in inventory.guns],
         "fired": owed.fired, "picked": owed.picked, "hurt": owed.hurt, "ack": ack,
     }
+
+
+def watched_fields(state):
+    """What a player out of the round is told about the player they watch, for their HUD: stats and inventory."""
+    inventory = state.inventory
+    return {
+        "score": state.stats.score, "health": state.stats.health, "max_health": state.stats.max_health,
+        "money": state.stats.money,
+        "items": dict(inventory.items), "ammo": dict(inventory.ammo), "equipped": inventory.equipped,
+        "guns": [{"name": g.gun.name, "mag": g.mag, "reload_left": g.reload_left} for g in inventory.guns],
+    }
+
+
+def watched_from(fields, level, names):
+    """(id, PlayerState) of the watched player from a snapshot's "watched" (see watched_fields), or None for none or
+    junk. Their body is not in it: it is drawn from the positions everyone is sent."""
+    if not isinstance(fields, dict):
+        return None
+    try:
+        pid = fields["id"]
+        numbers = [fields[key] for key in ("score", "health", "max_health", "money")]
+        if not isinstance(pid, int) or not all(isinstance(v, (int, float)) for v in numbers):
+            return None
+        name, team = names.get(pid, ("", NO_TEAM))
+        return pid, PlayerState(None, PlayerStats(*(float(v) for v in numbers)), inventory_from(fields, level),
+                                name=name, team=team)
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None
 
 
 def inventory_from(fields, level):

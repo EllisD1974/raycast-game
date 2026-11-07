@@ -19,6 +19,10 @@ PLAYER_RADIUS = 0.2             # how close the camera may get to a wall
 STEP_HEIGHT = 0.3               # tallest ledge you can walk up (stairs of 0.25 are fine)
 MOVE_SPEED = 3.0                # cells per second
 SPRINT_MULTIPLIER = 1.6         # holding Shift with a movement key: MOVE_SPEED * this
+CROUCH_HEIGHT = 0.55            # how tall a crouching player is (holding Ctrl); the eye stays as far under the head
+CROUCH_MULTIPLIER = 0.5         # walking speed while crouched: MOVE_SPEED * this (no sprinting)
+CROUCH_VIEW_SPEED = 2.0         # cells / second the view moves down or up as the player crouches or stands
+CROUCH_SPREAD = 0.6             # a gun's spread while crouched on the ground: its spread * this
 TURN_SPEED = 2.0                # radians per second (keyboard turning)
 MOUSE_SENSITIVITY = 0.0025      # radians of turning per screen pixel the mouse moves
 MAX_PITCH_DEG = 90.0            # how far up or down you can look (90 = straight up / down)

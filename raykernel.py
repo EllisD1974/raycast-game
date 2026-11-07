@@ -15,8 +15,8 @@ too long. Floors/ceilings are planes (flat or sloped); 1/distance is linear in s
 across a plane, which gives perspective-correct texturing without per-pixel ray casting.
 
 This is the renderer for a level view, and for one tilted only a little (renderer.SHEAR_PITCH), where moving
-the horizon up or down the screen looks the same as tilting. A camera tilted further is drawn by raypitch.py
-instead (one real 3D ray per pixel), because the column approach can only fake tilting by shifting the picture.
+the horizon up or down the screen looks the same as tilting. A camera tilted further is drawn by raytilt.py
+instead (this method along lines through the vanishing point), because shifting a column only fakes tilting.
 
 Transparent walls (fences, windows, glass) are cells the ray passes straight through. Each face the
 ray passes is remembered, and after the column is drawn the faces are blended over it, farthest
@@ -38,6 +38,7 @@ MIN_SHADE = 0.2
 SIDE_SHADE = 0.7        # walls facing along y are darker than those facing along x
 EPS = 1e-6
 MAX_PANES = 24          # see-through wall faces remembered per screen column (the nearest ones)
+MAX_BRANCHES = 32       # spans a column can see into at once (two slabs, one behind the other, already make 4)
 
 
 @njit(cache=True)
@@ -208,12 +209,12 @@ def _render_column(fb, zb, x, px, py, eye_z, eye_span, rdx, rdy, horizon, focal,
         step_y, side_y = 1, (cy + 1.0 - py) * ddy
 
     # Branches active in the current cell (span index and visible window), and for the next cell.
-    cur_s = np.empty(nspans, np.int64)
-    cur_top = np.empty(nspans, np.int64)
-    cur_bot = np.empty(nspans, np.int64)
-    nxt_s = np.empty(nspans, np.int64)
-    nxt_top = np.empty(nspans, np.int64)
-    nxt_bot = np.empty(nspans, np.int64)
+    cur_s = np.empty(MAX_BRANCHES, np.int64)
+    cur_top = np.empty(MAX_BRANCHES, np.int64)
+    cur_bot = np.empty(MAX_BRANCHES, np.int64)
+    nxt_s = np.empty(MAX_BRANCHES, np.int64)
+    nxt_top = np.empty(MAX_BRANCHES, np.int64)
+    nxt_bot = np.empty(MAX_BRANCHES, np.int64)
     # See-through wall faces met by this ray, nearest first (see _composite_panes).
     pane_t = np.empty(MAX_PANES, np.float64)
     pane_tx = np.empty(MAX_PANES, np.int64)
@@ -340,7 +341,7 @@ def _render_column(fb, zb, x, px, py, eye_z, eye_span, rdx, rdy, horizon, focal,
                             n_panes += 1
                     ntop = max(ytop, int(math.ceil(_proj(hi, t1, eye_z, horizon, focal))))
                     nbot = min(ybot, int(math.ceil(_proj(cur, t1, eye_z, horizon, focal))))
-                    if ntop < nbot:
+                    if ntop < nbot and n_next < MAX_BRANCHES:
                         nxt_s[n_next], nxt_top[n_next], nxt_bot[n_next] = k, ntop, nbot
                         n_next += 1
                     cur = hi
@@ -433,7 +434,7 @@ def draw_sprites(fb, zb, px, py, eye_z, dir_x, dir_y, pitch, horizon, focal,
                  sp_x, sp_y, sp_z, sp_size, sp_tex, sp_spin, sp_face, sp_alpha, sp_lit, sp_glow, sp_color, ambient,
                  textures, max_dist, fog_dist):
     """Draw flat sprites that always face the camera, over a picture already drawn by
-    render_scene_depth (or raypitch.render_scene_pitch). The camera looks along (dir_x, dir_y),
+    render_scene_depth (or raytilt.render_scene_tilt). The camera looks along (dir_x, dir_y),
     tilted up by `pitch` radians, with the middle of its view at screen row `horizon` (see
     raylight.apply_lights). The sprites must be sorted farthest first. sp_z is the height of a sprite's bottom, sp_size its height and width in world units. A sprite pixel shows only where it
     is nearer than what is already there (zb), so walls, ledges and floors hide it; texture alpha
