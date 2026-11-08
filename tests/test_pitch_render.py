@@ -181,7 +181,9 @@ def test_the_pitch_limit_is_straight_up_and_down():
 
 
 @pytest.mark.parametrize("path", sorted(glob.glob(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                                                              "maps", "*.json"))))
+                                                              "maps", "*.json"))
+                                        + glob.glob(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                                                 "maps", "tests", "*.json"))))
 def test_every_map_renders_at_every_tilt_without_gaps(path):
     """Every pixel is something: a surface (finite depth), not left over from before."""
     from atlas import atlas_array, unpack_atlas
@@ -211,7 +213,7 @@ def test_a_tilted_view_sees_through_glass_and_floors_above_floors():
     glass = frame(world, 0.2)[0]
     clear = frame(World(Level.blank(16, 16), 16), 0.2)[0]
     stacked = World(load_level(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                                            "maps", "stacked.json")), 16)
+                                            "maps", "tests", "stacked.json")), 16)
     assert stacked.floors >= 2
     renderer = Renderer(textures)
     renderer.draw(world, physics.Player(4.5, 8.5, 0.0, 0.0, pitch=0.2))
@@ -263,7 +265,7 @@ def scene_of(world):
             world.wall_tex, world.wall_sides, world.floor_tex, world.ceil_tex)
 
 
-@pytest.mark.parametrize("name", ["koth_test1.json", "pvp_v1.json", "stacked.json"])
+@pytest.mark.parametrize("name", ["koth_test1.json", "pvp_v1.json", "tests/stacked.json"])
 def test_jumping_across_open_blocks_draws_the_same_picture(name):
     """raypitch's rays skip whole blocks of open air (skip_blocks); with no block to skip the picture is the same, but
     for distances worked out a hair differently (a shade one step brighter or darker here and there)."""
@@ -288,7 +290,7 @@ def test_jumping_across_open_blocks_draws_the_same_picture(name):
                 assert np.abs(skipped.astype(int) - walked.astype(int)).max() <= 1
 
 
-@pytest.mark.parametrize("name", ["koth_test1.json", "pvp_v1.json", "stacked.json", "map.json"])
+@pytest.mark.parametrize("name", ["koth_test1.json", "pvp_v1.json", "tests/stacked.json", "map.json"])
 def test_drawing_a_line_at_a_time_matches_a_ray_per_pixel(name):
     """raytilt (the game's tilted renderer) draws what raypitch's ray per pixel sees, give or take half a pixel in
     where the samples fall: only the edges of things and the finest texture detail may differ."""

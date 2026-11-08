@@ -420,3 +420,12 @@ def test_a_steam_id_or_address_can_be_pasted(folder):
     home.handle(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_INSERT, mod=pygame.KMOD_SHIFT, unicode=""), SIZE)
     key(home, pygame.K_RETURN)
     assert home.join_address == "192.168.1.20"
+
+
+def test_maps_made_for_testing_are_not_offered():
+    maps = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "maps")
+    listed = Home(GameSettings(), maps).maps()
+    assert "map.json" in listed
+    assert not set(listed) & set(os.listdir(os.path.join(maps, "tests")))      # (maps/tests holds them)
+    import map_editor
+    assert map_editor.map_files(maps) == listed                               # the editor lists the same

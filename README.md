@@ -137,7 +137,7 @@ Details pane's "+ Add animation" list and each one has its own settings:
 | Rotate | speed (turns per second) |
 
 Add both for an item that floats and spins.
-`maps/items.json` is a small example.
+`maps/tests/items.json` is a small example.
 
 ## Prefabs
 
@@ -195,7 +195,7 @@ scales both. The Explosion effect and light rows play at the blast, on top of th
 have one made for each gun from its old bullet settings, when they are loaded.
 
 Bullets fly where you look (up and down included) and stop at walls, floors, ceilings and glass.
-Nothing takes damage yet, so damage is stored on the bullet for when something can. `maps/guns.json`
+Nothing takes damage yet, so damage is stored on the bullet for when something can. `maps/tests/guns.json`
 has three example guns and pickups.
 
 ## Map settings and the buy menu
@@ -308,6 +308,7 @@ room. Barriers only work on the ground floor (floor 1); they fill its room from 
 
     main.py, map_editor.py, ...   game and editor source
     assets/                       textures.png (the texture atlas), character.png (other players' pictures: make_character.py)
-    maps/                         map.json (default map) and the demo maps (items.json has pickups,
-                                  guns.json guns, an inventory item and prefabs)
+    maps/                         map.json (default map) and the other maps the game lists
+    maps/tests/                   maps made for testing, which the game and editor do not list (items.json has
+                                  pickups, guns.json guns, an inventory item and prefabs)
     tests/
