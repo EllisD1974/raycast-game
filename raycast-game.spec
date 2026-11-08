@@ -20,10 +20,15 @@ datas = [
 ]
 for source in ("raykernel.py", "raypitch.py", "raylight.py"):     # numba reads these to compile and cache the renderer
     datas.append((os.path.join(root, source), "."))
+binaries = []
+steam_api = os.path.join(root, "steamworks", "win64", "steam_api64.dll")     # for playing over Steam (steamworks/README.md)
+if os.path.exists(steam_api):
+    binaries.append((steam_api, "."))
 
 analysis_options = dict(
     pathex=[root],
     datas=datas,
+    binaries=binaries,
     hiddenimports=[],
     hookspath=[],
     runtime_hooks=[os.path.join(root, "packaging", "pyi_rth_numba.py")],

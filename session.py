@@ -13,6 +13,11 @@ No pygame. The three sessions look the same to main.py:
 
 The host runs the real Game. Joiners send their steps and get back snapshots of it, which they draw;
 a joiner predicts its own movement and smooths everyone else's (see ClientSession).
+
+Snapshots and steps may be lost on the way (they go unreliably, see net.py): each snapshot holds the whole
+state, and each packet of steps repeats the last few. What happens only once (effects, shots, pickups,
+damage) goes in a reliable "events" message instead. Snapshots carry the map's number so one left over
+from before a reload is not drawn on the new map.
 """
 import base64
 import json
@@ -43,6 +48,7 @@ CLOCK_BLEND = 0.1                               # how fast our game time estimat
 MAX_SAMPLES = 12                                # positions kept per other player to interpolate between
 MAX_EXTRAPOLATION = 0.1                         # longest a bullet is carried on without a new snapshot
 MAX_FX = 32                                     # particle effects sent to joiners in one snapshot
+REPEAT_STEPS = 4                                # steps in each packet a joiner sends: the newest and the ones before
 
 
 class LocalSession:
@@ -154,6 +160,7 @@ class HostSession(LocalSession):
         self.fx_out = []                        # effects to tell joiners to play, until the next snapshot
         self.flashes_out = []                   # lights to tell joiners to flash, until the next snapshot
         self.watching = {}                      # joiner -> the player they say they watch while out of the round
+        self.map_number = 0                     # one more for each reload, stamped on what is sent about the map
 
     def step(self, wish, dt, elapsed=None):
         elapsed = dt if elapsed is None else elapsed
@@ -162,13 +169,19 @@ class HostSession(LocalSession):
                 self.game.add_player(peer)
                 self.queue[peer], self.credit[peer] = deque(maxlen=MAX_QUEUE), MAX_STEP_DT
                 self.acked[peer], self.owed[peer] = 0, Events()
-                self.host.send(peer, {"type": "welcome", "id": peer, "level": self.level_text, "atlas": self.atlas})
+                self.host.send(peer, {"type": "welcome", "id": peer, "level": self.level_text, "atlas": self.atlas,
+                                      "map": self.map_number})
             elif kind == "disconnect":
                 self.game.remove_player(peer)
                 for table in (self.queue, self.credit, self.acked, self.owed, self.watching):
                     table.pop(peer, None)
             elif kind == "message" and payload.get("type") == "input" and peer in self.queue:
                 self.accept(peer, payload)
+            elif kind == "message" and payload.get("type") == "inputs" and peer in self.queue:
+                steps = payload.get("steps")
+                for step in steps[-REPEAT_STEPS:] if isinstance(steps, list) else []:
+                    if isinstance(step, dict):
+                        self.accept(peer, step)         # (the ones already had are ignored)
             elif kind == "message" and payload.get("type") == "hello" and peer in self.game.players:
                 self.game.players[peer].name = clean_name(payload.get("name"))     # what they want to be called
             elif kind == "message" and payload.get("type") == "watch" and peer in self.queue:
@@ -206,7 +219,8 @@ class HostSession(LocalSession):
         if atlas_png:
             self.atlas = base64.b64encode(atlas_png).decode()
         self.fx_out, self.flashes_out = [], []
-        self.host.broadcast({"type": "reload", "level": self.level_text, "atlas": self.atlas})
+        self.map_number += 1
+        self.host.broadcast({"type": "reload", "level": self.level_text, "atlas": self.atlas, "map": self.map_number})
 
     def backlog(self):
         """Seconds of joiner steps waiting their turn, for the worst joiner (0 when keeping up)."""
@@ -227,21 +241,24 @@ class HostSession(LocalSession):
     def send_snapshots(self):
         players = {str(pid): body_fields(state.body) + [round(state.hit, 3)]           # (+ the red flash left)
                    for pid, state in self.game.players.items()}
+        fx = [list(e) for e in self.fx_out[-MAX_FX:]]
+        flashes = [list(f) for f in self.flashes_out[-MAX_FX:]]
         common = {
-            "type": "state", "time": self.time, "players": players,
+            "type": "state", "map": self.map_number, "time": self.time, "players": players,
             "bullets": [[b.x, b.y, b.z, b.vx, b.vy, b.vz, b.size, b.tile, b.ident, b.trail, b.light,
                          list(b.trail_offset) if b.trail_offset else None]
                         for b in self.game.projectiles.bullets],
-            "fx": [list(e) for e in self.fx_out[-MAX_FX:]],
-            "flashes": [list(f) for f in self.flashes_out[-MAX_FX:]],
             "items": "".join("1" if item.present else "0" for item in self.game.items.items),
             "names": {str(pid): [state.name, state.team] for pid, state in self.game.players.items()},
         }
         if self.game.round is not None:
             common["round"] = self.game.round.view().to_dict()
         for peer, owed in self.owed.items():
+            if fx or flashes or owed.fired or owed.picked or owed.hurt:
+                self.host.send(peer, {"type": "events", "map": self.map_number, "fx": fx, "flashes": flashes,
+                                      "fired": owed.fired, "picked": owed.picked, "hurt": owed.hurt})
             state = self.game.players[peer]
-            message = dict(common, you=private_fields(state, owed, self.acked[peer]))
+            message = dict(common, you=private_fields(state, self.acked[peer]))
             if self.game.round is not None and not state.alive:
                 allowed = self.allowed_to_watch(peer)
                 if not allowed:                 # nobody to watch: they are told nothing of where the others are
@@ -249,7 +266,7 @@ class HostSession(LocalSession):
                 watching = self.watching.get(peer)
                 if watching in allowed:
                     message["watched"] = dict(watched_fields(self.game.players[watching]), id=watching)
-            self.host.send(peer, message)
+            self.host.send(peer, message, reliable=False)
             self.owed[peer] = Events()
         self.fx_out, self.flashes_out = [], []
 
@@ -294,6 +311,10 @@ class ClientSession:
         self.me = PlayerState(Player(0.0, 0.0, 0.0))
         self.pending = []                       # (seq, Inputs, dt) sent and not yet carried out by the host
         self.seq = 0
+        self.recent = deque(maxlen=REPEAT_STEPS)    # the last steps as sent, sent again with each new one
+        self.acked = 0                          # the last of our steps the host has said it carried out
+        self.map_number = None                  # the number the host gave the map we are on
+        self.snapshot_time = None               # game time of the newest snapshot applied (older ones are dropped)
         self.history = {}                       # other player id -> [(game time, x, y, z, angle)], oldest first
         self.hits = {}                          # other player id -> (game time, red flash it had left then)
         self.name = clean_name(name)            # what we want to be called (told to the host on joining)
@@ -323,7 +344,9 @@ class ClientSession:
         if self.ready and not self.ended:
             wish = Inputs.from_dict(wish.to_dict())     # exactly what the host will read it as
             self.seq += 1
-            self.client.send(net.HOST_ID, dict(wish.to_dict(), type="input", seq=self.seq, dt=dt))
+            self.recent.append(dict(wish.to_dict(), seq=self.seq, dt=dt))
+            steps = [step for step in self.recent if step["seq"] > self.acked]
+            self.client.send(net.HOST_ID, {"type": "inputs", "steps": steps}, reliable=False)
             ours = self.predicted(wish)
             self.pending.append((self.seq, ours, dt))
             self.sent_at[self.seq] = time.monotonic()
@@ -402,8 +425,21 @@ class ClientSession:
             self.client.send(net.HOST_ID, {"type": "hello", "name": self.name})
         elif kind == "reload" and self.level is not None:
             self.load(message)
-        elif kind == "state" and self.level is not None:
+        elif kind == "state" and self.level is not None and self.current(message):
             self.apply_snapshot(message)
+        elif kind == "events" and self.level is not None and message.get("map", 0) == self.map_number:
+            self.apply_events(message)
+
+    def current(self, message):
+        """Whether a snapshot is of the map we are on and newer than the last one (they can come late or out of
+        order, or be left over from the map before a reload)."""
+        t = message.get("time")
+        if message.get("map", 0) != self.map_number or not isinstance(t, (int, float)) or isinstance(t, bool):
+            return False
+        if self.snapshot_time is not None and t <= self.snapshot_time:
+            return False
+        self.snapshot_time = t
+        return True
 
     def load(self, message):
         """Switch to the map (and textures) in a welcome or reload message. A reload drops what we knew
@@ -422,6 +458,7 @@ class ClientSession:
         self.lights = LightSystem(level, world)
         self.loads += 1
         self.history, self.bullets, self.game_time = {}, [], None
+        self.map_number, self.snapshot_time = message.get("map", 0), None
         self.watching = self.watched_state = None
         self.ready = False                      # until the first snapshot of the new map
 
@@ -431,6 +468,7 @@ class ClientSession:
         if self.id not in players:
             return
         body = body_from(mine["body"])          # where the host has us, then what it has not caught up with
+        self.acked = max(self.acked, mine["ack"])
         if mine["ack"] in self.sent_at:
             self.ping = time.monotonic() - self.sent_at[mine["ack"]]
         self.sent_at = {seq: t for seq, t in self.sent_at.items() if seq > mine["ack"]}
@@ -458,14 +496,6 @@ class ClientSession:
                 hit = fields[len(BODY_FIELDS)] if len(fields) > len(BODY_FIELDS) else 0.0
                 self.hits[pid] = (now, float(hit) if isinstance(hit, (int, float)) else 0.0)
         self.bullets, self.bullet_age = message["bullets"], 0.0
-        for event in message.get("fx", [])[:MAX_FX]:
-            if (isinstance(event, list) and len(event) in (7, 10) and isinstance(event[0], str)
-                    and all(isinstance(v, (int, float)) for v in event[1:])):
-                self.particles.play(event[0], *event[1:4], tuple(event[4:7]), tuple(event[7:10]) if len(event) == 10 else None)
-        for flash in message.get("flashes", [])[:MAX_FX]:
-            if (isinstance(flash, list) and len(flash) == 4 and isinstance(flash[0], str)
-                    and all(isinstance(v, (int, float)) for v in flash[1:])):
-                self.lights.flash(*flash)
         for item, present in zip(self.items.items, message["items"]):
             item.present = present == "1"
         names = message.get("names")
@@ -485,11 +515,23 @@ class ClientSession:
         else:
             self.round, self.me.alive = None, True
         self.watched_state = watched_from(message.get("watched"), self.level, self.names)
-        self.owed.fired += mine["fired"]
-        self.owed.picked += mine["picked"]
-        hurt = mine.get("hurt", 0.0)
-        self.owed.hurt += float(hurt) if isinstance(hurt, (int, float)) else 0.0
         self.ready = True
+
+    def apply_events(self, message):
+        """What happened once since the last events message: effects and lights to play, and our shots, pickups
+        and damage (handed out by the next step)."""
+        for event in message.get("fx", [])[:MAX_FX]:
+            if (isinstance(event, list) and len(event) in (7, 10) and isinstance(event[0], str)
+                    and all(isinstance(v, (int, float)) for v in event[1:])):
+                self.particles.play(event[0], *event[1:4], tuple(event[4:7]), tuple(event[7:10]) if len(event) == 10 else None)
+        for flash in message.get("flashes", [])[:MAX_FX]:
+            if (isinstance(flash, list) and len(flash) == 4 and isinstance(flash[0], str)
+                    and all(isinstance(v, (int, float)) for v in flash[1:])):
+                self.lights.flash(*flash)
+        fired, picked, hurt = message.get("fired", 0), message.get("picked", []), message.get("hurt", 0.0)
+        self.owed.fired += fired if isinstance(fired, int) and not isinstance(fired, bool) else 0
+        self.owed.picked += [text for text in picked if isinstance(text, str)] if isinstance(picked, list) else []
+        self.owed.hurt += float(hurt) if isinstance(hurt, (int, float)) and not isinstance(hurt, bool) else 0.0
 
     def sprites(self, hide=None):
         if self.items is None:
@@ -583,9 +625,9 @@ def body_from(fields):
     return Player(**dict(zip(BODY_FIELDS, fields)))
 
 
-def private_fields(state, owed, ack):
-    """What one player is told about themselves: their body, stats, inventory, what just happened and
-    the last of their steps the host has carried out."""
+def private_fields(state, ack):
+    """What one player is told about themselves: their body, stats, inventory and the last of their steps
+    the host has carried out (what just happened to them goes in the "events" message)."""
     inventory = state.inventory
     return {
         "body": body_fields(state.body),
@@ -593,7 +635,7 @@ def private_fields(state, owed, ack):
         "money": state.stats.money,
         "items": dict(inventory.items), "ammo": dict(inventory.ammo), "equipped": inventory.equipped,
         "guns": [{"name": g.gun.name, "mag": g.mag, "reload_left": g.reload_left} for g in inventory.guns],
-        "fired": owed.fired, "picked": owed.picked, "hurt": owed.hurt, "ack": ack,
+        "ack": ack,
     }
 
 

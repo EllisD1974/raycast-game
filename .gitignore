@@ -16,3 +16,7 @@ dist/
 
 # Scratch prototype, not part of the project
 initial_test_impl/
+
+# Stray copies of the Steamworks library and app id file in the root (the library is kept in steamworks/)
+/steam_api64.dll
+/steam_appid.txt
