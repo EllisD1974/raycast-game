@@ -4,9 +4,13 @@ Nothing here knows about the game; it carries small dicts between a Host and its
 have the same four calls and are polled once a frame (no threads, nothing blocks):
 
     events = net.poll()          # [(kind, peer_id, payload), ...] since the last call
-    net.send(peer_id, message)   # message is a dict that json can carry
-    net.broadcast(message)       # the host: to every joined client. A client: to the host
+    net.send(peer_id, message, reliable=True)   # message is a dict that json can carry
+    net.broadcast(message, reliable=True)       # the host: to every joined client. A client: to the host
     net.close()
+
+A message sent with reliable=False may be lost, or arrive after one sent later: it is for what the next
+message replaces anyway (snapshots, steps sent again in the next packet). Reliable ones all arrive, in the
+order sent. Over TCP everything is reliable and the flag is ignored.
 
 The events are ("connect", id, None), ("message", id, dict) and ("disconnect", id, reason). The
 host is always HOST_ID, so a client sends with net.send(HOST_ID, ...). A client gets "connect" once
@@ -15,8 +19,10 @@ unreachable host arrives as ("disconnect", HOST_ID, reason) instead.
 
 The password never crosses the wire: the host sends a random salt and the client answers with
 sha256(salt + password). Messages are length-prefixed JSON over TCP, which also works across the
-internet through a forwarded port or a VPN such as Tailscale. A transport for Steam would offer the
-same calls.
+internet through a forwarded port or a VPN such as Tailscale.
+
+BaseHost and BaseClient hold the handshake and work over any connection with Connection's calls (queue,
+flush, read, close, closed, reason); Host and Client are them over TCP, steamnet.py over Steam.
 """
 import errno
 import hashlib
@@ -57,7 +63,7 @@ class Connection:
         self.closed = False
         self.reason = ""
 
-    def queue(self, message):
+    def queue(self, message, reliable=True):
         body = json.dumps(message, separators=(",", ":")).encode()
         self.outbox += _HEADER.pack(len(body)) + body
 
@@ -115,26 +121,30 @@ class Connection:
                 pass
 
 
-class Host:
-    """Listens for players, lets in those who know the password, and relays messages with them."""
+class BaseHost:
+    """Lets in the players who know the password and relays messages with them, over connections a
+    subclass finds: `_incoming()` returns the new ones since the last poll, `_shut()` stops looking."""
 
-    def __init__(self, password, port=DEFAULT_PORT, bind="127.0.0.1", max_clients=7):
+    def __init__(self, password, max_clients=7):
         self.password = password
         self.max_clients = max_clients
-        self.listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        if os.name != "nt":                         # Windows would let a second host share the port
-            self.listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.listener.bind((bind, port))
-        self.listener.listen()
-        self.listener.setblocking(False)
-        self.port = self.listener.getsockname()[1]  # the real port when 0 was asked for
-        self.joined = {}                            # id -> Connection, after the password was accepted
-        self.pending = {}                           # Connection -> (salt, when it arrived)
+        self.joined = {}                            # id -> connection, after the password was accepted
+        self.pending = {}                           # connection -> (salt, when it arrived)
         self.next_id = HOST_ID + 1
+
+    def _incoming(self):
+        return []
+
+    def _shut(self):
+        pass
 
     def poll(self):
         events = []
-        self._accept()
+        for conn in self._incoming():
+            salt = os.urandom(16).hex()
+            conn.queue({"type": "hello", "salt": salt})
+            conn.flush()
+            self.pending[conn] = (salt, time.monotonic())
         for conn, (salt, since) in list(self.pending.items()):
             for message in conn.read():
                 self._handshake(conn, salt, message, events)
@@ -154,15 +164,15 @@ class Host:
                 events.append(("disconnect", peer_id, conn.reason))
         return events
 
-    def send(self, peer_id, message):
+    def send(self, peer_id, message, reliable=True):
         conn = self.joined.get(peer_id)
         if conn:
-            conn.queue(message)
+            conn.queue(message, reliable)
             conn.flush()
 
-    def broadcast(self, message):
+    def broadcast(self, message, reliable=True):
         for peer_id in list(self.joined):
-            self.send(peer_id, message)
+            self.send(peer_id, message, reliable)
 
     def kick(self, peer_id, reason="kicked"):
         conn = self.joined.get(peer_id)
@@ -176,21 +186,7 @@ class Host:
             conn.close("host closed")
         self.joined.clear()
         self.pending.clear()
-        self.listener.close()
-
-    def _accept(self):
-        while True:
-            try:
-                sock, _ = self.listener.accept()
-            except (BlockingIOError, InterruptedError):
-                return
-            except OSError:
-                return
-            conn = Connection(sock)
-            salt = os.urandom(16).hex()
-            conn.queue({"type": "hello", "salt": salt})
-            conn.flush()
-            self.pending[conn] = (salt, time.monotonic())
+        self._shut()
 
     def _handshake(self, conn, salt, message, events):
         if message.get("type") != "join":
@@ -214,52 +210,64 @@ class Host:
         self.pending.pop(conn, None)
 
 
-class Client:
-    """Joins a Host with its password. Poll it until "connect" (accepted) or "disconnect"."""
+class Host(BaseHost):
+    """BaseHost over TCP, listening on `port` (0: any free one, see .port)."""
 
-    def __init__(self, address, port, password):
+    def __init__(self, password, port=DEFAULT_PORT, bind="127.0.0.1", max_clients=7):
+        super().__init__(password, max_clients)
+        self.listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        if os.name != "nt":                         # Windows would let a second host share the port
+            self.listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.listener.bind((bind, port))
+        self.listener.listen()
+        self.listener.setblocking(False)
+        self.port = self.listener.getsockname()[1]  # the real port when 0 was asked for
+
+    def _incoming(self):
+        new = []
+        while True:
+            try:
+                sock, _ = self.listener.accept()
+            except OSError:                         # (BlockingIOError: nobody else waiting)
+                return new
+            new.append(Connection(sock))
+
+    def _shut(self):
+        self.listener.close()
+
+
+class BaseClient:
+    """Joins a host with its password. Poll it until "connect" (accepted) or "disconnect".
+
+    A subclass makes the connection: `_establish()` is called each poll until it returns the connection
+    (Connection's calls), and returns None while still trying or raises ConnectionError(why) on failing.
+    `_abandon()` gives up on a connection not yet made."""
+
+    def __init__(self, password):
         self.password = password
         self.conn = None
         self.id = None
         self.connected = False                      # accepted by the host
-        self.started = time.monotonic()
         self.dead = False                           # the final "disconnect" was already reported
         self.told = ""                              # why the host turned us away or kicked us
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.setblocking(False)
-        self.connecting = True
-        try:
-            code = sock.connect_ex((address, port))
-        except OSError as e:                        # e.g. a host name that does not resolve
-            sock.close()
-            self.failure = f"cannot reach host ({e})"
-            self.sock = None
-            return
-        self.failure = None
-        self.sock = sock
-        if code not in _PENDING:
-            sock.close()
-            self.sock = None
-            self.failure = f"cannot reach host ({os.strerror(code)})"
+
+    def _establish(self):
+        raise ConnectionError("no way to reach the host")
+
+    def _abandon(self):
+        pass
 
     def poll(self):
         if self.dead:
             return []
         events = []
-        if self.failure:
-            return self._die(self.failure)
-        if self.connecting:
-            if time.monotonic() - self.started > CONNECT_TIMEOUT:
-                self.sock.close()
-                return self._die("host did not answer")
-            _, writable, failed = select.select([], [self.sock], [self.sock], 0)
-            if failed or (writable and self.sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)):
-                self.sock.close()
-                return self._die("cannot reach host (connection refused)")
-            if not writable:
+        if self.conn is None:
+            try:
+                self.conn = self._establish()
+            except ConnectionError as e:
+                return self._die(str(e))
+            if self.conn is None:
                 return events
-            self.connecting = False
-            self.conn = Connection(self.sock, MAX_HOST_FRAME)
         for message in self.conn.read():
             kind = message.get("type")
             if kind == "hello" and not self.connected:
@@ -276,21 +284,55 @@ class Client:
             events += self._die(self.told or self.conn.reason)
         return events
 
-    def send(self, peer_id, message):
+    def send(self, peer_id, message, reliable=True):
         if self.connected and not self.conn.closed:
-            self.conn.queue(message)
+            self.conn.queue(message, reliable)
             self.conn.flush()
 
-    def broadcast(self, message):
-        self.send(HOST_ID, message)
+    def broadcast(self, message, reliable=True):
+        self.send(HOST_ID, message, reliable)
 
     def close(self):
         self.dead = True
         if self.conn:
             self.conn.close("closed")
-        elif self.sock:
-            self.sock.close()
+        else:
+            self._abandon()
 
     def _die(self, reason):
         self.dead = True
         return [("disconnect", HOST_ID, reason)]
+
+
+class Client(BaseClient):
+    """BaseClient over TCP, to a host at address:port."""
+
+    def __init__(self, address, port, password):
+        super().__init__(password)
+        self.started = time.monotonic()
+        self.failure = None
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock.setblocking(False)
+        try:
+            code = self.sock.connect_ex((address, port))
+        except OSError as e:                        # e.g. a host name that does not resolve
+            code, self.failure = None, f"cannot reach host ({e})"
+        if code is not None and code not in _PENDING:
+            self.failure = f"cannot reach host ({os.strerror(code)})"
+        if self.failure:
+            self.sock.close()
+
+    def _establish(self):
+        if self.failure:
+            raise ConnectionError(self.failure)
+        if time.monotonic() - self.started > CONNECT_TIMEOUT:
+            self.sock.close()
+            raise ConnectionError("host did not answer")
+        _, writable, failed = select.select([], [self.sock], [self.sock], 0)
+        if failed or (writable and self.sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)):
+            self.sock.close()
+            raise ConnectionError("cannot reach host (connection refused)")
+        return Connection(self.sock, MAX_HOST_FRAME) if writable else None
+
+    def _abandon(self):
+        self.sock.close()

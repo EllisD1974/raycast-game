@@ -234,8 +234,8 @@ def screen(monkeypatch, folder):
 
 def test_the_home_screen_starts_hosting_the_map_picked(screen, folder, graphics, monkeypatch):
     real_start = main.start_host
-    monkeypatch.setattr(main, "start_host", lambda g, path, password, max_players, name="": real_start(
-        g, path, password, port=0, bind="127.0.0.1", max_players=max_players, name=name))
+    monkeypatch.setattr(main, "start_host", lambda g, path, password, max_players, name="", steam=False: real_start(
+        g, path, password, port=0, bind="127.0.0.1", max_players=max_players, name=name, steam=steam))
     settings = GameSettings(max_players=3)
     steps = [press_label("Host game"), press_label("dunes"), press_box("host_password"), typed("pw"),
              press_label("Start hosting")]
@@ -253,8 +253,8 @@ def test_the_home_screen_joins_a_host_and_reports_a_wrong_password(screen, folde
     shown = []
 
     class Watched(main.Home):                                   # (to see what the real home screen says)
-        def __init__(self, *args):
-            super().__init__(*args)
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
             shown.append(self)
     monkeypatch.setattr(main, "Home", Watched)
     host = main.start_host(graphics, str(folder / "castle.json"), "pw", port=0, bind="127.0.0.1")
@@ -282,6 +282,144 @@ def test_the_home_screen_joins_a_host_and_reports_a_wrong_password(screen, folde
             session.close()
     finally:
         host.close()
+
+
+# ------------------------------------------------------------------ over Steam
+
+from test_steamnet import APP_ID, HOST_ID, JOINER_ID, FakeSteam     # noqa: E402
+from steamnet import SteamHost                                      # noqa: E402
+
+
+def steam_world():
+    steam = FakeSteam()
+    steam.names.update({HOST_ID: "Hosty", JOINER_ID: "Me", 3: "Idle Ida"})
+    steam.offline[3] = APP_ID
+    return steam
+
+
+def test_the_choice_of_ip_or_steam_is_on_both_pages_and_kept(folder):
+    settings = GameSettings()
+    me = steam_world().user(JOINER_ID)
+    home = Home(settings, str(folder), steam=lambda: me)
+    for page in ("Host game", "Join game"):
+        home.go("home")
+        click(home, page)
+        assert buttons(home)["IP address"].selected and not buttons(home)["Steam"].selected
+    assert click(home, "Steam") == "settings"                           # (saved by main.py for next time)
+    assert settings.network == "steam" and buttons(home)["Steam"].selected
+    assert GameSettings().network == "ip"                               # by IP to start with
+
+
+def test_a_settings_file_with_a_strange_network_falls_back_to_ip(tmp_path):
+    path = tmp_path / "game.json"
+    path.write_text('{"network": "carrier pigeon"}')
+    assert GameSettings.load(str(path)).network == "ip"
+    GameSettings(network="steam").save(str(path))
+    assert GameSettings.load(str(path)).network == "steam"
+
+
+def test_joining_over_steam_picks_a_friend_in_the_game_or_takes_a_steam_id(folder):
+    steam = steam_world()
+    SteamHost("pw", network=steam.user(HOST_ID))
+    me = steam.user(JOINER_ID)
+    home = Home(GameSettings(network="steam"), str(folder), steam=lambda: me)
+    click(home, "Join game")
+    listed = buttons(home)
+    assert "Hosty  (hosting)" in listed and "Idle Ida" in listed       # the one hosting first
+    assert [i.label for i in home.items(SIZE) if i.action and i.action.startswith("friend:")] == \
+        ["Hosty  (hosting)", "Idle Ida"]
+    assert "input:address" not in {i.action for i in home.items(SIZE)}
+    assert click(home, "Join") is None and "SteamID" in home.message
+    click(home, "Hosty  (hosting)")
+    assert home.join_steam_id == str(HOST_ID) and buttons(home)["Hosty  (hosting)"].selected
+    assert click(home, "Join") is None and "password" in home.message
+    click_box(home, "join_password")
+    type_text(home, "pw")
+    assert click(home, "Join") == "join"
+    home.go("connecting")
+    assert home.items(SIZE)[0].label == "Joining Hosty on Steam..."
+    home.go("join")
+    click_box(home, "steam_id")
+    for _ in range(20):
+        key(home, pygame.K_BACKSPACE)
+    type_text(home, "7656x1198")
+    key(home, pygame.K_RETURN)
+    assert home.join_steam_id == "76561198"                             # (digits only)
+
+
+def test_without_steam_the_pages_say_why(folder):
+    def no_steam():
+        raise OSError("cannot load steam_api64.dll")
+    home = Home(GameSettings(network="steam"), str(folder), steam=no_steam)
+    click(home, "Join game")
+    assert any("steam_api64.dll" in i.label for i in home.items(SIZE))
+    assert click(home, "Join") is None and "steam_api64.dll" in home.message
+    click(home, "IP address")                                           # by IP still works
+    assert "input:address" in {i.action for i in home.items(SIZE)}
+    home.go("home")
+    click(home, "Host game")
+    click(home, "Steam")
+    click_box(home, "host_password")
+    type_text(home, "pw")
+    assert click(home, "Start hosting") is None and "steam_api64.dll" in home.message
+
+
+def test_hosting_over_steam_shows_our_steam_id_to_copy(folder):
+    me = steam_world().user(HOST_ID)
+    home = Home(GameSettings(network="steam"), str(folder), steam=lambda: me)
+    click(home, "Host game")
+    click(home, "Copy my SteamID")
+    assert pygame.scrap.get_text() == str(HOST_ID) and str(HOST_ID) in home.message
+
+
+def test_every_steam_page_draws(folder):
+    me = steam_world().user(JOINER_ID)
+    home = Home(GameSettings(network="steam"), str(folder), steam=lambda: me)
+    for page in ("host", "join", "connecting"):
+        home.go(page)
+        home.draw(pygame.Surface(SIZE, pygame.SRCALPHA), (0, 0), shade=False)
+        assert all(home.panel(SIZE).contains(item.rect) for item in home.items(SIZE))
+
+
+def test_the_home_screen_joins_a_friend_hosting_over_steam(screen, folder, graphics, monkeypatch):
+    steam = steam_world()
+    host_network, me = steam.user(HOST_ID), steam.user(JOINER_ID)
+    monkeypatch.setattr(main.steamnet, "default_network", lambda: host_network)
+    host = main.start_host(graphics, str(folder / "castle.json"), "pw", steam=True)
+    monkeypatch.setattr(main.steamnet, "default_network", lambda: me)
+    steps = [press_label("Join game"), press_label("Hosty  (hosting)"), press_box("join_password"), typed("pw"),
+             press_label("Join")]
+    source = scripted(Home(GameSettings(network="steam"), str(folder), steam=lambda: me), steps)
+
+    def events():
+        host.step(Inputs(), 1 / 60)
+        return source()
+    try:
+        session, map_path = main.home_screen(screen, pygame.time.Clock(), graphics, GameSettings(network="steam"),
+                                             events=events)
+        try:
+            assert isinstance(session, ClientSession) and session.ready and session.level.width == 14
+            assert map_path is None
+        finally:
+            session.close()
+    finally:
+        host.close()
+
+
+def test_a_steam_id_or_address_can_be_pasted(folder):
+    home = Home(GameSettings(network="steam"), str(folder), steam=lambda: steam_world().user(JOINER_ID))
+    click(home, "Join game")
+    click_box(home, "steam_id")
+    pygame.scrap.put_text("https://steamcommunity.com/profiles/76561198113254149/\n")
+    home.handle(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_v, mod=pygame.KMOD_LCTRL, unicode="\x16"), SIZE)
+    key(home, pygame.K_RETURN)
+    assert home.join_steam_id == "76561198113254149"                    # (only the digits)
+    click(home, "IP address")
+    click_box(home, "address")
+    pygame.scrap.put_text(" 192.168.1.20 ")
+    home.handle(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_INSERT, mod=pygame.KMOD_SHIFT, unicode=""), SIZE)
+    key(home, pygame.K_RETURN)
+    assert home.join_address == "192.168.1.20"
 
 
 def test_maps_made_for_testing_are_not_offered():

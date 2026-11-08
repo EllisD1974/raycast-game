@@ -38,6 +38,7 @@ class GameSettings:
     host_map: str = ""                          # the map file (name) last hosted
     max_players: int = 8                        # the most players last allowed in when hosting
     name: str = ""                              # what the player is called in the game
+    network: str = "ip"                         # how to host and join: "ip" (address and port) or "steam"
 
     @classmethod
     def load(cls, path=SETTINGS_PATH):
@@ -58,6 +59,8 @@ class GameSettings:
                 pass
         settings.sensitivity = max(MIN_SENSITIVITY, min(MAX_SENSITIVITY, settings.sensitivity))
         settings.max_players = max(MIN_PLAYERS, min(MAX_PLAYERS, settings.max_players))
+        if settings.network not in ("ip", "steam"):
+            settings.network = "ip"
         return settings
 
     def save(self, path=SETTINGS_PATH):
@@ -276,10 +279,27 @@ class Pages:
             return self.finish_typing(False)
         if event.key == pygame.K_BACKSPACE:
             self.typing = self.typing[:-1]
-        elif getattr(event, "unicode", "") and event.unicode.isprintable() and len(self.typing) < \
-                self.field_max(self.typing_field) and self.field_accepts(self.typing_field, event.unicode):
-            self.typing += event.unicode
+        elif (event.key == pygame.K_v and event.mod & pygame.KMOD_CTRL) or \
+                (event.key == pygame.K_INSERT and event.mod & pygame.KMOD_SHIFT):
+            self.paste()
+        elif getattr(event, "unicode", "") and event.unicode.isprintable():
+            self.type_char(event.unicode)
         return None
+
+    def type_char(self, char):
+        if len(self.typing) < self.field_max(self.typing_field) and self.field_accepts(self.typing_field, char):
+            self.typing += char
+
+    def paste(self):
+        """Ctrl+V: type what is on the clipboard, leaving out what the box does not take (the digits of a pasted
+        Steam profile link go into the SteamID box)."""
+        try:
+            text = pygame.scrap.get_text() or ""
+        except pygame.error:
+            return
+        for char in text:
+            if char.isprintable():
+                self.type_char(char)
 
     def finish_typing(self, keep):
         """Stop typing; keeping it hands the text to set_field (returns what it says to do)."""
