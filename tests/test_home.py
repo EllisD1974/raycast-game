@@ -429,3 +429,24 @@ def test_maps_made_for_testing_are_not_offered():
     assert not set(listed) & set(os.listdir(os.path.join(maps, "tests")))      # (maps/tests holds them)
     import map_editor
     assert map_editor.map_files(maps) == listed                               # the editor lists the same
+
+
+def test_a_long_list_of_steam_friends_scrolls_with_a_bar(tmp_path):
+    from steamnet import Friend
+
+    class Network:
+        steam_id = 1
+
+        def friends_playing(self):
+            return [Friend(100 + i, f"friend {i}", False) for i in range(12)]
+
+    home = Home(GameSettings(network="steam"), str(tmp_path), steam=Network)
+    home.go("join")
+    size = (1280, 800)
+    shown = [i.label for i in home.items(size) if (i.action or "").startswith("friend:")]
+    assert shown == ["friend 0", "friend 1", "friend 2", "friend 3"]
+    assert home.scrollbar(size) is not None
+    home.handle(pygame.event.Event(pygame.MOUSEWHEEL, x=0, y=-50), size)
+    shown = [i.label for i in home.items(size) if (i.action or "").startswith("friend:")]
+    assert shown[-1] == "friend 11"
+    home.draw(pygame.Surface(size, pygame.SRCALPHA))

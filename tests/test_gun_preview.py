@@ -175,6 +175,7 @@ def click(ed, pos):
 
 
 def row(ed, name):
+    ed.show_details_row(name)                   # (scrolled into view, as it would be to click it)
     return next(r for r in ed.details_rows() if r.field.key == name)
 
 

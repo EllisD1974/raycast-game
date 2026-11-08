@@ -13,7 +13,7 @@ import main
 import net
 from game import Game, Inputs
 from mapfile import Entity, Level, save_level
-from menu import MAX_SENSITIVITY, MIN_SENSITIVITY, GameSettings, Menu
+from menu import MAX_SENSITIVITY, MIN_SENSITIVITY, GameSettings, Menu, fit_text
 from session import ClientSession, HostSession
 from test_session import FIRST_CHARACTER, make_world, run
 
@@ -173,6 +173,49 @@ def test_a_long_list_of_maps_scrolls(tmp_path):
     assert "map05" in buttons(menu) and "map12" in buttons(menu) and "map04" not in buttons(menu)
     menu.handle(pygame.event.Event(pygame.MOUSEWHEEL, x=0, y=-50), SIZE)
     assert "map19" in buttons(menu)                                    # (it stops at the end)
+
+
+def test_a_bar_beside_a_long_list_shows_where_it_is_and_can_be_dragged(tmp_path):
+    current = maps(tmp_path, *(f"map{i:02}" for i in range(20)))
+    menu = Menu(GameSettings(), is_host=True, map_path=current)
+    menu.page = "maps"
+    track, thumb = menu.scrollbar(SIZE)
+    listed = [item.rect for item in menu.items(SIZE) if item.listed]
+    assert track.top == listed[0].top and track.bottom == listed[-1].bottom and track.left > listed[0].right
+    assert menu.panel(SIZE).contains(track) and thumb.top == track.top
+    menu.handle(pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=thumb.center, button=1), SIZE)
+    menu.handle(pygame.event.Event(pygame.MOUSEMOTION, pos=(thumb.centerx, track.bottom + 40), rel=(0, 0),
+                                   buttons=(1, 0, 0)), SIZE)
+    menu.handle(pygame.event.Event(pygame.MOUSEBUTTONUP, pos=(thumb.centerx, track.bottom + 40), button=1), SIZE)
+    assert menu.scroll == 20 - 8 and "map19" in buttons(menu)
+    assert menu.scrollbar(SIZE)[1].bottom == track.bottom
+    menu.handle(pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=(track.centerx, track.top + 2), button=1), SIZE)
+    menu.handle(pygame.event.Event(pygame.MOUSEBUTTONUP, pos=(track.centerx, track.top + 2), button=1), SIZE)
+    assert menu.scroll == 0                                            # a click on the track jumps there
+    menu.draw(pygame.Surface(SIZE, pygame.SRCALPHA), track.center)
+
+
+def test_no_bar_when_every_map_shows(tmp_path):
+    menu = Menu(GameSettings(), is_host=True, map_path=maps(tmp_path, "arena", "castle"))
+    menu.page = "maps"
+    assert menu.scrollbar(SIZE) is None
+    menu.page = "main"
+    assert menu.scrollbar(SIZE) is None
+
+
+def test_a_label_too_long_for_its_button_is_cut_short_and_shown_whole_on_hover(tmp_path):
+    long_name = "a_map_with_a_name_much_too_long_for_its_button"
+    menu = Menu(GameSettings(), is_host=True, map_path=maps(tmp_path, "arena", long_name))
+    menu.page = "maps"
+    button = buttons(menu)[long_name]
+    assert menu.font.size(fit_text(menu.font, long_name, button.rect.w - 12))[0] <= button.rect.w - 12
+    assert fit_text(menu.font, long_name, button.rect.w - 12).endswith("...")
+    assert fit_text(menu.font, "arena", button.rect.w - 12) == "arena"
+    away, over = pygame.Surface(SIZE), pygame.Surface(SIZE)
+    menu.draw(away, (5, 5))
+    menu.draw(over, button.rect.center)
+    below = pygame.Rect(button.rect.centerx + 14, button.rect.bottom + 4, 200, 10)       # where the tooltip goes
+    assert pygame.image.tobytes(over.subsurface(below), "RGB") != pygame.image.tobytes(away.subsurface(below), "RGB")
 
 
 def test_every_page_draws_and_the_buttons_fit_in_the_panel(tmp_path):

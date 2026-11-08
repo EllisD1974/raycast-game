@@ -22,10 +22,12 @@ MIN_PLAYERS, MAX_PLAYERS = 2, 16                # the most players a host may le
 BUTTON_W, BUTTON_H, GAP = 360, 46, 12
 INPUT_W = 90                                    # the box the sensitivity can be typed into, beside its slider
 LIST_ROWS = 8                                   # maps shown at once in a list of maps
+SCROLLBAR_W = 6                                 # the bar beside a list that has more than it shows
 SHADE = (0, 0, 0, 160)
 PANEL, EDGE = (32, 34, 42, 235), (90, 94, 110)
 BUTTON, BUTTON_HOT, BUTTON_OFF, BUTTON_ON = (62, 65, 76), (88, 92, 108), (46, 48, 56), (70, 110, 190)
 TRACK, FIELD = (70, 74, 88), (22, 24, 30)
+SCROLL_TRACK, SCROLL_THUMB = (52, 55, 66), (140, 143, 155)
 TEXT, DIM, ACCENT, WARN = (230, 230, 235), (150, 152, 162), (255, 205, 60), (255, 120, 100)
 
 
@@ -83,6 +85,7 @@ class Item:
     enabled: bool = True
     color: tuple = TEXT
     selected: bool = False
+    listed: bool = False                        # part of the page's scrolled list (Pages.scroll_rows)
 
     @property
     def kind(self):
@@ -91,12 +94,33 @@ class Item:
         return self.action.split(":")[0] if self.action.startswith(("slider:", "input:")) else "button"
 
 
-def cell(label, action=None, enabled=True, color=TEXT, width=None, selected=False):
-    """One cell of a row in Pages.lines(): `width` in pixels, or None to share what the row has left."""
-    return (label, action, enabled, color, width, selected)
+def cell(label, action=None, enabled=True, color=TEXT, width=None, selected=False, listed=False):
+    """One cell of a row in Pages.lines(): `width` in pixels, or None to share what the row has left. `listed`
+    marks it as part of the page's scrolled list (Pages.scroll_rows sets it)."""
+    return (label, action, enabled, color, width, selected, listed)
+
+
+def fit_text(font, text, width):
+    """`text` cut short with "..." so it is at most `width` pixels wide in `font` (all of it if it fits)."""
+    if font.size(text)[0] <= width:
+        return text
+    while text and font.size(text + "...")[0] > width:
+        text = text[:-1]
+    return text.rstrip() + "..."
+
+
+def draw_tooltip(surface, font, text, mouse):
+    """A box with `text` in it by the mouse, kept inside the window."""
+    label = font.render(text, True, TEXT)
+    box = label.get_rect(topleft=(mouse[0] + 14, mouse[1] + 18)).inflate(14, 8)
+    box.clamp_ip(surface.get_rect())
+    pygame.draw.rect(surface, (20, 21, 27), box, border_radius=4)
+    pygame.draw.rect(surface, EDGE, box, 1, border_radius=4)
+    surface.blit(label, label.get_rect(center=box.center))
 
 
 def map_files(folder):
+
     """The map files in `folder`, by name."""
     try:
         return sorted((n for n in os.listdir(folder) if n.lower().endswith(".json")), key=str.lower)
@@ -115,7 +139,9 @@ class Pages:
         self.settings = settings
         self.open = False
         self.page = self.FIRST
-        self.scroll = 0                         # first map shown in a list of maps
+        self.scroll = 0                         # first row shown of the page's scrolled list (maps, entries, ...)
+        self.list_size = None                   # (rows in that list, rows shown at once), or None: no such list
+        self.scroll_grab = None                 # while its bar is dragged: how far down the thumb it was grabbed
         self.message, self.message_color = "", DIM
         self.dragging = False                   # the sensitivity slider is being dragged
         self.typing = None                      # text being typed into a box (None: not typing)
@@ -135,6 +161,7 @@ class Pages:
 
     def go(self, page):
         self.page, self.message, self.scroll, self.typing = page, "", 0, None
+        self.scroll_grab = None
 
     # ------------------------------------------------------------------ what the pages hold
 
@@ -152,15 +179,23 @@ class Pages:
                 [cell(f"Fullscreen: {'on' if self.settings.fullscreen else 'off'}", "fullscreen")],
                 [cell("Back", "back")]]
 
+    def scroll_rows(self, rows, shown):
+        """The `shown` rows of `rows` (each a list of cell()s) from self.scroll on: the page's scrolled list. The
+        wheel scrolls it, and when it has more than it shows, a bar beside it shows where they are and can be
+        dragged."""
+        self.scroll = max(0, min(self.scroll, len(rows) - shown))
+        self.list_size = (len(rows), shown)
+        return [[c[:6] + (True,) for c in row] for row in rows[self.scroll:self.scroll + shown]]
+
     def map_list_lines(self, names, current="", picked="", rows=LIST_ROWS, playing_note=""):
         """Rows listing maps (scrolled by the wheel): the one being played greyed out with `playing_note`, the one
         picked highlighted."""
-        self.scroll = max(0, min(self.scroll, len(names) - rows))
-        out = []
-        for name in names[self.scroll:self.scroll + rows]:
+        listed = []
+        for name in names:
             playing = bool(playing_note) and name == current
-            out.append([cell(name[:-5] + (f"  ({playing_note})" if playing else ""), f"map:{name}", not playing,
-                             selected=name == picked)])
+            listed.append([cell(name[:-5] + (f"  ({playing_note})" if playing else ""), f"map:{name}", not playing,
+                                selected=name == picked)])
+        out = self.scroll_rows(listed, rows)
         if not names:
             out.append([cell("No maps found", color=DIM)])
         if len(names) > rows:
@@ -170,6 +205,7 @@ class Pages:
 
     def items(self, size):
         """The cells of the open page, laid out in the middle of a window of `size`."""
+        self.list_size = None                   # (lines() sets it again if the page has a scrolled list)
         rows = self.lines()
         top = size[1] // 2 - (len(rows) * (BUTTON_H + GAP)) // 2 + 30
         x0 = size[0] // 2 - BUTTON_W // 2
@@ -179,11 +215,34 @@ class Pages:
             free = [c for c in row if c[4] is None]
             share = (BUTTON_W - fixed - GAP * (len(row) - 1)) // max(1, len(free))
             x, y = x0, top + r * (BUTTON_H + GAP)
-            for label, action, enabled, color, width, selected in row:
+            for label, action, enabled, color, width, selected, listed in row:
                 w = width if width is not None else share
-                out.append(Item(pygame.Rect(x, y, w, BUTTON_H), label, action, enabled, color, selected))
+                out.append(Item(pygame.Rect(x, y, w, BUTTON_H), label, action, enabled, color, selected, listed))
                 x += w + GAP
         return out
+
+    def scrollbar(self, size):
+        """(track, thumb) of the bar beside the page's scrolled list when it has more rows than it shows, else
+        None."""
+        listed = [item.rect for item in self.items(size) if item.listed]
+        if not listed or self.list_size is None or self.list_size[0] <= self.list_size[1]:
+            return None
+        total, shown = self.list_size
+        top, bottom = min(r.top for r in listed), max(r.bottom for r in listed)
+        track = pygame.Rect(size[0] // 2 + BUTTON_W // 2 + 10, top, SCROLLBAR_W, bottom - top)
+        height = max(24, track.h * shown // total)
+        y = track.y + (track.h - height) * self.scroll // (total - shown)
+        return track, pygame.Rect(track.x, y, track.w, height)
+
+    def scroll_to(self, y, size):
+        """Scroll so the point of the bar's thumb that was grabbed is at screen row `y`."""
+        bar = self.scrollbar(size)
+        if bar is None:
+            return
+        track, thumb = bar
+        total, shown = self.list_size
+        fraction = (y - self.scroll_grab - track.y) / max(1, track.h - thumb.h)
+        self.scroll = max(0, min(total - shown, round(fraction * (total - shown))))
 
     def panel(self, size):
         """The box the page sits in."""
@@ -203,6 +262,12 @@ class Pages:
                 changed = self.finish_typing(True)       # clicking away keeps what was typed
                 return self.handle(event, size) or changed
             return None
+        if self.scroll_grab is not None:                # dragging the scrolled list's bar
+            if event.type == pygame.MOUSEMOTION:
+                self.scroll_to(event.pos[1], size)
+            elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                self.scroll_grab = None
+            return None
         if self.dragging:
             if event.type == pygame.MOUSEMOTION:
                 self.slide_to(event.pos[0], size)
@@ -215,6 +280,12 @@ class Pages:
         if event.type == pygame.MOUSEWHEEL:
             self.scroll = max(0, self.scroll - event.y)
         elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            bar = self.scrollbar(size)
+            if bar is not None and bar[0].inflate(12, 0).collidepoint(event.pos):
+                _track, thumb = bar                     # on the thumb: drag it from there; else jump to the click
+                self.scroll_grab = event.pos[1] - thumb.y if thumb.top <= event.pos[1] < thumb.bottom else thumb.h // 2
+                self.scroll_to(event.pos[1], size)
+                return None
             for item in self.items(size):
                 if item.action and item.enabled and item.rect.collidepoint(event.pos):
                     if item.kind == "slider":
@@ -346,6 +417,7 @@ class Pages:
         pygame.draw.rect(surface, EDGE, box, 1, border_radius=10)
         title = self.title_font.render(self.TITLES.get(self.page, ""), True, ACCENT)
         surface.blit(title, title.get_rect(midtop=(box.centerx, box.y + 22)))
+        tip = None                                      # the whole text of a cut-short label under the mouse
         for item in self.items(size):
             if item.kind == "slider":
                 self.draw_slider(surface, item.rect, mouse)
@@ -358,10 +430,29 @@ class Pages:
                 color = BUTTON_ON if item.selected else (BUTTON_HOT if hot else (BUTTON if item.enabled else BUTTON_OFF))
                 pygame.draw.rect(surface, color, item.rect, border_radius=6)
             text = self.font.render(item.label, True, item.color if item.enabled else DIM)
+            if text.get_width() > item.rect.w - 12:     # too long for its cell: cut short, whole on hover
+                text = self.font.render(fit_text(self.font, item.label, item.rect.w - 12), True,
+                                        item.color if item.enabled else DIM)
+                if item.rect.collidepoint(mouse):
+                    tip = item.label
             surface.blit(text, text.get_rect(center=item.rect.center))
         if self.message:
             note = self.font.render(self.message, True, self.message_color)
             surface.blit(note, note.get_rect(midbottom=(box.centerx, box.bottom - 14)))
+        self.draw_scrollbar(surface, mouse)
+        if tip is not None:
+            draw_tooltip(surface, self.font, tip, mouse)
+
+
+    def draw_scrollbar(self, surface, mouse):
+        """The thin bar beside the page's scrolled list, when it has more than it shows."""
+        bar = self.scrollbar(surface.get_size())
+        if bar is None:
+            return
+        track, thumb = bar
+        pygame.draw.rect(surface, SCROLL_TRACK, track, border_radius=3)
+        hot = self.scroll_grab is not None or track.inflate(12, 0).collidepoint(mouse)
+        pygame.draw.rect(surface, TEXT if hot else SCROLL_THUMB, thumb, border_radius=3)
 
     def draw_slider(self, surface, rect, mouse):
         """The sensitivity slider: a track filled up to the handle, which sits at the current value."""

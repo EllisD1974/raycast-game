@@ -60,11 +60,10 @@ class BuyMenu(Pages):
     def lines(self):
         settings = self.level().settings
         entries = self.offered()
-        self.scroll = max(0, min(self.scroll, len(entries) - LIST_ROWS))
         rows = [[cell(self.wallet(), color=DIM)]]
-        for i, entry in entries[self.scroll:self.scroll + LIST_ROWS]:
-            rows.append([cell(f"{entry.label()}   {price_text(settings.buy_cost, entry.price)}", f"buy:{i}",
-                              self.affordable(entry))])
+        rows += self.scroll_rows([[cell(f"{entry.label()}   {price_text(settings.buy_cost, entry.price)}", f"buy:{i}",
+                                        self.affordable(entry))] for i, entry in entries], LIST_ROWS)
+
         if not entries:
             rows.append([cell("Nothing for sale on this map", color=DIM)])
         if len(entries) > LIST_ROWS:
