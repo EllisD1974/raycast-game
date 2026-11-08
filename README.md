@@ -110,6 +110,20 @@ To build the same thing on your own machine:
 The first start compiles the renderer (about 20 seconds); it is cached in `%LOCALAPPDATA%\raycast-game\numba-cache`, so
 later starts take a second or two. Maps are read from and saved to the `maps` folder next to the programs.
 
+## Build for Linux
+
+GitHub: **Actions > Build Linux > Run workflow**, then download `RaycastGame-linux-<run number>`: a tarball holding
+`RaycastGame/` with the programs `RaycastGame` and `RaycastEditor`. It is built inside Valve's Steam Linux Runtime 3.0
+("sniper") SDK image, so it runs under Steam's Linux runtime and on any distro at least as new as Debian 11.
+
+On a Linux machine (or WSL) the same commands as above make it (PyInstaller cannot build for Linux from Windows):
+
+    uv sync --group dev
+    uv run pyinstaller raycast-game.spec --noconfirm        # makes dist/RaycastGame/
+    tar -czf RaycastGame-linux.tar.gz -C dist RaycastGame   # a tarball keeps the programs executable
+
+The renderer is cached in `~/.cache/raycast-game/numba-cache` and the settings are in `~/.config/raycast-game`.
+
 ## Test
 
     uv run pytest

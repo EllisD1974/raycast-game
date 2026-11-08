@@ -3177,10 +3177,10 @@ class Editor:
     @staticmethod
     def game_command():
         """(the command that starts the game, the folder to start it in): main.py with this Python, or when running
-        from the built programs, RaycastGame.exe in the same folder as this one."""
+        from the built programs, RaycastGame (RaycastGame.exe on Windows) in the same folder as this one."""
         if getattr(sys, "frozen", False):
             folder = os.path.dirname(sys.executable)
-            return [os.path.join(folder, "RaycastGame.exe")], folder
+            return [os.path.join(folder, "RaycastGame" + (".exe" if os.name == "nt" else ""))], folder
         game = os.path.join(os.path.dirname(os.path.abspath(__file__)), "main.py")
         return [sys.executable, game], os.path.dirname(game)
 

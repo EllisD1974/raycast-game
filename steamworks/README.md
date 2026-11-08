@@ -8,8 +8,9 @@ them be shipped with the game.
 | File | From the SDK | SDK version | SHA-256 |
 |---|---|---|---|
 | `win64/steam_api64.dll` | `sdk/redistributable_bin/win64/steam_api64.dll` | 1.65 (23 July 2026) | `e6d9bafb9a41e42fba7b21553db49f8719027af3f0deb23ff86cfc44d60e776d` |
+| `linux64/libsteam_api.so` | `sdk/redistributable_bin/linux64/libsteam_api.so` | 1.65 (23 July 2026) | `eb2dd015b84177cf4f4326fe578aab375fd8931bbbd719c7492420d9777007fe` |
 
 `steamnet.py` loads it from here when run from source, and `raycast-game.spec` bundles it into the built game.
 
-To update: download the new SDK, copy the file over, update the table, and check `steamnet.py`'s structs and
+To update: download the new SDK, copy the files over, update the table, and check `steamnet.py`'s structs and
 interface versions against the new headers (`sdk/public/steam/steam_api_flat.h`, `steamnetworkingtypes.h`).

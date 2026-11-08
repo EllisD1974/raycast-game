@@ -273,8 +273,15 @@ def default_network():
 # The "flat" C functions of steam_api64.dll (steam_api_flat.h in the Steamworks SDK) and the few structs
 # they pass. Callbacks are fetched by hand each pump (SteamAPI_ManualDispatch_*) rather than through the
 # SDK's C++ callback classes, which ctypes cannot make.
+#
+# The SDK packs its callback and connection structs to 8 bytes on Windows and to 4 on Linux and macOS
+# (VALVE_CALLBACK_PACK_LARGE / _SMALL in steamclientpublic.h), so a struct holding a 64-bit field after a 32-bit
+# one is laid out differently: StatusChanged's info starts at 8 on Windows and at 4 elsewhere.
+CALLBACK_PACK = 8 if sys.platform == "win32" else 4
+
 
 class CallbackMsg(ctypes.Structure):
+    _pack_ = CALLBACK_PACK
     _fields_ = [("user", ctypes.c_int32), ("callback", ctypes.c_int), ("param", ctypes.c_void_p), ("size", ctypes.c_int)]
 
 
@@ -288,6 +295,7 @@ class Identity(ctypes.Structure):
 
 
 class ConnectionInfo(ctypes.Structure):
+    _pack_ = CALLBACK_PACK
     _fields_ = [("identity_remote", Identity), ("user_data", ctypes.c_int64), ("listen_socket", ctypes.c_uint32),
                 ("addr_remote", IPAddr), ("pad", ctypes.c_uint16), ("pop_remote", ctypes.c_uint32),
                 ("pop_relay", ctypes.c_uint32), ("state", ctypes.c_int), ("end_reason", ctypes.c_int),
@@ -297,12 +305,14 @@ class ConnectionInfo(ctypes.Structure):
 
 class StatusChanged(ctypes.Structure):
     """SteamNetConnectionStatusChangedCallback_t"""
+    _pack_ = CALLBACK_PACK
     CALLBACK = 1221                         # k_iSteamNetworkingSocketsCallbacks + 1
     _fields_ = [("conn", ctypes.c_uint32), ("info", ConnectionInfo), ("old_state", ctypes.c_int)]
 
 
 class FriendGameInfo(ctypes.Structure):
     """FriendGameInfo_t"""
+    _pack_ = CALLBACK_PACK
     _fields_ = [("game_id", ctypes.c_uint64), ("game_ip", ctypes.c_uint32), ("game_port", ctypes.c_uint16),
                 ("query_port", ctypes.c_uint16), ("lobby", ctypes.c_uint64)]
 
