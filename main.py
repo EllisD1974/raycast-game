@@ -43,10 +43,11 @@ from game import NO_TEAM, Events, Game, Inputs, next_watch
 from hud import draw_hud, draw_hurt, draw_names, draw_round, hurt_flash
 from home import Home
 from mapfile import KOTH_NAMES, MAP_PATH, TEAM_TITLES, load_or_default
-from menu import GameSettings, Menu
+from menu import DIM, GameSettings, Menu
 from physics import look
 from renderer import BACKGROUND, Renderer, fit_rect  # noqa: F401  (re-exported: main.Renderer etc.)
 from session import ClientSession, HostSession, LocalSession
+from version import label as version_label
 from watch import FileWatcher
 from window import maximize
 from world import World
@@ -334,7 +335,8 @@ def home_screen(screen, clock, graphics, settings, note="", events=None):
     backdrop = pygame.Surface((WIDTH, HEIGHT))
     backdrop.fill(HOME_BACKDROP)
     joining, give_up = None, 0.0
-    screen.title = "simple raycaster"
+    screen.title = f"simple raycaster {version_label()}"
+    version_font = pygame.font.Font(None, 22)
     events = events or pygame.event.get                 # (tests hand in their own)
     while True:
         clock.tick(60)
@@ -393,6 +395,8 @@ def home_screen(screen, clock, graphics, settings, note="", events=None):
         overlay = pygame.Surface(screen.window.size, pygame.SRCALPHA)
         overlay.fill(HOME_BACKDROP)                     # (the whole window, not just the picture's 16:9 part)
         home.draw(overlay, pygame.mouse.get_pos(), shade=False)
+        shown = version_font.render(version_label(), True, DIM)
+        overlay.blit(shown, shown.get_rect(bottomright=(overlay.get_width() - 10, overlay.get_height() - 8)))
         screen.show(backdrop, overlay)
 
 
@@ -557,7 +561,7 @@ def play(screen, clock, graphics, settings, session, map_path, from_home=False):
             overlay = pygame.Surface(screen.window.size, pygame.SRCALPHA)
             (menu if menu.open else buy).draw(overlay, pygame.mouse.get_pos())
         screen.show(picture, overlay)
-        screen.title = f"simple raycaster - {clock.get_fps():.0f} fps{session.status()}"
+        screen.title = f"simple raycaster {version_label()} - {clock.get_fps():.0f} fps{session.status()}"
     mouse.set_captured(False)
     session.close()
     return quit_all, why
@@ -567,7 +571,7 @@ def main():
     pygame.init()
     # A normal resizable window: the picture is scaled onto it by Screen (on the graphics card), not by
     # pygame.display, so mouse movement arrives in plain screen pixels.
-    screen = Screen("simple raycaster", (WIDTH * 2, HEIGHT * 2))
+    screen = Screen(f"simple raycaster {version_label()}", (WIDTH * 2, HEIGHT * 2))
     clock = pygame.time.Clock()
     graphics = Graphics()
     settings = GameSettings.load()

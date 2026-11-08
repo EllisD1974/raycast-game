@@ -223,6 +223,7 @@ from gunpreview import GunPreview
 from projectiles import MUZZLE
 from particles import UP, ParticleSystem, placement
 from preview import Preview
+from version import label as version_label
 from window import maximize
 
 TOOLBAR_H, STATUS_H = 128, 26
@@ -3631,7 +3632,7 @@ class Editor:
             self.draw_shade(screen)
             self.tips += self.importing.draw(screen, self._size(), self.mouse) or []
         self.draw_tip(screen)
-        title = f"Map editor - {os.path.basename(self.path)}{' *' if self.dirty else ''}"
+        title = f"Map editor {version_label()} - {os.path.basename(self.path)}{' *' if self.dirty else ''}"
         if pygame.display.get_caption()[0] != title:
             pygame.display.set_caption(title)
 

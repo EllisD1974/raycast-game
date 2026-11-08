@@ -1,11 +1,14 @@
 name: Build
 
-# Run by hand: GitHub > Actions > "Build" > Run workflow (pick the branch to build). Builds the game and the map editor
-# for every platform at once, each in its own job with its own artifact:
-#   RaycastGame-windows-<run>  a zip of RaycastGame/ with RaycastGame.exe and RaycastEditor.exe
-#   RaycastGame-linux-<run>    a tarball of RaycastGame/ with RaycastGame and RaycastEditor (a zip would lose their
-#                              executable bit)
+# Run by hand: GitHub > Actions > "Build" > Run workflow (pick the branch or tag to build). Builds the game and the map
+# editor for every platform at once, each in its own job with its own artifact:
+#   RaycastGame-windows-<version>-<run>  a zip of RaycastGame/ with RaycastGame.exe and RaycastEditor.exe
+#   RaycastGame-linux-<version>-<run>    a tarball of RaycastGame/ with RaycastGame and RaycastEditor (a zip would lose their
+#                                  executable bit)
 # PyInstaller cannot cross-build, so each platform is built on its own.
+#
+# The version comes from the tag: built from a tag (v0.8b), the programs are version 0.8b; built from anything else, they
+# are the next dev version (0.9b-dev) - see version.py. It is shown on the home screen and in the window titles.
 on:
   workflow_dispatch:
     inputs:
@@ -23,6 +26,8 @@ jobs:
       SDL_AUDIODRIVER: dummy
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0              # all of the history and tags, for the version
 
       - uses: astral-sh/setup-uv@v7
         with:
@@ -30,6 +35,10 @@ jobs:
 
       - name: Install (Python version from .python-version, packages from uv.lock)
         run: uv sync --group dev
+
+      - name: Work out the version from the tag
+        shell: bash
+        run: echo "RAYCAST_VERSION=$(uv run python -c 'import version; print(version.release_version())')" >> "$GITHUB_ENV"
 
       - name: Run the tests
         if: ${{ inputs.run_tests }}
@@ -50,7 +59,7 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: RaycastGame-windows-${{ github.run_number }}
+          name: RaycastGame-windows-${{ env.RAYCAST_VERSION }}-${{ github.run_number }}
           path: RaycastGame-windows.zip
           if-no-files-found: error
           retention-days: 30
@@ -67,6 +76,11 @@ jobs:
       SDL_AUDIODRIVER: dummy
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0              # all of the history and tags, for the version
+
+      - name: Let git read the checkout (the container's user does not own it)
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - uses: astral-sh/setup-uv@v7
         with:
@@ -74,6 +88,10 @@ jobs:
 
       - name: Install (Python version from .python-version, packages from uv.lock)
         run: uv sync --group dev
+
+      - name: Work out the version from the tag
+        shell: bash
+        run: echo "RAYCAST_VERSION=$(uv run python -c 'import version; print(version.release_version())')" >> "$GITHUB_ENV"
 
       - name: Run the tests
         if: ${{ inputs.run_tests }}
@@ -92,7 +110,7 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: RaycastGame-linux-${{ github.run_number }}
+          name: RaycastGame-linux-${{ env.RAYCAST_VERSION }}-${{ github.run_number }}
           path: RaycastGame-linux.tar.gz
           if-no-files-found: error
           retention-days: 30

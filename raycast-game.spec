@@ -11,16 +11,29 @@ of steam_api64.dll. PyInstaller cannot cross-build: the Linux build is made on L
 
 The folder carries assets/textures.png, assets/character.png and the maps next to the programs' own files. The renderer's numba source files are
 included too: numba compiles from them (and caches the result) when the program starts.
+
+The version the programs show (version.py) is put in version.txt beside them: RAYCAST_VERSION when it is set (the Build
+workflow and `uv run build` set it), otherwise the dev version worked out from the git tags.
 """
 import glob
 import os
 import sys
 
 root = os.path.abspath(SPECPATH)
+sys.path.insert(0, root)
+import version
+
+build_version = os.environ.get("RAYCAST_VERSION") or version.dev_version()
+version_file = os.path.join(root, "build", version.VERSION_FILE)
+os.makedirs(os.path.dirname(version_file), exist_ok=True)
+with open(version_file, "w", encoding="utf-8") as f:
+    f.write(build_version + "\n")
+print(f"Building version {build_version}")
 
 datas = [
     (os.path.join(root, "assets", "textures.png"), "assets"),
     (os.path.join(root, "assets", "character.png"), "assets"),
+    (version_file, "."),
 ] + [(path, "maps") for path in glob.glob(os.path.join(root, "maps", "*.json"))]    # (not maps/tests: made for testing)
 for source in ("raykernel.py", "raypitch.py", "raylight.py"):     # numba reads these to compile and cache the renderer
     datas.append((os.path.join(root, source), "."))

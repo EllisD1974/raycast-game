@@ -96,30 +96,31 @@ machine). Over the internet the host needs the port forwarded, or a VPN such as 
 
 ## Build an exe (Windows)
 
-GitHub: **Actions > Build > Run workflow** (choose the branch; it runs the tests first unless you untick that). It builds
-for Windows and Linux at once (Linux below). When it finishes, download the `RaycastGame-windows-<run number>` artifact
-from the run's page: unzip it and run `RaycastGame.exe` (the game) or `RaycastEditor.exe` (the map editor; its Play
+GitHub: **Actions > Build > Run workflow** (choose the branch or tag; it runs the tests first unless you untick that). It
+builds for Windows and Linux at once (Linux below). When it finishes, download the `RaycastGame-windows-<version>-<run>`
+artifact from the run's page: unzip it and run `RaycastGame.exe` (the game) or `RaycastEditor.exe` (the map editor; its Play
 button starts the game next to it). The flags work as on the command line, e.g. `RaycastGame.exe --host SECRET`.
 
-To build the same thing on your own machine:
+The version comes from the git tag: built from a tag such as `v0.8b`, the programs are version `0.8b`; built from
+anything else, they are the next dev version (`0.9b-dev`). It shows on the home screen and in the window titles.
 
-    uv sync --group dev
-    uv run pyinstaller raycast-game.spec --noconfirm        # makes dist/RaycastGame/
-    ISCC packaging\installer.iss                           # then dist/RaycastGameSetup.exe (Inno Setup 6)
+To build on your own machine (for testing: always the dev version, the latest tag one minor version on):
+
+    uv run build                                            # makes dist/RaycastGame/
+    ISCC packaging\installer.iss /DAppVersion=0.8b-dev      # then dist/RaycastGameSetup.exe (Inno Setup 6)
 
 The first start compiles the renderer (about 20 seconds); it is cached in `%LOCALAPPDATA%\raycast-game\numba-cache`, so
 later starts take a second or two. Maps are read from and saved to the `maps` folder next to the programs.
 
 ## Build for Linux
 
-GitHub: the same **Build** workflow also makes `RaycastGame-linux-<run number>`: a tarball holding
+GitHub: the same **Build** workflow also makes `RaycastGame-linux-<version>-<run>`: a tarball holding
 `RaycastGame/` with the programs `RaycastGame` and `RaycastEditor`. It is built inside Valve's Steam Linux Runtime 3.0
 ("sniper") SDK image, so it runs under Steam's Linux runtime and on any distro at least as new as Debian 11.
 
 On a Linux machine (or WSL) the same commands as above make it (PyInstaller cannot build for Linux from Windows):
 
-    uv sync --group dev
-    uv run pyinstaller raycast-game.spec --noconfirm        # makes dist/RaycastGame/
+    uv run build                                            # makes dist/RaycastGame/
     tar -czf RaycastGame-linux.tar.gz -C dist RaycastGame   # a tarball keeps the programs executable
 
 The renderer is cached in `~/.cache/raycast-game/numba-cache` and the settings are in `~/.config/raycast-game`.
