@@ -16,3 +16,7 @@ dist/
 
 # Scratch prototype, not part of the project
 initial_test_impl/
+
+# Steamworks SDK library and the app id file used when testing outside Steam (copied in by hand)
+steam_api64.dll
+steam_appid.txt

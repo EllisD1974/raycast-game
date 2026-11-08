@@ -15,6 +15,9 @@ Run:  python make_atlas.py   (once: creates assets/textures.png, the 32x32 textu
 Multiplayer (one player hosts, the others join with the password):
       python main.py --host PASSWORD [--port 7777] [--bind 0.0.0.0]
       python main.py --join ADDRESS PASSWORD [--port 7777]
+  or over Steam (Steam running, steam_api64.dll and steam_appid.txt next to the game):
+      python main.py --steam-host PASSWORD          (prints the SteamID the others join)
+      python main.py --steam-join STEAMID PASSWORD
 Edit the map with:  python map_editor.py
 Debug: python main.py --snapshot out.png [--at X Y ANGLE_RADIANS [--span 0|1]] [--pitch DEGREES]
        (render one frame without a window; --span N stands on floor N, counting from 0)
@@ -31,6 +34,7 @@ import pygame
 from pygame._sdl2 import sdl2, video
 
 import net
+import steamnet
 from atlas import ATLAS_PATH, atlas_array, transparent_tiles, unpack_atlas
 from buymenu import BuyMenu
 from character import character_tiles
@@ -48,6 +52,7 @@ from window import maximize
 from world import World
 
 JOIN_TIMEOUT = 15.0                            # seconds to wait for the host's map after joining
+STEAM_JOIN_TIMEOUT = 40.0                      # the same over Steam (finding a route through its relays comes first)
 HOME_BACKDROP = (18, 20, 28)                   # behind the home screen
 CROSSHAIR = (255, 255, 255)
 CROSSHAIR_OUTLINE = (0, 0, 0)
@@ -251,10 +256,11 @@ class Graphics:
         return World(level, len(self.tiles), self.see_through)
 
 
-def client_session(address, port, password, graphics, name=""):
+def client_session(address, port, password, graphics, name="", steam=False):
     """A session joining the host at address:port. It is ready once the host has sent its map, textures and first
     snapshot: step it until session.ready (or session.ended, with the reason it failed). The host's textures
-    replace whatever `graphics` had loaded, so the joiner needs no map or textures of its own."""
+    replace whatever `graphics` had loaded, so the joiner needs no map or textures of its own. With `steam`, the
+    address is the host's SteamID (and there is no port). Raises OSError if Steam cannot be used."""
     def use_atlas(png):
         try:
             graphics.load(png)
@@ -262,15 +268,18 @@ def client_session(address, port, password, graphics, name=""):
             raise ValueError(f"textures: {e}")
         return graphics.character_tile
 
-    return ClientSession(net.Client(address, port, password), graphics.make_world, graphics.character_tile, use_atlas,
-                         name)
+    client = steamnet.SteamClient(address, password) if steam else net.Client(address, port, password)
+    return ClientSession(client, graphics.make_world, graphics.character_tile, use_atlas, name)
 
 
-def join(address, password, port, graphics, name=""):
-    """--join: connect to a host and wait for the game; exits with a message if that fails."""
-    session = client_session(address, port, password, graphics, name)
-    print(f"Joining {address}:{port}...")
-    give_up = time.monotonic() + JOIN_TIMEOUT
+def join(address, password, port, graphics, name="", steam=False):
+    """--join (--steam-join): connect to a host and wait for the game; exits with a message if that fails."""
+    try:
+        session = client_session(address, port, password, graphics, name, steam)
+    except OSError as e:
+        sys.exit(f"cannot use Steam: {e}")
+    print(f"Joining {address} on Steam..." if steam else f"Joining {address}:{port}...")
+    give_up = time.monotonic() + (STEAM_JOIN_TIMEOUT if steam else JOIN_TIMEOUT)
     while not session.ready and not session.ended:
         pygame.event.pump()
         session.step(Inputs(), 0.0)
@@ -283,13 +292,15 @@ def join(address, password, port, graphics, name=""):
     return session
 
 
-def start_host(graphics, map_path, password, port=net.DEFAULT_PORT, bind="0.0.0.0", max_players=8, name=""):
-    """A HostSession playing the map at `map_path`, letting in up to max_players - 1 others who know `password`.
-    Raises if the map or the textures cannot be read, or nothing can listen on the port."""
+def start_host(graphics, map_path, password, port=net.DEFAULT_PORT, bind="0.0.0.0", max_players=8, name="", steam=False):
+    """A HostSession playing the map at `map_path`, letting in up to max_players - 1 others who know `password`
+    (over Steam with `steam`: they join with our SteamID). Raises if the map or the textures cannot be read, or
+    nothing can listen on the port (or Steam cannot be used)."""
     graphics.load(ATLAS_PATH)                           # (back to our own textures after having joined someone)
     level = load_or_default(map_path)
     game = Game(level, graphics.make_world(level), character_tile=graphics.character_tile)
-    host = net.Host(password, port, bind, max_clients=max(1, max_players - 1))
+    max_clients = max(1, max_players - 1)
+    host = steamnet.SteamHost(password, max_clients) if steam else net.Host(password, port, bind, max_clients)
     with open(ATLAS_PATH, "rb") as f:                   # joiners draw with the host's textures
         return HostSession(game, host, f.read(), name)
 
@@ -557,7 +568,7 @@ def main():
         graphics.load(ATLAS_PATH)
     # Started with --map (the map editor's Play), --host, --join or --snapshot: straight into that game.
     # Otherwise the home screen, which comes back after each game.
-    if not any(flag in sys.argv for flag in ("--map", "--host", "--join", "--snapshot")):
+    if not any(flag in sys.argv for flag in ("--map", "--host", "--join", "--steam-host", "--steam-join", "--snapshot")):
         maximize(screen.window)      # the game opens maximized; the picture scales to fit
         if settings.fullscreen:
             screen.toggle_fullscreen()
@@ -572,19 +583,28 @@ def main():
         pygame.quit()
         return
 
-    joining = bool(arg_values("--join", 2))
+    steam_join = arg_values("--steam-join", 2)
+    joining = bool(arg_values("--join", 2) or steam_join)
     if graphics.renderer is None and not joining:           # a joiner is sent the host's textures
         sys.exit("textures.png not found - run `python make_atlas.py` first")
     port = int((arg_values("--port", 1) or [net.DEFAULT_PORT])[0])
     map_path = None
-    if joining:
+    if steam_join:
+        session = join(steam_join[0], steam_join[1], None, graphics, settings.name, steam=True)
+    elif joining:
         address, password = arg_values("--join", 2)
         session = join(address, password, port, graphics, settings.name)
     else:
         map_path = (arg_values("--map", 1) or [MAP_PATH])[0]
         if "--map" in sys.argv and not os.path.exists(map_path):
             sys.exit(f"map file not found: {map_path}")      # don't silently play another map
-        if arg_values("--host", 1):
+        if arg_values("--steam-host", 1):
+            try:
+                session = start_host(graphics, map_path, arg_values("--steam-host", 1)[0], name=settings.name, steam=True)
+            except OSError as e:
+                sys.exit(f"cannot host on Steam: {e}")
+            print(f"Hosting on Steam; others join with --steam-join {session.host.steam_id} <password>")
+        elif arg_values("--host", 1):
             bind = (arg_values("--bind", 1) or ["0.0.0.0"])[0]
             try:
                 session = start_host(graphics, map_path, arg_values("--host", 1)[0], port, bind, name=settings.name)
