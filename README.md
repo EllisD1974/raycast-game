@@ -96,10 +96,10 @@ machine). Over the internet the host needs the port forwarded, or a VPN such as 
 
 ## Build an exe (Windows)
 
-GitHub: **Actions > Build exe > Run workflow** (choose the branch; it runs the tests first unless you untick that). When it
-finishes, download the `RaycastGame-windows-<run number>` artifact from the run's page: unzip it and run
-`RaycastGame.exe` (the game) or `RaycastEditor.exe` (the map editor; its Play button starts the game next to it). The
-flags work as on the command line, e.g. `RaycastGame.exe --host SECRET`.
+GitHub: **Actions > Build > Run workflow** (choose the branch; it runs the tests first unless you untick that). It builds
+for Windows and Linux at once (Linux below). When it finishes, download the `RaycastGame-windows-<run number>` artifact
+from the run's page: unzip it and run `RaycastGame.exe` (the game) or `RaycastEditor.exe` (the map editor; its Play
+button starts the game next to it). The flags work as on the command line, e.g. `RaycastGame.exe --host SECRET`.
 
 To build the same thing on your own machine:
 
@@ -112,7 +112,7 @@ later starts take a second or two. Maps are read from and saved to the `maps` fo
 
 ## Build for Linux
 
-GitHub: **Actions > Build Linux > Run workflow**, then download `RaycastGame-linux-<run number>`: a tarball holding
+GitHub: the same **Build** workflow also makes `RaycastGame-linux-<run number>`: a tarball holding
 `RaycastGame/` with the programs `RaycastGame` and `RaycastEditor`. It is built inside Valve's Steam Linux Runtime 3.0
 ("sniper") SDK image, so it runs under Steam's Linux runtime and on any distro at least as new as Debian 11.
 
