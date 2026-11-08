@@ -56,6 +56,16 @@ def kind(fb):
     return (r > g + 20) & (r > b + 20), (g > r + 20) & (g > b + 20), (b > r + 20) & (b > g + 20)
 
 
+def differences(fb, other):
+    """How far each pixel of `fb` is from the closest of the 3x3 pixels around it in `other` (the largest of its
+    color channels). Two renderers sample textures a fraction of a pixel apart, so texel edges such as brick mortar
+    and the floor grid land a pixel apart: this lets those through, while anything drawn further off still shows."""
+    padded = np.pad(other, ((1, 1), (1, 1), (0, 0)), mode="edge")
+    w, h = fb.shape[:2]
+    return np.min([np.abs(fb - padded[1 + dx:1 + dx + w, 1 + dy:1 + dy + h]).max(axis=2)
+                   for dx in (-1, 0, 1) for dy in (-1, 0, 1)], axis=0)
+
+
 def project(depth_ahead, dz, pitch, renderer):
     """Screen row of a point `depth_ahead` cells in front of the camera and `dz` above the eye, for a
     camera tilted up by `pitch` (a real rotation about the eye)."""
@@ -74,11 +84,9 @@ def test_a_tiny_tilt_looks_the_same_as_the_level_view():
     for x, y, angle in ((1.5, 4.5, 0.0), (5.5, 5.5, 2.0), (3.5, 7.5, -1.0)):
         level_fb, _ = frame(world, 0.0, x, y, angle, renderer)
         tilted_fb, _ = frame(world, 2e-3, x, y, angle, renderer)
-        # (the two sample textures a fraction of a pixel apart, so texel edges such as brick mortar and
-        # the floor grid differ by a pixel: those thin lines are all that is allowed to differ)
-        close = (np.abs(level_fb - tilted_fb) <= 24).all(axis=2)
-        assert close.mean() > 0.92, f"{close.mean():.3f} of the pixels agree at ({x}, {y})"
-        assert np.abs(level_fb - tilted_fb).mean() < 4.0
+        off = differences(level_fb, tilted_fb)
+        assert (off <= 24).mean() > 0.99, f"{(off <= 24).mean():.3f} of the pixels agree at ({x}, {y})"
+        assert off.mean() < 1.0
 
 
 def test_a_small_tilt_is_drawn_sheared_and_looks_like_the_rotated_view(monkeypatch):
@@ -95,9 +103,9 @@ def test_a_small_tilt_is_drawn_sheared_and_looks_like_the_rotated_view(monkeypat
             with monkeypatch.context() as m:
                 m.setattr(renderer_module, "SHEAR_PITCH", 0.0)          # every tilt rotated
                 rotated, _ = frame(world, pitch, x, y, angle, renderer)
-            close = (np.abs(sheared - rotated) <= 24).all(axis=2)
-            assert close.mean() > 0.9, f"{close.mean():.3f} of the pixels agree at ({x}, {y}, {pitch:.3f})"
-            assert np.abs(sheared - rotated).mean() < 6.0
+            off = differences(sheared, rotated)
+            assert (off <= 24).mean() > 0.9, f"{(off <= 24).mean():.3f} of the pixels agree at ({x}, {y}, {pitch:.3f})"
+            assert off.mean() < 5.0
 
 
 def test_in_a_sheared_view_walls_and_sprites_land_where_the_moved_horizon_puts_them():
