@@ -21,7 +21,7 @@ datas = [
 for source in ("raykernel.py", "raypitch.py", "raylight.py"):     # numba reads these to compile and cache the renderer
     datas.append((os.path.join(root, source), "."))
 binaries = []
-steam_api = os.path.join(root, "steam_api64.dll")                   # from the Steamworks SDK, for playing over Steam
+steam_api = os.path.join(root, "steamworks", "win64", "steam_api64.dll")     # for playing over Steam (steamworks/README.md)
 if os.path.exists(steam_api):
     binaries.append((steam_api, "."))
 

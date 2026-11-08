@@ -4,6 +4,7 @@ only so many bytes a pump and loses unreliable messages if asked to."""
 import ctypes
 import os
 import random
+import sys
 from collections import deque
 
 import pytest
@@ -285,3 +286,18 @@ def test_friends_in_the_game_are_listed_with_those_hosting_first():
     assert network.friends_playing() == [(HOST_ID, "zed", True), (3, "amy", False)]
     host.close()
     assert network.friends_playing() == [(3, "amy", False), (HOST_ID, "zed", False)]    # no longer hosting
+
+
+def test_the_steam_library_is_found_in_the_steamworks_folder_or_the_built_game(tmp_path, monkeypatch):
+    if sys.platform == "win32":
+        assert os.path.isfile(steamnet.library_path())                  # (the copy kept in steamworks/win64)
+    assert os.path.join("steamworks", "") in steamnet.library_path()
+    bundled, program = tmp_path / "_internal", tmp_path / "RaycastGame.exe"
+    bundled.mkdir()
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(bundled), raising=False)
+    monkeypatch.setattr(sys, "executable", str(program))
+    name = os.path.basename(steamnet.library_path())
+    assert steamnet.library_path() == str(tmp_path / name)              # not bundled: next to the program
+    (bundled / name).write_bytes(b"")
+    assert steamnet.library_path() == str(bundled / name)               # bundled (PyInstaller's _internal)

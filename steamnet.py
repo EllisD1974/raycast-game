@@ -16,8 +16,8 @@ order), each up to 512 KB, and refuses more while its send buffer (512 KB) is fu
 Reliable messages wait in the connection's outbox while Steam's send buffer is full, so a big map goes out
 as fast as Steam will take it.
 
-The Steam client must be running and logged in, and steam_api64.dll (from the Steamworks SDK) must be next to
-the game. Steam is told which game this is (APP_ID) through the SteamAppId environment variable, as the Steam
+The Steam client must be running and logged in. steam_api64.dll, from the Steamworks SDK, is kept in the
+steamworks folder and bundled into the built game. Steam is told which game this is (APP_ID) through the SteamAppId environment variable, as the Steam
 client does when it starts a game, so no steam_appid.txt is needed.
 """
 import ctypes
@@ -312,11 +312,18 @@ class NetMessage(ctypes.Structure):
     _fields_ = [("data", ctypes.c_void_p), ("size", ctypes.c_int), ("conn", ctypes.c_uint32)]
 
 
+LIBRARIES = {"win32": ("win64", "steam_api64.dll"), "darwin": ("osx", "libsteam_api.dylib")}
+LINUX_LIBRARY = ("linux64", "libsteam_api.so")
+
+
 def library_path():
-    """Where steam_api's library is: next to the program when built, else next to this file."""
-    folder = os.path.dirname(sys.executable if getattr(sys, "frozen", False) else os.path.abspath(__file__))
-    name = {"win32": "steam_api64.dll", "darwin": "libsteam_api.dylib"}.get(sys.platform, "libsteam_api.so")
-    return os.path.join(folder, name)
+    """Where steam_api's library is: in the built game, among its bundled files (PyInstaller's _internal folder) or
+    else next to the program; run from source, in the steamworks folder (see steamworks/README.md)."""
+    folder, name = LIBRARIES.get(sys.platform, LINUX_LIBRARY)
+    if getattr(sys, "frozen", False):
+        bundled = os.path.join(getattr(sys, "_MEIPASS", ""), name)
+        return bundled if os.path.exists(bundled) else os.path.join(os.path.dirname(sys.executable), name)
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "steamworks", folder, name)
 
 
 class SteamAPI:

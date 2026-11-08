@@ -15,7 +15,7 @@ Run:  python make_atlas.py   (once: creates assets/textures.png, the 32x32 textu
 Multiplayer (one player hosts, the others join with the password):
       python main.py --host PASSWORD [--port 7777] [--bind 0.0.0.0]
       python main.py --join ADDRESS PASSWORD [--port 7777]
-  or over Steam (Steam running and logged in, steam_api64.dll next to the game):
+  or over Steam (Steam running and logged in):
       python main.py --steam-host PASSWORD          (prints the SteamID the others join)
       python main.py --steam-join STEAMID PASSWORD
 Edit the map with:  python map_editor.py
