@@ -282,3 +282,12 @@ def test_the_home_screen_joins_a_host_and_reports_a_wrong_password(screen, folde
             session.close()
     finally:
         host.close()
+
+
+def test_maps_made_for_testing_are_not_offered():
+    maps = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "maps")
+    listed = Home(GameSettings(), maps).maps()
+    assert "map.json" in listed
+    assert not set(listed) & set(os.listdir(os.path.join(maps, "tests")))      # (maps/tests holds them)
+    import map_editor
+    assert map_editor.map_files(maps) == listed                               # the editor lists the same
