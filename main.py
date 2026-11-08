@@ -15,7 +15,7 @@ Run:  python make_atlas.py   (once: creates assets/textures.png, the 32x32 textu
 Multiplayer (one player hosts, the others join with the password):
       python main.py --host PASSWORD [--port 7777] [--bind 0.0.0.0]
       python main.py --join ADDRESS PASSWORD [--port 7777]
-  or over Steam (Steam running, steam_api64.dll and steam_appid.txt next to the game):
+  or over Steam (Steam running and logged in, steam_api64.dll next to the game):
       python main.py --steam-host PASSWORD          (prints the SteamID the others join)
       python main.py --steam-join STEAMID PASSWORD
 Edit the map with:  python map_editor.py
@@ -328,7 +328,7 @@ def apply_settings(settings, screen, mouse=None):
 def home_screen(screen, clock, graphics, settings, note="", events=None):
     """Show the home screen until the player starts a game. Returns (session, map path) - the path is None for a
     joiner - or None to quit. `note` is shown first (why the last game ended)."""
-    home = Home(settings, os.path.dirname(MAP_PATH))
+    home = Home(settings, os.path.dirname(MAP_PATH), steam=steamnet.default_network)
     if note:
         home.say(note[:60], warn=True)
     backdrop = pygame.Surface((WIDTH, HEIGHT))
@@ -355,19 +355,26 @@ def home_screen(screen, clock, graphics, settings, note="", events=None):
                 apply_settings(settings, screen)
             elif action == "host":
                 settings.save()
+                steam = home.network == "steam"
                 try:
                     session = start_host(graphics, home.map_path(), home.host_password, max_players=settings.max_players,
-                                         name=settings.name)
+                                         name=settings.name, steam=steam)
                 except (OSError, ValueError, KeyError, TypeError, pygame.error) as e:
                     home.say(f"Could not host: {e}"[:60], warn=True)
                 else:
-                    print(f"Hosting {os.path.basename(home.map_path())} on port {session.host.port} "
-                          f"for up to {settings.max_players} players")
+                    where = f"on Steam as {session.host.steam_id}" if steam else f"on port {session.host.port}"
+                    print(f"Hosting {os.path.basename(home.map_path())} {where} for up to {settings.max_players} players")
                     return session, home.map_path()
             elif action == "join":
-                joining = client_session(home.join_address, home.port(), home.join_password, graphics, settings.name)
-                give_up = time.monotonic() + JOIN_TIMEOUT
-                home.go("connecting")
+                steam = home.network == "steam"
+                try:
+                    joining = client_session(home.join_steam_id if steam else home.join_address, home.port(),
+                                             home.join_password, graphics, settings.name, steam)
+                except OSError as e:
+                    home.say(f"Could not join: {e}"[:60], warn=True)
+                else:
+                    give_up = time.monotonic() + (STEAM_JOIN_TIMEOUT if steam else JOIN_TIMEOUT)
+                    home.go("connecting")
             elif action == "cancel":
                 if joining:
                     joining.close()

@@ -105,10 +105,9 @@ To build the same thing on your own machine:
 
     uv sync --group dev
     uv run pyinstaller raycast-game.spec --noconfirm        # makes dist/RaycastGame/
+    ISCC packaging\installer.iss                           # then dist/RaycastGameSetup.exe (Inno Setup 6)
 
-The first start compiles the renderer (about 20 seconds); it is cached in `%LOCALAPPDATA%
-aycast-game
-umba-cache`, so
+The first start compiles the renderer (about 20 seconds); it is cached in `%LOCALAPPDATA%\raycast-game\numba-cache`, so
 later starts take a second or two. Maps are read from and saved to the `maps` folder next to the programs.
 
 ## Test

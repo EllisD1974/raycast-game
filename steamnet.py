@@ -16,9 +16,9 @@ order), each up to 512 KB, and refuses more while its send buffer (512 KB) is fu
 Reliable messages wait in the connection's outbox while Steam's send buffer is full, so a big map goes out
 as fast as Steam will take it.
 
-The Steam client must be running and logged in, steam_api64.dll (from the Steamworks SDK) must be next to
-the game, and outside Steam the app id must be known: a steam_appid.txt next to the game holding it (480,
-Valve's test game, until the game has its own).
+The Steam client must be running and logged in, and steam_api64.dll (from the Steamworks SDK) must be next to
+the game. Steam is told which game this is (APP_ID) through the SteamAppId environment variable, as the Steam
+client does when it starts a game, so no steam_appid.txt is needed.
 """
 import ctypes
 import json
@@ -29,6 +29,7 @@ from collections import deque, namedtuple
 
 from net import MAX_FRAME, MAX_HOST_FRAME, BaseClient, BaseHost
 
+APP_ID = 480                    # the game's Steam app id: 480 is Valve's test game (Spacewar) until it has its own
 VIRTUAL_PORT = 0                # like a port number, for telling apart several listeners of one app
 MAX_MESSAGE = 512 * 1024        # Steam's largest message (k_cbMaxSteamNetworkingSocketsMessageSizeSend)
 PIECE = 128 * 1024              # bytes of a big message in each piece (well under Steam's send buffer, 512 KB by default)
@@ -41,6 +42,11 @@ CONNECTING, FINDING_ROUTE, CONNECTED, CLOSED_BY_PEER, PROBLEM_DETECTED_LOCALLY =
 END_APP_GENERIC = 1000          # k_ESteamNetConnectionEnd_App_Generic: closed by the game, the reason says why
 SEND_UNRELIABLE_NO_NAGLE = 1    # k_nSteamNetworkingSend_UnreliableNoNagle
 SEND_RELIABLE_NO_NAGLE = 9      # k_nSteamNetworkingSend_ReliableNoNagle
+FRIEND_FLAG_IMMEDIATE = 4       # k_EFriendFlagImmediate: a "regular" friend
+HOSTING_KEY = "raycast_host"    # rich presence a host sets, so its friends' Join page can show it is hosting
+
+# A Steam friend running the game: their SteamID, name and whether they are hosting
+Friend = namedtuple("Friend", "steam_id name hosting")
 
 # What the backend reports about a connection whose state changed
 StatusChange = namedtuple("StatusChange", "handle state listen_socket end_reason debug")
@@ -158,6 +164,18 @@ class SteamNetwork:
     def steam_id(self):
         return self.api.steam_id()
 
+    @property
+    def name(self):
+        """Our name on Steam."""
+        return self.api.persona_name()
+
+    def friends_playing(self):
+        """[Friend] for each Steam friend in this game now, the ones hosting first, then by name."""
+        app = self.api.app_id()
+        friends = [Friend(sid, name, bool(self.api.friend_presence(sid, HOSTING_KEY)))
+                   for sid, name, playing in self.api.friends() if playing == app]
+        return sorted(friends, key=lambda f: (not f.hosting, f.name.lower()))
+
 
 def ended_reason(change):
     """Why a connection ended, as shown to the player."""
@@ -177,6 +195,7 @@ class SteamHost(BaseHost):
             raise OSError("Steam would not let us listen for players")
         self.network.listeners[self.socket] = self
         self.arriving = []                  # connections accepted that Steam has not finished making
+        self.network.api.set_presence(HOSTING_KEY, "1")
 
     @property
     def steam_id(self):
@@ -206,6 +225,7 @@ class SteamHost(BaseHost):
         self.arriving = []
         self.network.listeners.pop(self.socket, None)
         self.network.api.close_listen(self.socket)
+        self.network.api.set_presence(HOSTING_KEY, "")
 
 
 class SteamClient(BaseClient):
@@ -281,6 +301,12 @@ class StatusChanged(ctypes.Structure):
     _fields_ = [("conn", ctypes.c_uint32), ("info", ConnectionInfo), ("old_state", ctypes.c_int)]
 
 
+class FriendGameInfo(ctypes.Structure):
+    """FriendGameInfo_t"""
+    _fields_ = [("game_id", ctypes.c_uint64), ("game_ip", ctypes.c_uint32), ("game_port", ctypes.c_uint16),
+                ("query_port", ctypes.c_uint16), ("lobby", ctypes.c_uint64)]
+
+
 class NetMessage(ctypes.Structure):
     """The start of SteamNetworkingMessage_t (only these fields are read; Steam frees it)."""
     _fields_ = [("data", ctypes.c_void_p), ("size", ctypes.c_int), ("conn", ctypes.c_uint32)]
@@ -327,6 +353,15 @@ class SteamAPI:
                  c.POINTER(c.POINTER(NetMessage)), c.c_int)
         self._fn("SteamAPI_SteamNetworkingMessage_t_Release", None, c.POINTER(NetMessage))
         self._fn("SteamAPI_SteamNetworkingIdentity_SetSteamID64", None, c.POINTER(Identity), c.c_uint64)
+        self._fn("SteamAPI_ISteamUtils_GetAppID", c.c_uint32, c.c_void_p)
+        self._fn("SteamAPI_ISteamFriends_GetPersonaName", c.c_char_p, c.c_void_p)
+        self._fn("SteamAPI_ISteamFriends_GetFriendCount", c.c_int, c.c_void_p, c.c_int)
+        self._fn("SteamAPI_ISteamFriends_GetFriendByIndex", c.c_uint64, c.c_void_p, c.c_int, c.c_int)
+        self._fn("SteamAPI_ISteamFriends_GetFriendPersonaName", c.c_char_p, c.c_void_p, c.c_uint64)
+        self._fn("SteamAPI_ISteamFriends_GetFriendGamePlayed", c.c_bool, c.c_void_p, c.c_uint64,
+                 c.POINTER(FriendGameInfo))
+        self._fn("SteamAPI_ISteamFriends_GetFriendRichPresence", c.c_char_p, c.c_void_p, c.c_uint64, c.c_char_p)
+        self._fn("SteamAPI_ISteamFriends_SetRichPresence", c.c_bool, c.c_void_p, c.c_char_p, c.c_char_p)
 
         self._start()
         lib.SteamAPI_ManualDispatch_Init()
@@ -334,6 +369,8 @@ class SteamAPI:
         self.user = self._interface("SteamAPI_SteamUser_v023", "SteamAPI_SteamUser_v022", "SteamAPI_SteamUser_v021")
         self.utils = self._interface("SteamAPI_SteamNetworkingUtils_SteamAPI_v004",
                                      "SteamAPI_SteamNetworkingUtils_SteamAPI_v003")
+        self.friends_api = self._interface("SteamAPI_SteamFriends_v018", "SteamAPI_SteamFriends_v017")
+        self.steam_utils = self._interface("SteamAPI_SteamUtils_v011", "SteamAPI_SteamUtils_v010")
         self.sockets = self._interface("SteamAPI_SteamNetworkingSockets_SteamAPI_v013",
                                        "SteamAPI_SteamNetworkingSockets_SteamAPI_v012",
                                        "SteamAPI_SteamNetworkingSockets_SteamAPI_v011")
@@ -349,7 +386,9 @@ class SteamAPI:
         return fn
 
     def _start(self):
-        """SteamAPI_InitFlat on newer SDKs (it says what is wrong), SteamAPI_Init on older ones."""
+        """SteamAPI_InitFlat on newer SDKs (it says what is wrong), SteamAPI_Init on older ones. Started by Steam,
+        SteamAppId is already set; otherwise it is APP_ID."""
+        os.environ.setdefault("SteamAppId", str(APP_ID))
         if hasattr(self.lib, "SteamAPI_InitFlat"):
             message = ctypes.create_string_buffer(1024)
             init = self._fn("SteamAPI_InitFlat", ctypes.c_int, ctypes.c_char_p)
@@ -368,6 +407,31 @@ class SteamAPI:
 
     def steam_id(self):
         return self.lib.SteamAPI_ISteamUser_GetSteamID(self.user)
+
+    def app_id(self):
+        return self.lib.SteamAPI_ISteamUtils_GetAppID(self.steam_utils)
+
+    def persona_name(self):
+        return (self.lib.SteamAPI_ISteamFriends_GetPersonaName(self.friends_api) or b"").decode(errors="replace")
+
+    def friends(self):
+        """[(SteamID, name, app id of the game they are in or 0)] of our friends."""
+        lib, api, out = self.lib, self.friends_api, []
+        for i in range(max(0, lib.SteamAPI_ISteamFriends_GetFriendCount(api, FRIEND_FLAG_IMMEDIATE))):
+            sid = lib.SteamAPI_ISteamFriends_GetFriendByIndex(api, i, FRIEND_FLAG_IMMEDIATE)
+            name = (lib.SteamAPI_ISteamFriends_GetFriendPersonaName(api, sid) or b"").decode(errors="replace")
+            game = FriendGameInfo()
+            playing = lib.SteamAPI_ISteamFriends_GetFriendGamePlayed(api, sid, ctypes.byref(game))
+            out.append((sid, name, game.game_id & 0xFFFFFF if playing else 0))     # (the app id: CGameID's low 24 bits)
+        return out
+
+    def friend_presence(self, steam_id, key):
+        value = self.lib.SteamAPI_ISteamFriends_GetFriendRichPresence(self.friends_api, steam_id, key.encode())
+        return (value or b"").decode(errors="replace")
+
+    def set_presence(self, key, value):
+        """Set (or with "" clear) one of our rich presence keys, which our friends' Steam sees."""
+        self.lib.SteamAPI_ISteamFriends_SetRichPresence(self.friends_api, key.encode(), value.encode())
 
     def run_callbacks(self):
         lib, changes = self.lib, []

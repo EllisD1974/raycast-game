@@ -18,9 +18,17 @@ from test_session import DT, FIRST_CHARACTER, make_world, new_game
 RESULT_NO_CONNECTION = 3
 
 
+APP_ID = 480
+
+
 class FakeSteam:
+    """Everyone in it is friends with everyone else, and in the game (APP_ID) unless .playing says otherwise."""
+
     def __init__(self, loss=0.0, buffer=512 * 1024, rate=256 * 1024, seed=1):
         self.users = {}
+        self.names = {}                 # steam id -> name (default "Player <id>")
+        self.playing = {}               # steam id -> app id they are in (default APP_ID)
+        self.offline = {}               # steam id -> app id, for friends who are not running a FakeSteamAPI
         self.loss, self.buffer, self.rate = loss, buffer, rate
         self.rng = random.Random(seed)
 
@@ -60,6 +68,7 @@ class FakeSteamAPI:
         self.listening = {}             # listen socket -> virtual port
         self.changes = []
         self.next_handle = 100
+        self.presence = {}
 
     def _end(self):
         self.next_handle += 1
@@ -68,6 +77,24 @@ class FakeSteamAPI:
 
     def steam_id(self):
         return self.id
+
+    def app_id(self):
+        return APP_ID
+
+    def persona_name(self):
+        return self.steam.names.get(self.id, f"Player {self.id}")
+
+    def friends(self):
+        everyone = {**self.steam.offline, **{sid: self.steam.playing.get(sid, APP_ID) for sid in self.steam.users}}
+        return [(sid, self.steam.names.get(sid, f"Player {sid}"), game) for sid, game in everyone.items()
+                if sid != self.id]
+
+    def friend_presence(self, steam_id, key):
+        other = self.steam.users.get(steam_id)
+        return other.presence.get(key, "") if other else ""
+
+    def set_presence(self, key, value):
+        self.presence[key] = value
 
     def listen(self, virtual_port):
         self.next_handle += 1
@@ -247,3 +274,14 @@ def test_the_structs_match_the_steamworks_headers():
 def test_without_steam_there_is_a_clear_error(tmp_path):
     with pytest.raises(OSError, match="cannot load"):
         steamnet.SteamAPI(str(tmp_path / "steam_api64.dll"))
+
+
+def test_friends_in_the_game_are_listed_with_those_hosting_first():
+    steam = FakeSteam()
+    steam.names.update({HOST_ID: "zed", JOINER_ID: "me", 3: "amy", 4: "bob"})
+    steam.offline.update({3: APP_ID, 4: 730})                   # bob is in another game
+    network = steam.user(JOINER_ID)
+    host = SteamHost("pw", network=steam.user(HOST_ID))
+    assert network.friends_playing() == [(HOST_ID, "zed", True), (3, "amy", False)]
+    host.close()
+    assert network.friends_playing() == [(3, "amy", False), (HOST_ID, "zed", False)]    # no longer hosting
