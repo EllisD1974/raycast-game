@@ -361,9 +361,10 @@ def test_play_starts_main_py_with_this_python_and_the_built_game_when_frozen(mon
     command, folder = map_editor.Editor.game_command()
     assert command[0] == sys.executable and command[1].endswith("main.py") and os.path.dirname(command[1]) == folder
     monkeypatch.setattr(sys, "frozen", True, raising=False)
-    monkeypatch.setattr(sys, "executable", os.path.join("C:\\", "games", "RaycastGame", "RaycastEditor.exe"))
+    exe = ".exe" if os.name == "nt" else ""                             # (Linux programs have no .exe)
+    monkeypatch.setattr(sys, "executable", os.path.join(os.sep, "games", "RaycastGame", "RaycastEditor" + exe))
     command, folder = map_editor.Editor.game_command()
-    assert command == [os.path.join(os.path.dirname(sys.executable), "RaycastGame.exe")]
+    assert command == [os.path.join(os.path.dirname(sys.executable), "RaycastGame" + exe)]
     assert folder == os.path.dirname(sys.executable)
 
 

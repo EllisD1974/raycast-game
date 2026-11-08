@@ -6,11 +6,15 @@
 dist/RaycastGame/RaycastGame.exe   the game          (RaycastGame.exe --map maps/other.json, --host ..., --join ...)
 dist/RaycastGame/RaycastEditor.exe the map editor    (its "Play" button starts RaycastGame.exe next to it)
 
+On Linux the same command makes dist/RaycastGame/RaycastGame and RaycastEditor (no .exe), with libsteam_api.so in place
+of steam_api64.dll. PyInstaller cannot cross-build: the Linux build is made on Linux (.github/workflows/build-linux.yml).
+
 The folder carries assets/textures.png, assets/character.png and the maps next to the programs' own files. The renderer's numba source files are
 included too: numba compiles from them (and caches the result) when the program starts.
 """
 import glob
 import os
+import sys
 
 root = os.path.abspath(SPECPATH)
 
@@ -21,7 +25,8 @@ datas = [
 for source in ("raykernel.py", "raypitch.py", "raylight.py"):     # numba reads these to compile and cache the renderer
     datas.append((os.path.join(root, source), "."))
 binaries = []
-steam_api = os.path.join(root, "steamworks", "win64", "steam_api64.dll")     # for playing over Steam (steamworks/README.md)
+steam_api = os.path.join(root, "steamworks", *({"win32": ("win64", "steam_api64.dll")}.get(sys.platform)
+                                              or ("linux64", "libsteam_api.so")))   # for playing over Steam (steamworks/README.md)
 if os.path.exists(steam_api):
     binaries.append((steam_api, "."))
 

@@ -263,13 +263,19 @@ def test_junk_or_oversized_messages_close_the_connection():
 
 def test_the_structs_match_the_steamworks_headers():
     """Sizes and offsets of what Steam hands over, as laid out in steamnetworkingtypes.h and
-    isteamnetworkingsockets.h (8 byte packing on Windows): checked against SDK 1.65 by compiling sizeof / offsetof."""
+    isteamnetworkingsockets.h (8 byte packing on Windows, 4 on Linux): checked against SDK 1.65 by compiling
+    sizeof / offsetof with MSVC and with gcc on Linux."""
     assert ctypes.sizeof(steamnet.Identity) == 136
     assert ctypes.sizeof(steamnet.IPAddr) == 18
     assert ctypes.sizeof(steamnet.ConnectionInfo) == 696
     assert steamnet.ConnectionInfo.state.offset == 176 and steamnet.ConnectionInfo.end_debug.offset == 184
-    assert steamnet.StatusChanged.info.offset == 8 and ctypes.sizeof(steamnet.StatusChanged) == 712
-    assert ctypes.sizeof(steamnet.CallbackMsg) == 24
+    assert ctypes.sizeof(steamnet.FriendGameInfo) == 24 and steamnet.FriendGameInfo.lobby.offset == 16
+    if sys.platform == "win32":
+        assert steamnet.StatusChanged.info.offset == 8 and ctypes.sizeof(steamnet.StatusChanged) == 712
+        assert ctypes.sizeof(steamnet.CallbackMsg) == 24
+    else:
+        assert steamnet.StatusChanged.info.offset == 4 and ctypes.sizeof(steamnet.StatusChanged) == 704
+        assert ctypes.sizeof(steamnet.CallbackMsg) == 20
 
 
 def test_without_steam_there_is_a_clear_error(tmp_path):
@@ -291,6 +297,8 @@ def test_friends_in_the_game_are_listed_with_those_hosting_first():
 def test_the_steam_library_is_found_in_the_steamworks_folder_or_the_built_game(tmp_path, monkeypatch):
     if sys.platform == "win32":
         assert os.path.isfile(steamnet.library_path())                  # (the copy kept in steamworks/win64)
+    if sys.platform.startswith("linux"):
+        assert os.path.isfile(steamnet.library_path())                  # (the copy kept in steamworks/linux64)
     assert os.path.join("steamworks", "") in steamnet.library_path()
     bundled, program = tmp_path / "_internal", tmp_path / "RaycastGame.exe"
     bundled.mkdir()
