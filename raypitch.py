@@ -237,7 +237,8 @@ def _trace_pixel(fb, zb, x, y, px, py, eye_z, eye_span, dx, dy, dz,
             red, green, blue = _fetch_over(textures, tex, own, wtx, _wall_ty(z1, tsize), shade)
             depth = t1
             break
-        if found == 0 and pane_tex[ny, nx] >= 0 and z1 < pane_top[ny, nx] and n_panes < MAX_PANES:
+        inside_panes = s == 0 and pane_tex[cy, cx] >= 0 and z1 < pane_top[cy, cx]    # (the face between two is inside)
+        if found == 0 and pane_tex[ny, nx] >= 0 and z1 < pane_top[ny, nx] and not inside_panes and n_panes < MAX_PANES:
             pane_f[0, n_panes], pane_f[1, n_panes] = t1, shade
             pane_i[0, n_panes], pane_i[1, n_panes], pane_i[2, n_panes] = wtx, _wall_ty(z1, tsize), pane_tex[ny, nx]
             n_panes += 1

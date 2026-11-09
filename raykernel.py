@@ -334,12 +334,17 @@ def _render_column(fb, zb, x, px, py, eye_z, eye_span, rdx, rdy, horizon, focal,
                     if k == 0 and pane_tex[ny, nx] >= 0 and n_panes < MAX_PANES:
                         # The next cell is a see-through wall: remember its face, over the heights
                         # the ray can reach up to the wall's top (a short wall can be seen over),
-                        # and keep going. It is blended in at the end.
+                        # and keep going. It is blended in at the end. Coming from another see-through
+                        # cell, the face between them is inside the wall and only shows above that
+                        # cell's top (a short pane beside a taller one).
                         face_top = min(hi, pane_top[ny, nx])
-                        if face_top - cur > EPS:
+                        face_low = cur
+                        if s == 0 and pane_tex[cy, cx] >= 0:
+                            face_low = max(cur, pane_top[cy, cx])
+                        if face_top - face_low > EPS:
                             pane_t[n_panes], pane_tx[n_panes] = t1, wtx
                             pane_id[n_panes], pane_shade[n_panes] = pane_tex[ny, nx], shade
-                            pane_zlo[n_panes], pane_zhi[n_panes] = cur, face_top
+                            pane_zlo[n_panes], pane_zhi[n_panes] = face_low, face_top
                             pane_ytop[n_panes], pane_ybot[n_panes] = ytop, ybot
                             n_panes += 1
                     ntop = max(ytop, int(math.ceil(_proj(hi, t1, eye_z, horizon, focal))))

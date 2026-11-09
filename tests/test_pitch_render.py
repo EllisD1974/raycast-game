@@ -255,6 +255,44 @@ def test_sprites_land_where_the_rotated_camera_puts_them_and_hide_behind_walls()
     assert not ((fb2[..., 0] > 150) & (fb2[..., 1] > 150) & (fb2[..., 2] < 80)).any()
 
 
+@pytest.mark.parametrize("which", ["tilt", "pitch"])
+def test_a_tilted_view_does_not_draw_the_sides_between_see_through_cells(which):
+    """As in the level view: glass two cells thick looks like one pane, without the face inside it."""
+    import raypitch
+    import raytilt
+    from atlas import transparent_tiles
+    from constants import FOG_DIST, MAX_DEPTH
+    from renderer import BACKGROUND
+    textures = flat_textures()
+    textures[1, ..., :3], textures[1, ..., 3] = (255, 255, 255), 100     # tile id 2: white glass
+    textures[3, ..., :3], textures[3, ..., 3] = (255, 0, 255), 100       # tile id 4: purple glass
+    level = Level.blank(16, 16)
+    for x in range(1, 15):
+        for y in range(1, 15):
+            level.set("ceil_h", x, y, 4.0)                     # tall, so the tilted view meets the glass, not the ceiling
+    level.set("walls", 5, 8, 2)
+    level.set("walls", 6, 8, 4)
+    world = World(level, 16, transparent_tiles(textures))
+    assert world.pane_tex[8, 5] >= 0 and world.pane_tex[8, 6] >= 0
+    renderer = Renderer(textures)
+
+    def draw():
+        fb, depth = np.zeros((WIDTH, HEIGHT, 3), np.uint8), np.zeros((WIDTH, HEIGHT), np.float32)
+        args = (4.5, 8.5, 0.5, 0, 1.0, 0.0, 0.4, renderer.focal, *scene_of(world), renderer.textures, MAX_DEPTH,
+                FOG_DIST, BACKGROUND)
+        if which == "tilt":
+            raytilt.render_scene_tilt(fb, depth, *args, raytilt.TiltScratch())
+        else:
+            raypitch.render_scene_pitch(fb, depth, *args, raypitch.skip_blocks(*scene_of(world)[:5]))
+        return fb.astype(int)
+
+    thick = draw()
+    world.pane_tex[8, 6] = -1                                  # the far cell's pane off: only the front one
+    front_only = draw()
+    middle = (slice(WIDTH // 2 - 20, WIDTH // 2 + 20), slice(HEIGHT // 2 - 20, HEIGHT // 2 + 20))
+    assert np.abs(thick[middle] - front_only[middle]).max() <= 1
+
+
 def spots(world, count, seed):
     """`count` places to stand (x, y, floor), picked at random among the open cells of every floor."""
     rng = np.random.default_rng(seed)
