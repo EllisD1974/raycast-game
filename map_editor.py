@@ -525,6 +525,7 @@ class Editor:
         self._short_cache = (None, False)
         self._trans_cache = (None, None)
         self._ceiling_cache = (None, False)
+        self._width_cache = (None, 0)           # (what it was for, the Details pane's width)
 
         self.floor = 0                        # index of the floor being edited (0 = ground)
         self.dropdown_open = False
@@ -565,6 +566,11 @@ class Editor:
         self.settings_mode = False              # the Map settings section is showing instead of the map
         self.settings_selected = None           # RULES_ROW, BUY_ROW or the index of a buy menu entry being edited
         self.settings_scroll = 0                # how far the Map settings section is scrolled up, in pixels
+        self.prefabs_scroll = self.effects_scroll = self.lights_scroll = 0      # ... and the other sections
+        self.details_scroll = 0                 # how far the Details pane's rows are scrolled up, in pixels
+        self.details_for = None                 # what the pane last showed (another thing starts at the top)
+        self.scroll_drag = None                 # (what, how far down its thumb it was grabbed) while a bar is dragged
+        self.tips = []                          # [(rect, whole text)] of text drawn cut short, shown whole on hover
         self.effect_selected = None             # index in level.effects of the effect being edited
         self.fx_sim = None                      # [ParticleSystem, settings it was made from, time to next burst]
         self.fx_scaled = {}                     # (tile, pixels) -> a particle picture at that size
@@ -751,7 +757,13 @@ class Editor:
         chosen = (self.selected_entity() or self.selected_gun() or self.selected_ammo() or self.selected_prefab()
                   or self.selected_effect() or self.selected_light() or (self.ambient_chosen() or None)
                   or self.selected_buy_item() or (self.settings_row() or None))
-        return PANE_WIDTH if chosen is not None or self.palette_active() else 0
+        if chosen is None and not self.palette_active():
+            return 0
+        key = (self.revision, id(self.level), id(chosen), self.section_name(), self.place_prefab, self._size())
+        if self._width_cache[0] != key:                 # (asked for all the time: worked out once per change)
+            self._width_cache = (key, details.pane_width(self.details_fields(), (self.font, self.small),
+                                                         max(PANE_WIDTH, self._size()[0] // 3)))
+        return self._width_cache[1]
 
     def details_rect(self):
         """The docked Details pane, or None while nothing is selected."""
@@ -1024,7 +1036,13 @@ class Editor:
 
     def details_rows(self):
         rect = self.details_rect()
-        return [] if rect is None else details.rows_for(rect, self.details_fields())
+        if rect is None:
+            return []
+        showing = (self.details_text()[0], self.selected, self.gun_selected, self.ammo_selected, self.prefab_selected,
+                   self.effect_selected, self.light_selected, self.settings_selected, self.section_name())
+        if showing != self.details_for:                 # something else is shown: back to the top of it
+            self.details_for, self.details_scroll = showing, 0
+        return details.rows_for(rect, self.details_fields(), (self.font, self.small), self.details_scroll)
 
     def set_entity(self, name, value):
         """Change one setting of the selected item (one undo step); new items start with it too."""
@@ -1702,13 +1720,31 @@ class Editor:
             self.level.entities.remove(e)
             self.deselect()
 
+    def show_details_row(self, key):
+        """Scroll the Details pane so the row of field `key` is in view (and not under the Delete button)."""
+        rect, rows = self.details_rect(), self.details_rows()
+        row = next((r for r in rows if r.field.key == key), None)
+        if row is None:
+            return
+        view = details.view_rect(rect)
+        bottom = rect.bottom - 52 if self.details_delete_label() else view.bottom
+        if row.rect.top < view.top:
+            self.set_scroll("details", self.details_scroll - (view.top - row.rect.top))
+        elif row.rect.bottom > bottom:
+            self.set_scroll("details", self.details_scroll + row.rect.bottom - bottom)
+
     def details_click(self, pos):
         """A click inside the Details pane: step a value, start typing one, or delete the item."""
         rect = self.details_rect()
         rows = self.details_rows()
+        if not details.view_rect(rect).collidepoint(pos):  # (rows scrolled up under the title are not there)
+            return
         if self.details_delete_label() and details.button_rect(rect, rows).collidepoint(pos):
             self.delete_selected()
             return
+        if self.details_delete_label() and details.button_kept(rect, rows) \
+                and pos[1] >= details.button_rect(rect, rows).y - 8:
+            return                                      # (rows scrolled under the Delete button are not there)
         for row in rows:
             f = row.field
             if f.kind == "info":
@@ -1766,10 +1802,17 @@ class Editor:
                         return
 
     def details_wheel(self, pos, notches):
+        """The wheel over the Details pane steps the value under it. While the pane has more rows than fit, only
+        over a value's - / box / + (elsewhere the wheel scrolls the pane). True if a value was stepped."""
+        view = self.scroll_view("details")
+        scrolling = view is not None and view[1] > view[0].h
         for row in self.details_rows():
             if row.rect.collidepoint(pos) and row.field.kind in ("num", "enum", "tile") and row.field.wheel:
+                if scrolling and not row.minus.union(row.plus).collidepoint(pos):
+                    return False
                 row.field.set(row.field.stepped(1 if notches > 0 else -1, abs(notches)))
-                return
+                return True
+        return False
 
     def editing_text(self):
         """True while the Details pane is taking a name (any characters) rather than a number."""
@@ -3372,7 +3415,7 @@ class Editor:
                 self.after_import(self.importing.click(e.pos, self._size()))
             return
         if self.open_maps is not None:                  # the Open dialog takes every click
-            if e.button == 1:
+            if e.button == 1 and not self.scrollbar_press(e.pos, ("open",)):
                 self.open_dialog_click(e.pos)
             return
         if self.new_name is not None:                   # the New map dialog takes every click
@@ -3395,6 +3438,8 @@ class Editor:
                 self.menu_click(e.pos)
             else:
                 self.menu_open = None
+            return
+        if e.button == 1 and self.scrollbar_press(e.pos, ("details", self.section_name())):
             return
         pane = self.details_rect()
         if pane is not None and pane.collidepoint(e.pos) and e.pos[1] >= TOOLBAR_H:
@@ -3451,6 +3496,10 @@ class Editor:
 
     def on_mouse_up(self, e):
         self.mouse = e.pos
+        if e.button == 1:
+            self.scroll_drag = None
+            if self.importing is not None:
+                self.importing.grab = None
         if e.button == 1 and self.atlas_drag:
             self.finish_atlas_drag()
         if e.button == 1 and self.stairs_drag:
@@ -3475,7 +3524,11 @@ class Editor:
 
     def on_mouse_move(self, e):
         self.mouse = e.pos
-        if self.gizmo_drag:
+        if self.importing is not None and self.importing.grab is not None:
+            self.importing.drag(e.pos[1], self._size())
+        elif self.scroll_drag is not None:
+            self.scroll_drag_to(e.pos[1])
+        elif self.gizmo_drag:
             self.gizmo_move(e.pos)
         elif self.look_drag and self.preview is not None:
             self.preview.look(e.rel[0] * MOUSE_SENSITIVITY, -e.rel[1] * MOUSE_SENSITIVITY)
@@ -3512,6 +3565,8 @@ class Editor:
             most = max(0, len(self.open_maps) - OPEN_ROWS)
             self.open_scroll = max(0, min(most, self.open_scroll - e.y))
             return
+        if self.menu_open is not None:                  # (an open drop-down list stays where its row is)
+            return
         if self.new_name is not None:
             return
         if self.atlas_rect().collidepoint(self.mouse):  # the wheel zooms the atlas
@@ -3519,20 +3574,17 @@ class Editor:
             return
         pane = self.details_rect()
         if pane is not None and pane.collidepoint(self.mouse):      # the wheel steps the value under it
-            self.details_wheel(self.mouse, e.y)
+            if not self.details_wheel(self.mouse, e.y):             # ... or scrolls the pane
+                self.set_scroll("details", self.details_scroll - e.y * 48)
             return
         if self.over_preview():                 # the wheel walks the camera forward / back
             if self.preview is not None:
                 self.preview.nudge(1 if e.y > 0 else -1, abs(e.y))
             return
         area = self.map_area()
-        if self.guns_mode and area.collidepoint(self.mouse):    # the wheel scrolls the Guns section
-            self.guns_scroll = max(0, self.guns_scroll - e.y * 48)
-            self.clamp_guns_scroll()
-            return
-        if self.settings_mode and area.collidepoint(self.mouse):    # ... and the Map settings section
-            self.settings_scroll = max(0, self.settings_scroll - e.y * 48)
-            self.clamp_settings_scroll()
+        section = self.section_name()
+        if section is not None and area.collidepoint(self.mouse):  # the wheel scrolls a section shown instead of the map
+            self.set_scroll(section, getattr(self, f"{section}_scroll") - e.y * 48)
             return
         if not area.collidepoint(self.mouse) or self.section_open():
             return
@@ -3550,6 +3602,7 @@ class Editor:
 
     def draw(self, screen):
         screen.fill(BG)
+        self.tips = []
         if self.guns_mode:
             self.draw_guns(screen)
         elif self.prefabs_mode:
@@ -3569,11 +3622,15 @@ class Editor:
         self.draw_status(screen)
         self.draw_toolbar(screen)
         self.draw_dropdown(screen)
+        if self.dropdown_open or self.menu_open is not None or self.new_name is not None or self.open_maps is not None \
+                or self.importing is not None:
+            self.tips = []                              # (what is under a list or dialog has no tooltips)
         self.draw_new_map_dialog(screen)
         self.draw_open_dialog(screen)
         if self.importing is not None:
             self.draw_shade(screen)
-            self.importing.draw(screen, self._size(), self.mouse)
+            self.tips += self.importing.draw(screen, self._size(), self.mouse) or []
+        self.draw_tip(screen)
         title = f"Map editor - {os.path.basename(self.path)}{' *' if self.dirty else ''}"
         if pygame.display.get_caption()[0] != title:
             pygame.display.set_caption(title)
@@ -4149,8 +4206,8 @@ class Editor:
         pygame.draw.rect(screen, BG, area)
         self.clamp_guns_scroll()
         screen.blit(self.font.render("Guns in this map", True, ACCENT), (area.x + 20, area.y + 14 - self.guns_scroll))
-        screen.blit(self.small.render("Click a gun or an ammo type to edit it in the Details pane. Pick pictures from the atlas.",
-                                      True, DIM), (area.x + 20, area.y + 40 - self.guns_scroll))
+        self.blit_fitted(screen, self.small, "Click a gun or an ammo type to edit it in the Details pane. Pick pictures "
+                         "from the atlas.", DIM, (area.x + 20, area.y + 40 - self.guns_scroll), area.right - 14)
         rows, add = self.gun_rows()
         for rect, i in rows:
             g = self.level.guns[i]
@@ -4159,12 +4216,12 @@ class Editor:
                              rect, border_radius=4)
             screen.set_clip(rect.clip(area))                   # long summaries stop at the row's edge
             screen.blit(self.tiles[max(0, min(g.tile, len(self.tiles) - 1))], (rect.x + 6, rect.y + (rect.h - TILE) // 2))
-            screen.blit(self.font.render(g.name, True, TEXT), (rect.x + 48, rect.y + 5))
+            self.blit_fitted(screen, self.font, g.name, TEXT, (rect.x + 48, rect.y + 5), rect.right - 8)
             summary = (f"{GUN_MODE_LABELS[g.mode]}   {g.damage:g} dmg   {g.fire_rate:g}/s   {g.capacity} rounds   "
                        f"ammo: {g.ammo or 'default'}")
             if g.shot != "single":
                 summary += f"   {SHOT_LABELS[g.shot].lower()}" + (f" x{g.pellets}" if g.shot == "multi" else "")
-            screen.blit(self.small.render(summary, True, TEXT if on else DIM), (rect.x + 48, rect.y + 24))
+            self.blit_fitted(screen, self.small, summary, TEXT if on else DIM, (rect.x + 48, rect.y + 24), rect.right - 8)
             screen.set_clip(area)
         self._draw_add_button(screen, add, "+ Add gun")
         ammo_rows, add_ammo = self.ammo_rows()
@@ -4176,11 +4233,11 @@ class Editor:
                              rect, border_radius=4)
             screen.set_clip(rect.clip(area))
             screen.blit(self.tiles[max(0, min(a.tile, len(self.tiles) - 1))], (rect.x + 6, rect.y + (rect.h - TILE) // 2))
-            screen.blit(self.font.render(a.name, True, TEXT), (rect.x + 48, rect.y + 5))
+            self.blit_fitted(screen, self.font, a.name, TEXT, (rect.x + 48, rect.y + 5), rect.right - 8)
             users = [g.name for g in self.level.guns if g.ammo == a.name]
             summary = (f"speed {a.speed:g}   range {a.range:g}   damage x{a.damage_mult:g}   used by "
                        + (", ".join(users) if users else "no gun"))
-            screen.blit(self.small.render(summary, True, TEXT if on else DIM), (rect.x + 48, rect.y + 24))
+            self.blit_fitted(screen, self.small, summary, TEXT if on else DIM, (rect.x + 48, rect.y + 24), rect.right - 8)
             screen.set_clip(area)
         self._draw_add_button(screen, add_ammo, "+ Add ammo type")
         card = self.guns_card_rect()
@@ -4192,7 +4249,7 @@ class Editor:
         else:
             note = "No guns yet: add one." if not self.level.guns else "Select a gun or an ammo type to edit it."
             screen.blit(self.small.render(note, True, DIM), (card.x, card.y))
-        self.draw_guns_scrollbar(screen, area)
+        self.draw_scrollbar(screen, "guns")
         screen.set_clip(None)
 
     def guns_content_bottom(self):
@@ -4213,17 +4270,117 @@ class Editor:
 
     def clamp_guns_scroll(self):
         """Keep the scroll within the content (it shrinks when the selection or the window does)."""
-        room = self.guns_content_bottom() - self.map_area().bottom
-        self.guns_scroll = max(0, min(self.guns_scroll, room))
+        self.set_scroll("guns", self.guns_scroll)
 
-    def draw_guns_scrollbar(self, screen, area):
-        """A thin bar at the right edge of the Guns section when there is more below (or above) than shows."""
-        total = self.guns_content_bottom() - area.y
-        if total <= area.h:
-            return
-        height = max(30, round(area.h * area.h / total))
-        top = area.y + round((area.h - height) * self.guns_scroll / max(1, total - area.h))
-        pygame.draw.rect(screen, (70, 74, 88), (area.right - 8, top, 5, height), border_radius=2)
+    # ---------------------------------------------------------------- scrolling, and text cut short to fit
+
+    SCROLLED_SECTIONS = ("guns", "prefabs", "effects", "lights", "settings")
+
+    def section_name(self):
+        """Which scrolling section is showing in place of the map, or None."""
+        return next((name for name in self.SCROLLED_SECTIONS if getattr(self, f"{name}_mode")), None)
+
+    def section_bottom(self, name):
+        """The y of the bottom of everything in section `name` if it were not scrolled at all."""
+        if name == "guns":
+            return self.guns_content_bottom()
+        if name == "settings":
+            return self.settings_content_bottom()
+        add = {"prefabs": self.prefab_rows, "effects": self.effect_rows, "lights": self.light_rows}[name]()[-1]
+        bottom = add.bottom + 40
+        card = self.section_card(name)
+        if card is not None:
+            card, lines, width = card
+            wrapped = sum(len(details.note_lines([text], self.small, width)) for text in lines)
+            bottom = max(bottom, card.bottom + 12 + 17 * wrapped + 20)
+        return bottom + getattr(self, f"{name}_scroll")
+
+    def scroll_view(self, name):
+        """(view, content height, scroll) of something that scrolls: "details" (the Details pane's rows), "open"
+        (the Open dialog's list) or a section showing in place of the map; None while it is not showing."""
+        if name == "details":
+            rect = self.details_rect()
+            if rect is None:
+                return None
+            rows = details.rows_for(rect, self.details_fields(), (self.font, self.small), self.details_scroll)
+            height = details.content_height(rect, rows, self.details_text()[1], self.small, self.details_delete_label())
+            return details.view_rect(rect), height, self.details_scroll
+        if name == "open":
+            if self.open_maps is None:
+                return None
+            listing = self.open_rects()[1]
+            return listing, len(self.open_maps) * OPEN_ROW_H, self.open_scroll * OPEN_ROW_H
+        if name in self.SCROLLED_SECTIONS and getattr(self, f"{name}_mode"):
+            area = self.map_area()
+            return area, self.section_bottom(name) - area.y, getattr(self, f"{name}_scroll")
+        return None
+
+    def set_scroll(self, name, scroll):
+        """Scroll `name` (see scroll_view) to `scroll` pixels, kept between the top and the end of what is in it."""
+        view = self.scroll_view(name)
+        most = 0 if view is None else max(0, view[1] - view[0].h)
+        scroll = max(0, min(round(scroll), most))
+        if name == "open":
+            self.open_scroll = max(0, min(len(self.open_maps or ()) - OPEN_ROWS, round(scroll / OPEN_ROW_H)))
+        else:
+            setattr(self, f"{name}_scroll", scroll)
+
+    def scrollbar(self, name):
+        """(track, thumb) of the bar showing where `name` is scrolled to, or None when all of it fits."""
+        view = self.scroll_view(name)
+        return None if view is None else details.scrollbar(*view)
+
+    def scrollbar_press(self, pos, names):
+        """A press on the bar of one of `names`: drag its thumb from there (or, on the track, jump the thumb
+        there first). True if it was on a bar."""
+        for name in names:
+            bar = self.scrollbar(name) if name else None
+            if bar is not None and bar[0].inflate(10, 0).collidepoint(pos):
+                _track, thumb = bar
+                self.scroll_drag = (name, pos[1] - thumb.y if thumb.top <= pos[1] < thumb.bottom else thumb.h // 2)
+                self.scroll_drag_to(pos[1])
+                return True
+        return False
+
+    def scroll_drag_to(self, y):
+        """While a bar is dragged: scroll so the point grabbed on its thumb is at screen row `y`."""
+        name, grab = self.scroll_drag
+        view = self.scroll_view(name)
+        if view is not None:
+            self.set_scroll(name, details.scroll_for(view[0], view[1], y - grab))
+
+    def draw_scrollbar(self, screen, name):
+        """The thin bar at the right edge of `name` (see scroll_view) when there is more in it than shows."""
+        bar = self.scrollbar(name)
+        if bar is not None:
+            dragged = self.scroll_drag is not None and self.scroll_drag[0] == name
+            hot = dragged or bar[0].inflate(10, 0).collidepoint(self.mouse)
+            details.draw_scrollbar(screen, bar, hot)
+
+    def blit_fitted(self, screen, font, text, color, pos, right):
+        """Draw `text` at `pos`, cut short with "..." to end by screen column `right`; text cut short shows whole
+        in a tooltip while the mouse is over it."""
+        shown = details.fit_text(font, text, right - pos[0])
+        if shown != text:
+            area = pygame.Rect(pos[0], pos[1], right - pos[0], font.get_linesize())
+            clip = screen.get_clip()
+            self.tips.append((area.clip(clip) if clip else area, text))
+        screen.blit(font.render(shown, True, color), pos)
+
+    def draw_tip(self, screen):
+        """The whole of the text cut short under the mouse, in a box beside it (the last drawn is on top)."""
+        for area, text in reversed(self.tips):
+            if area.w > 0 and area.h > 0 and area.collidepoint(self.mouse):
+                lines = details.note_lines([text], self.small, 460)
+                width = max(self.small.size(line)[0] for line in lines)
+                box = pygame.Rect(self.mouse[0] + 14, self.mouse[1] + 18, width + 14, 17 * len(lines) + 8)
+                box.clamp_ip(screen.get_rect())
+                pygame.draw.rect(screen, (20, 21, 27), box, border_radius=4)
+                pygame.draw.rect(screen, GRID, box, 1, border_radius=4)
+                for i, line in enumerate(lines):
+                    screen.blit(self.small.render(line, True, TEXT), (box.x + 7, box.y + 4 + 17 * i))
+                return
+
 
     def _draw_wrapped(self, screen, lines, x, y, width):
         """Small gray lines of text wrapped to `width` pixels, starting at (x, y); returns the y below them."""
@@ -4321,9 +4478,10 @@ class Editor:
         """[(rect, prefab index)] for the list of prefabs, and the rect of the Add button after it."""
         area = self.map_area()
         width = min(area.w - 40, 440)
-        rows = [(pygame.Rect(area.x + 20, area.y + 74 + i * self.PREFAB_ROW_H, width, self.PREFAB_ROW_H - 4), i)
+        base = area.y + 74 - self.prefabs_scroll
+        rows = [(pygame.Rect(area.x + 20, base + i * self.PREFAB_ROW_H, width, self.PREFAB_ROW_H - 4), i)
                 for i in range(len(self.level.prefabs))]
-        top = area.y + 74 + len(rows) * self.PREFAB_ROW_H
+        top = base + len(rows) * self.PREFAB_ROW_H
         return rows, pygame.Rect(area.x + 20, top, 170, 34)
 
     def prefabs_click(self, pos):
@@ -4343,9 +4501,11 @@ class Editor:
         area = self.map_area()
         screen.set_clip(area)
         pygame.draw.rect(screen, BG, area)
-        screen.blit(self.font.render("Prefabs in this map", True, ACCENT), (area.x + 20, area.y + 14))
-        screen.blit(self.small.render("A prefab is a saved item (icon, pickup effect, animation) you can place as often as you like.",
-                                      True, DIM), (area.x + 20, area.y + 40))
+        self.set_scroll("prefabs", self.prefabs_scroll)
+        top = area.y - self.prefabs_scroll
+        screen.blit(self.font.render("Prefabs in this map", True, ACCENT), (area.x + 20, top + 14))
+        self.blit_fitted(screen, self.small, "A prefab is a saved item (icon, pickup effect, animation) you can place as "
+                         "often as you like.", DIM, (area.x + 20, top + 40), area.right - 14)
         rows, add = self.prefab_rows()
         for rect, i in rows:
             p = self.level.prefabs[i]
@@ -4354,10 +4514,10 @@ class Editor:
                              rect, border_radius=4)
             screen.set_clip(rect.clip(area))
             screen.blit(self.tiles[max(0, min(p.tile, len(self.tiles) - 1))], (rect.x + 6, rect.y + (rect.h - TILE) // 2))
-            screen.blit(self.font.render(p.name, True, TEXT), (rect.x + 48, rect.y + 5))
+            self.blit_fitted(screen, self.font, p.name, TEXT, (rect.x + 48, rect.y + 5), rect.right - 8)
             used = sum(1 for e in self.level.entities if e.prefab == p.name)
             summary = f"{MODE_LABELS[p.mode]}   {describe(p)}   placed {used}x"
-            screen.blit(self.small.render(summary, True, TEXT if on else DIM), (rect.x + 48, rect.y + 24))
+            self.blit_fitted(screen, self.small, summary, TEXT if on else DIM, (rect.x + 48, rect.y + 24), rect.right - 8)
             screen.set_clip(area)
         self._draw_add_button(screen, add, "+ Add prefab")
         right = area.x + 20 + min(area.w - 40, 440) + 24
@@ -4365,21 +4525,53 @@ class Editor:
         if p is None:
             note = "No prefabs yet: add one." if not self.level.prefabs else "Select a prefab to edit it."
             screen.blit(self.small.render(note, True, DIM), (right if area.right - right > 200 else add.x, add.bottom + 14
-                                                           if area.right - right <= 200 else area.y + 74))
+                                                           if area.right - right <= 200 else top + 74))
         else:
-            card = pygame.Rect(right, area.y + 74, 200, 200)
-            if area.right - right < 220:
-                card = pygame.Rect(add.x, add.bottom + 20, 200, 200)
+            card, lines, width = self.section_card("prefabs")
             pygame.draw.rect(screen, (44, 48, 60), card)
             pygame.draw.rect(screen, GRID, card.inflate(2, 2), 1)
             icon = pygame.transform.scale(self.tiles[max(0, min(p.tile, len(self.tiles) - 1))], (128, 128))
             screen.blit(icon, icon.get_rect(center=(card.centerx, card.y + 76)))
             screen.blit(self.small.render("how it looks in the world", True, DIM), (card.x + 12, card.bottom - 24))
+            self._draw_wrapped(screen, lines, card.x, card.bottom + 12, width)
+        self.draw_scrollbar(screen, "prefabs")
+        screen.set_clip(None)
+
+    def section_card(self, name):
+        """(card rect, lines of text under it, how wide they wrap) of the selected thing's preview in the
+        Prefabs, Effects or Lights section (beside the list, or below it when there is no room), or None while
+        nothing is selected there."""
+        area = self.map_area()
+        right = area.x + 20 + min(area.w - 40, 440) + 24
+        top = area.y + 74 - getattr(self, f"{name}_scroll")
+        if name == "prefabs":
+            p = self.selected_prefab()
+            if p is None:
+                return None
+            card = pygame.Rect(right, top, 200, 200)
+            if area.right - right < 220:
+                card = pygame.Rect(area.x + 20, self.prefab_rows()[1].bottom + 20, 200, 200)
             lines = (f"{MODE_LABELS[p.mode]}: {describe(p)}",
                      ", ".join(ANIMATION_LABELS[a.kind].lower() for a in p.animations) or "no animation",
                      f"size {p.size:g}, lift {p.lift:g}")
-            self._draw_wrapped(screen, lines, card.x, card.bottom + 12, max(200, area.right - card.x - 20))
-        screen.set_clip(None)
+            return card, lines, max(200, area.right - card.x - 20)
+        if name == "effects":
+            thing, add = self.selected_effect(), self.effect_rows()[1]
+            if thing is None:
+                return None
+            users = self.effect_users(thing)
+            lines = (self.effect_summary(thing), "used by: " + (", ".join(users) if users else "nothing yet"))
+        else:
+            thing, add = self.selected_light(), self.light_rows()[2]
+            if thing is None:
+                return None
+            users = self.light_users(thing)
+            lines = (self.light_summary(thing), "used by: " + (", ".join(users) if users else "nothing yet"))
+        width = min(420, area.right - right - 20)
+        card = pygame.Rect(right, top, width, 330)
+        if width < 220:
+            card = pygame.Rect(add.x, add.bottom + 20, min(420, max(160, area.w - 40)), 330)
+        return card, lines, card.w
 
     # ---------------------------------------------------------------- the Effects section
 
@@ -4389,9 +4581,10 @@ class Editor:
         """[(rect, effect index)] for the list of effects, and the rect of the Add button after it."""
         area = self.map_area()
         width = min(area.w - 40, 440)
-        rows = [(pygame.Rect(area.x + 20, area.y + 74 + i * self.EFFECT_ROW_H, width, self.EFFECT_ROW_H - 4), i)
+        base = area.y + 74 - self.effects_scroll
+        rows = [(pygame.Rect(area.x + 20, base + i * self.EFFECT_ROW_H, width, self.EFFECT_ROW_H - 4), i)
                 for i in range(len(self.level.effects))]
-        top = area.y + 74 + len(rows) * self.EFFECT_ROW_H
+        top = base + len(rows) * self.EFFECT_ROW_H
         return rows, pygame.Rect(area.x + 20, top, 170, 34)
 
     def effects_click(self, pos):
@@ -4476,17 +4669,19 @@ class Editor:
                                                               round(floor_y - (z + size / 2) * FX_CELL))))
             screen.set_clip(None)
         pygame.draw.rect(screen, GRID, card.inflate(2, 2), 1)
-        screen.blit(self.small.render("side view (x across, up is up), one square = 1 cell; the line shows the direction",
-                                      True, DIM), (card.x + 8, card.bottom - 20))
+        self.blit_fitted(screen, self.small, "side view (x across, up is up), one square = 1 cell; the line shows the "
+                         "direction", DIM, (card.x + 8, card.bottom - 20), card.right - 8)
 
     def draw_effects(self, screen):
         """The Effects section: the map's particle effects as a list, and a live preview of the selected one."""
         area = self.map_area()
         screen.set_clip(area)
         pygame.draw.rect(screen, BG, area)
-        screen.blit(self.font.render("Particle effects in this map", True, ACCENT), (area.x + 20, area.y + 14))
-        screen.blit(self.small.render("Design an effect here, then give it to a gun (muzzle), an ammo type (trail) or an item.",
-                                      True, DIM), (area.x + 20, area.y + 40))
+        self.set_scroll("effects", self.effects_scroll)
+        top = area.y - self.effects_scroll
+        screen.blit(self.font.render("Particle effects in this map", True, ACCENT), (area.x + 20, top + 14))
+        self.blit_fitted(screen, self.small, "Design an effect here, then give it to a gun (muzzle), an ammo type (trail) "
+                         "or an item.", DIM, (area.x + 20, top + 40), area.right - 14)
         rows, add = self.effect_rows()
         for rect, i in rows:
             f = self.level.effects[i]
@@ -4495,8 +4690,9 @@ class Editor:
                              rect, border_radius=4)
             screen.set_clip(rect.clip(area))
             screen.blit(self.tiles[max(0, min(f.tile, len(self.tiles) - 1))], (rect.x + 6, rect.y + (rect.h - TILE) // 2))
-            screen.blit(self.font.render(f.name, True, TEXT), (rect.x + 48, rect.y + 5))
-            screen.blit(self.small.render(self.effect_summary(f), True, TEXT if on else DIM), (rect.x + 48, rect.y + 24))
+            self.blit_fitted(screen, self.font, f.name, TEXT, (rect.x + 48, rect.y + 5), rect.right - 8)
+            self.blit_fitted(screen, self.small, self.effect_summary(f), TEXT if on else DIM, (rect.x + 48, rect.y + 24),
+                             rect.right - 8)
             screen.set_clip(area)
         self._draw_add_button(screen, add, "+ Add effect")
         right = area.x + 20 + min(area.w - 40, 440) + 24
@@ -4505,16 +4701,12 @@ class Editor:
             note = "No effects yet: add one." if not self.level.effects else "Select an effect to edit it."
             narrow = area.right - right <= 200
             screen.blit(self.small.render(note, True, DIM), (add.x if narrow else right,
-                                                           add.bottom + 14 if narrow else area.y + 74))
+                                                           add.bottom + 14 if narrow else top + 74))
         else:
-            width = min(420, area.right - right - 20)
-            card = pygame.Rect(right, area.y + 74, width, 330)
-            if width < 220:
-                card = pygame.Rect(add.x, add.bottom + 20, min(420, max(160, area.w - 40)), 330)
+            card, lines, width = self.section_card("effects")
             self.draw_fx_preview(screen, card)
-            users = self.effect_users(f)
-            self._draw_wrapped(screen, (self.effect_summary(f), "used by: " + (", ".join(users) if users else "nothing yet")),
-                               card.x, card.bottom + 12, card.w)
+            self._draw_wrapped(screen, lines, card.x, card.bottom + 12, width)
+        self.draw_scrollbar(screen, "effects")
         screen.set_clip(None)
 
     # ---------------------------------------------------------------- the Lights section
@@ -4525,10 +4717,11 @@ class Editor:
         """(ambient row rect, [(rect, light index)], Add button rect) for the Lights section's list."""
         area = self.map_area()
         width = min(area.w - 40, 440)
-        ambient = pygame.Rect(area.x + 20, area.y + 74, width, self.LIGHT_ROW_H - 4)
-        rows = [(pygame.Rect(area.x + 20, area.y + 74 + (i + 1) * self.LIGHT_ROW_H, width, self.LIGHT_ROW_H - 4), i)
+        base = area.y + 74 - self.lights_scroll
+        ambient = pygame.Rect(area.x + 20, base, width, self.LIGHT_ROW_H - 4)
+        rows = [(pygame.Rect(area.x + 20, base + (i + 1) * self.LIGHT_ROW_H, width, self.LIGHT_ROW_H - 4), i)
                 for i in range(len(self.level.lights))]
-        top = area.y + 74 + (len(rows) + 1) * self.LIGHT_ROW_H
+        top = base + (len(rows) + 1) * self.LIGHT_ROW_H
         return ambient, rows, pygame.Rect(area.x + 20, top, 170, 34)
 
     def lights_click(self, pos):
@@ -4595,19 +4788,21 @@ class Editor:
         pygame.draw.rect(screen, (120, 70, 60), wall.clip(card))
         pygame.draw.circle(screen, (255, 255, 255), (card.x + cx, card.y + cy), 4)
         pygame.draw.rect(screen, GRID, card.inflate(2, 2), 1)
-        screen.blit(self.small.render("from above, one grid square = 1 cell, wall on the right", True, DIM),
-                    (card.x + 8, card.bottom - 20))
+        self.blit_fitted(screen, self.small, "from above, one grid square = 1 cell, wall on the right", DIM,
+                         (card.x + 8, card.bottom - 20), card.right - 8)
 
     def draw_lights(self, screen):
         """The Lights section: the map's ambient light and lights as a list, and a preview of the selected light."""
         area = self.map_area()
         screen.set_clip(area)
         pygame.draw.rect(screen, BG, area)
-        screen.blit(self.font.render("Lights in this map", True, ACCENT), (area.x + 20, area.y + 14))
-        screen.blit(self.small.render("Design a light here, then give it to a gun (muzzle), ammo (bullet), effect (particles) or item;",
-                                      True, DIM), (area.x + 20, area.y + 36))
-        screen.blit(self.small.render("or make a wall tile glow. Lower the ambient light to make a map dark.", True, DIM),
-                    (area.x + 20, area.y + 52))
+        self.set_scroll("lights", self.lights_scroll)
+        top = area.y - self.lights_scroll
+        screen.blit(self.font.render("Lights in this map", True, ACCENT), (area.x + 20, top + 14))
+        self.blit_fitted(screen, self.small, "Design a light here, then give it to a gun (muzzle), ammo (bullet), effect "
+                         "(particles) or item;", DIM, (area.x + 20, top + 36), area.right - 14)
+        self.blit_fitted(screen, self.small, "or make a wall tile glow. Lower the ambient light to make a map dark.", DIM,
+                         (area.x + 20, top + 52), area.right - 14)
         ambient, rows, add = self.light_rows()
         on = self.light_selected == AMBIENT_ROW
         pygame.draw.rect(screen, BUTTON_ON if on else (BUTTON_HOT if ambient.collidepoint(self.mouse) else BUTTON),
@@ -4624,8 +4819,9 @@ class Editor:
                              rect, border_radius=4)
             pygame.draw.rect(screen, (light.r, light.g, light.b), (rect.x + 6, rect.y + 7, 32, 28), border_radius=3)
             screen.set_clip(rect.clip(area))
-            screen.blit(self.font.render(light.name, True, TEXT), (rect.x + 48, rect.y + 5))
-            screen.blit(self.small.render(self.light_summary(light), True, TEXT if on else DIM), (rect.x + 48, rect.y + 24))
+            self.blit_fitted(screen, self.font, light.name, TEXT, (rect.x + 48, rect.y + 5), rect.right - 8)
+            self.blit_fitted(screen, self.small, self.light_summary(light), TEXT if on else DIM,
+                             (rect.x + 48, rect.y + 24), rect.right - 8)
             screen.set_clip(area)
         self._draw_add_button(screen, add, "+ Add light")
         right = area.x + 20 + min(area.w - 40, 440) + 24
@@ -4635,37 +4831,79 @@ class Editor:
                     if self.level.lights or self.light_selected != AMBIENT_ROW else "")
             narrow = area.right - right <= 200
             screen.blit(self.small.render(note, True, DIM), (add.x if narrow else right,
-                                                           add.bottom + 14 if narrow else area.y + 74))
+                                                           add.bottom + 14 if narrow else top + 74))
         else:
-            width = min(420, area.right - right - 20)
-            card = pygame.Rect(right, area.y + 74, width, 330)
-            if width < 220:
-                card = pygame.Rect(add.x, add.bottom + 20, min(420, max(160, area.w - 40)), 330)
+            card, lines, width = self.section_card("lights")
             self.draw_light_preview(screen, card, light)
-            users = self.light_users(light)
-            self._draw_wrapped(screen, (self.light_summary(light), "used by: " + (", ".join(users) if users else "nothing yet")),
-                               card.x, card.bottom + 12, card.w)
+            self._draw_wrapped(screen, lines, card.x, card.bottom + 12, width)
+        self.draw_scrollbar(screen, "lights")
         screen.set_clip(None)
 
-    SETTINGS_ROW_H = 46
+    SETTINGS_ROW_H = 46                         # a row with a one-line summary (and the gap under it)
+    SETTINGS_LIST_W = 500                       # the widest the rows get; a longer summary goes on more lines
+
+    def settings_list_width(self):
+        return min(self.map_area().w - 40, self.SETTINGS_LIST_W)
+
+    def summary_lines(self, text, width):
+        """A row's summary (parts split by three spaces) on as many lines `width` pixels wide as it takes,
+        breaking between the parts where it can."""
+        lines = []
+        for part in text.split("   "):
+            if lines and self.small.size(lines[-1] + "   " + part)[0] <= width:
+                lines[-1] += "   " + part
+            else:
+                lines.extend(details.note_lines([part], self.small, width))
+        return lines or [""]
+
+    def settings_row_height(self, summary, width, icon=False):
+        """How tall a Map settings row is for its summary to fit (the row's title above it)."""
+        return self.SETTINGS_ROW_H - 4 + 17 * (len(self.summary_lines(summary, width - (58 if icon else 20))) - 1)
+
+    def buy_entry_summary(self, i):
+        """What a buy menu entry gives (and for which team), under its name in the list."""
+        entry = self.level.settings.buy_items[i]
+        what = BUY_KIND_LABELS[entry.kind] + ("" if entry.kind != "gun" or entry.gun in self.gun_names()
+                                               else "  (no such gun: not sold)")
+        if entry.team:
+            what += "   " + self.buy_team_labels()[entry.team]
+        return what
 
     def settings_rows(self):
-        """(rules row rect, buy menu row rect, [(rect, entry index)], Add button rect) for the Map settings section."""
+        """(rules row rect, buy menu row rect, [(rect, entry index)], Add button rect) for the Map settings section.
+        A row is as tall as its summary needs."""
         area = self.map_area()
-        width = min(area.w - 40, 440)
-        top = area.y + 74 - self.settings_scroll
-        rules = pygame.Rect(area.x + 20, top, width, self.SETTINGS_ROW_H - 4)
-        buy = pygame.Rect(area.x + 20, top + self.SETTINGS_ROW_H, width, self.SETTINGS_ROW_H - 4)
-        first = top + 2 * self.SETTINGS_ROW_H + 30
-        rows = [(pygame.Rect(area.x + 20, first + i * self.SETTINGS_ROW_H, width, self.SETTINGS_ROW_H - 4), i)
-                for i in range(len(self.level.settings.buy_items))]
-        add = pygame.Rect(area.x + 20, first + len(rows) * self.SETTINGS_ROW_H, 220, 34)
+        width = self.settings_list_width()
+        x, top = area.x + 20, area.y + 74 - self.settings_scroll
+        rules = pygame.Rect(x, top, width, self.settings_row_height(self.rules_summary(), width))
+        buy = pygame.Rect(x, rules.bottom + 4, width, self.settings_row_height(self.buy_summary(), width))
+        y = buy.bottom + 4 + 30
+        rows = []
+        for i, entry in enumerate(self.level.settings.buy_items):
+            icon = 0 <= entry_tile(entry, self.level.guns) < len(self.tiles)
+            rows.append((pygame.Rect(x, y, width, self.settings_row_height(self.buy_entry_summary(i), width, icon)), i))
+            y = rows[-1][0].bottom + 4
+        add = pygame.Rect(x, y, 220, 34)
         return rules, buy, rows, add
 
-    def clamp_settings_scroll(self):
+    def settings_card_rect(self):
+        """The buy menu preview's card: beside the list, or below it when there is no room."""
+        area = self.map_area()
         _rules, _buy, _rows, add = self.settings_rows()
-        bottom = add.bottom + self.settings_scroll + 20
-        self.settings_scroll = max(0, min(self.settings_scroll, bottom - self.map_area().bottom))
+        right = area.x + 20 + self.settings_list_width() + 24
+        width = min(380, area.right - right - 20)
+        card = pygame.Rect(right, area.y + 74 - self.settings_scroll, width, self.buy_preview_height())
+        if width < 240:
+            card = pygame.Rect(add.x, add.bottom + 24, min(380, max(200, area.w - 40)), self.buy_preview_height())
+        return card
+
+    def settings_content_bottom(self):
+        """The y of the bottom of everything in the Map settings section if it were not scrolled at all."""
+        _rules, _buy, _rows, add = self.settings_rows()
+        return max(add.bottom, self.settings_card_rect().bottom) + self.settings_scroll + 20
+
+    def clamp_settings_scroll(self):
+        self.set_scroll("settings", self.settings_scroll)
 
     def settings_click(self, pos):
         rules, buy, rows, add = self.settings_rows()
@@ -4708,6 +4946,7 @@ class Editor:
         return f"On   costs {BUY_COST_LABELS[rules.buy_cost].lower()}   {count} entr{'y' if count == 1 else 'ies'}"
 
     def draw_settings_row(self, screen, rect, title, summary, on, icon=-1):
+        """A Map settings row: its title, and its summary on as many lines as the row was made tall for."""
         pygame.draw.rect(screen, BUTTON_ON if on else (BUTTON_HOT if rect.collidepoint(self.mouse) else BUTTON),
                          rect, border_radius=4)
         x = rect.x + 10
@@ -4716,8 +4955,9 @@ class Editor:
             x = rect.x + 48
         clip = screen.get_clip()
         screen.set_clip(rect.clip(clip))
-        screen.blit(self.font.render(title, True, TEXT), (x, rect.y + 5))
-        screen.blit(self.small.render(summary, True, TEXT if on else DIM), (x, rect.y + 24))
+        self.blit_fitted(screen, self.font, title, TEXT, (x, rect.y + 5), rect.right - 8)
+        for i, line in enumerate(self.summary_lines(summary, rect.right - 10 - x)):
+            self.blit_fitted(screen, self.small, line, TEXT if on else DIM, (x, rect.y + 24 + 17 * i), rect.right - 8)
         screen.set_clip(clip)
 
     def draw_settings(self, screen):
@@ -4730,10 +4970,10 @@ class Editor:
         rules = self.level.settings
         top = area.y - self.settings_scroll
         screen.blit(self.font.render("Map settings", True, ACCENT), (area.x + 20, top + 14))
-        screen.blit(self.small.render("How this map is played: its game mode and rules, and the buy menu players open",
-                                      True, DIM), (area.x + 20, top + 36))
-        screen.blit(self.small.render("with B. Select a row to change it in the Details pane.", True, DIM),
-                    (area.x + 20, top + 52))
+        self.blit_fitted(screen, self.small, "How this map is played: its game mode and rules, and the buy menu players "
+                         "open", DIM, (area.x + 20, top + 36), area.right - 14)
+        self.blit_fitted(screen, self.small, "with B. Select a row to change it in the Details pane.", DIM,
+                         (area.x + 20, top + 52), area.right - 14)
         rules_rect, buy_rect, rows, add = self.settings_rows()
         self.draw_settings_row(screen, rules_rect, "Game rules", self.rules_summary(), self.settings_selected == RULES_ROW)
         self.draw_settings_row(screen, buy_rect, "Buy menu", self.buy_summary(), self.settings_selected == BUY_ROW)
@@ -4741,27 +4981,25 @@ class Editor:
                     (buy_rect.x, buy_rect.bottom + 12))
         for rect, i in rows:
             entry = rules.buy_items[i]
-            what = BUY_KIND_LABELS[entry.kind] + ("" if entry.kind != "gun" or entry.gun in self.gun_names()
-                                                   else "  (no such gun: not sold)")
-            if entry.team:
-                what += "   " + self.buy_team_labels()[entry.team]
-            self.draw_settings_row(screen, rect, f"{entry.label()}   {price_text(rules.buy_cost, entry.price)}", what,
-                                   i == self.settings_selected, entry_tile(entry, self.level.guns))
+            self.draw_settings_row(screen, rect, f"{entry.label()}   {price_text(rules.buy_cost, entry.price)}",
+                                   self.buy_entry_summary(i), i == self.settings_selected,
+                                   entry_tile(entry, self.level.guns))
         self._draw_add_button(screen, add, "+ Add to buy menu")
-        right = area.x + 20 + min(area.w - 40, 440) + 24
-        width = min(380, area.right - right - 20)
-        card = pygame.Rect(right, area.y + 74, width, 0)
-        if width < 240:
-            card = pygame.Rect(add.x, add.bottom + 24, min(380, max(200, area.w - 40)), 0)
-        self.draw_buy_preview(screen, card)
+        self.draw_buy_preview(screen, self.settings_card_rect())
+        self.draw_scrollbar(screen, "settings")
         screen.set_clip(None)
+
+    def buy_preview_height(self):
+        rules = self.level.settings
+        shown = min(10, len(rules.buy_items))
+        return 72 + max(1, shown) * 36 + (18 if len(rules.buy_items) > shown else 0)
 
     def draw_buy_preview(self, screen, card):
         """The buy menu as a player who has just joined sees it in the game: entries they cannot afford with the
         start money (or no score) are greyed out."""
         rules = self.level.settings
         entries = rules.buy_items[:10]
-        card.h = 72 + max(1, len(entries)) * 36 + (18 if len(rules.buy_items) > len(entries) else 0)
+
         pygame.draw.rect(screen, (32, 34, 42), card, border_radius=8)
         pygame.draw.rect(screen, (90, 94, 110), card, 1, border_radius=8)
         title = self.font.render("Buy menu" + ("" if rules.buy_menu else "  (off)"), True, ACCENT)
@@ -4794,18 +5032,12 @@ class Editor:
                                      True, DIM)
             screen.blit(more, more.get_rect(midtop=(card.centerx, y)))
 
-    def draw_details(self, screen):
-        """The docked Details pane (only while something is selected)."""
-        rect = self.details_rect()
-        if rect is None:
-            return
+    def details_text(self):
+        """(title, notes under the rows) of the Details pane for what is selected."""
         e, gun, ammo = self.selected_entity(), self.selected_gun(), self.selected_ammo()
         prefab, effect = self.selected_prefab(), self.selected_effect()
         light, ambient = self.selected_light(), self.ambient_chosen()
         entry, rules_row = self.selected_buy_item(), self.settings_row()
-        theme = {"panel": PANEL_BG, "grid": GRID, "text": TEXT, "dim": DIM, "accent": ACCENT, "button": BUTTON,
-                 "button_hot": BUTTON_HOT, "field": (28, 29, 34), "field_edit": (50, 52, 64),
-                 "danger": (120, 50, 55), "danger_hot": (160, 64, 70), "button_on": BUTTON_ON}
         if rules_row == RULES_ROW:
             notes = ("Two teams: players are split as they", "join; a teammate's name shows white.",
                      "Co-op: everyone is on one team.", "Friendly fire off: teammates' bullets",
@@ -4862,15 +5094,32 @@ class Editor:
                      "Give rounds with an item whose effect", "is Give ammo.")
         else:
             notes = (f"Cell ({math.floor(e.x)}, {math.floor(e.y)}) on {self.level.names[e.span]}",
-                     "Wheel over a row steps it.", "Click a number to type one.",
+                     "Wheel over a value steps it.", "Click a number to type one.",
                      "Click an atlas tile: sets the sprite.", "Esc closes this; Del removes the item.")
         title = ("Game rules" if rules_row == RULES_ROW else "Buy menu" if rules_row == BUY_ROW
                  else "Buy menu entry" if entry is not None else "Ambient light" if ambient else "Light" if light is not None else "Effect" if effect is not None else "Gun" if gun is not None else "Ammo type" if ammo is not None
                  else "Prefab" if prefab is not None else "Prefab to place" if e is None else "Item")
-        details.draw(screen, rect, title, self.details_rows(), theme, (self.font, self.small), focus=self.tile_target,
-                     button_label=self.details_delete_label(),
-                     editing=self.field_edit, hover=self.mouse, open_menu=self.menu_open, tile_surface=lambda i: self.tiles[max(0, min(i, len(self.tiles) - 1))],
-                     notes=notes)
+        return title, notes
+
+    def draw_details(self, screen):
+        """The docked Details pane (only while something is selected)."""
+        rect = self.details_rect()
+        if rect is None:
+            return
+        theme = {"panel": PANEL_BG, "grid": GRID, "text": TEXT, "dim": DIM, "accent": ACCENT, "button": BUTTON,
+                 "button_hot": BUTTON_HOT, "field": (28, 29, 34), "field_edit": (50, 52, 64),
+                 "danger": (120, 50, 55), "danger_hot": (160, 64, 70), "button_on": BUTTON_ON}
+        rows = self.details_rows()                      # (another thing selected starts at the top)
+        self.set_scroll("details", self.details_scroll)
+        if rows and rows[0].rect.y != details.view_rect(rect).y - self.details_scroll:
+            rows = self.details_rows()                  # (the scroll was pulled back within the rows)
+        title, notes = self.details_text()
+        self.tips += details.draw(screen, rect, title, rows, theme, (self.font, self.small),
+                                  focus=self.tile_target, button_label=self.details_delete_label(),
+                                  editing=self.field_edit, hover=self.mouse, open_menu=self.menu_open,
+                                  tile_surface=lambda i: self.tiles[max(0, min(i, len(self.tiles) - 1))],
+                                  notes=notes, scroll=self.details_scroll,
+                                  scroll_hot=self.scroll_drag is not None and self.scroll_drag[0] == "details")
 
     def draw_entities(self, screen):
         """Items on the floor being edited: their sprite on the map, ringed in the color of their mode
@@ -5252,9 +5501,10 @@ class Editor:
             shade.fill((20, 20, 26, 150))
             screen.blit(shade, view)
         screen.set_clip(None)
+        self.draw_atlas_scrollbars(screen, view)
         if self.atlas_zoom > 1:
             label = self.small.render(f"{self.atlas_zoom:g}x", True, TEXT)
-            back = label.get_rect(topright=(view.right - 4, view.y + 4)).inflate(8, 4)
+            back = label.get_rect(topright=(view.right - 12, view.y + 4)).inflate(8, 4)
             pygame.draw.rect(screen, (20, 20, 26), back, border_radius=3)
             screen.blit(label, label.get_rect(center=back.center))
 
@@ -5269,6 +5519,22 @@ class Editor:
                  "Tab floor, layers 1-8, tools B E F I S O T H M C N, [ ] value, R ramp, K key")
         for i, text in enumerate(hints):
             screen.blit(self.small.render(text, True, DIM), (ATLAS_X, hints_y + i * 16))
+
+    def draw_atlas_scrollbars(self, screen, view):
+        """Thin bars at the right and bottom of the atlas when, zoomed in, it is taller or wider than its view."""
+        cell = self.atlas_cell()
+        wide, tall = self.atlas_cols * cell, self.atlas_rows * cell
+        hot = self.atlas_pan and view.collidepoint(self.mouse)
+        if tall > view.h:
+            short = view.inflate(0, -8) if wide > view.w else view    # (room for the other bar in the corner)
+            short.top = view.top
+            details.draw_scrollbar(screen, details.scrollbar(short, tall - (view.h - short.h), self.atlas_scroll[1]), hot)
+        if wide > view.w:
+            track = pygame.Rect(view.x + 2, view.bottom - details.SCROLLBAR_W - 2,
+                                view.w - 4 - (8 if tall > view.h else 0), details.SCROLLBAR_W)
+            width = max(24, track.w * view.w // wide)
+            x = track.x + round((track.w - width) * self.atlas_scroll[0] / (wide - view.w))
+            details.draw_scrollbar(screen, (track, pygame.Rect(x, track.y, width, track.h)), hot)
 
     def panel_metrics(self):
         """Vertical layout of the left panel below the atlas: (y of the "Selected" line, size of
@@ -5395,15 +5661,14 @@ class Editor:
                 pygame.draw.rect(screen, BUTTON_ON, rect)
             elif rect.collidepoint(self.mouse):
                 pygame.draw.rect(screen, BUTTON_HOT, rect)
-            screen.blit(self.font.render(name[:-5], True, TEXT), (rect.x + 8, rect.y + 4))
+            note = self.small.render("open now", True, DIM)
+            right = rect.right - 14 - (note.get_width() + 8 if name == current else 0)
+            self.blit_fitted(screen, self.font, name[:-5], TEXT, (rect.x + 8, rect.y + 4), right)
             if name == current:
-                note = self.small.render("open now", True, DIM)
-                screen.blit(note, (rect.right - note.get_width() - 8, rect.y + 6))
+                screen.blit(note, (rect.right - note.get_width() - 14, rect.y + 6))
         pygame.draw.rect(screen, GRID, listing, 1)
-        if len(self.open_maps) > OPEN_ROWS:                 # where the rows shown are in the whole list
-            track = listing.h * OPEN_ROWS // len(self.open_maps)
-            top = listing.y + (listing.h - track) * self.open_scroll // (len(self.open_maps) - OPEN_ROWS)
-            pygame.draw.rect(screen, DIM, (listing.right - 4, top, 3, track))
+        self.draw_scrollbar(screen, "open")                 # where the rows shown are in the whole list
+
         if self.open_error:
             screen.blit(self.small.render(self.open_error, True, WARN), (box.x + 20, listing.bottom + 8))
         for rect, label in ((opener, "Open"), (cancel, "Cancel")):
@@ -5533,6 +5798,7 @@ class ImportDialog:
         self.chosen = set()                     # (kind, name) ticked
         self.taken = "copy"                     # what to do with a name already used here (TAKEN_CHOICES)
         self.scroll = 0
+        self.grab = None                        # while the list's bar is dragged: how far down its thumb it was grabbed
         self.error = ""
 
     # ------------------------------------------------------------------ what is listed
@@ -5612,7 +5878,24 @@ class ImportDialog:
 
     # ------------------------------------------------------------------ input
 
+    def scrollbar(self, size):
+        """(list rect, (track, thumb) of the bar beside it, or None when every row shows)."""
+        listing = self.rects(size)[1]
+        return listing, details.scrollbar(listing, len(self.rows()) * IMPORT_ROW_H, self.scroll * IMPORT_ROW_H)
+
+    def drag(self, y, size):
+        """While the bar is dragged: scroll so the point grabbed on its thumb is at screen row `y`."""
+        listing, _bar = self.scrollbar(size)
+        pixels = details.scroll_for(listing, len(self.rows()) * IMPORT_ROW_H, y - self.grab)
+        self.scroll = max(0, min(len(self.rows()) - IMPORT_ROWS, round(pixels / IMPORT_ROW_H)))
+
     def click(self, pos, size):
+        _listing, bar = self.scrollbar(size)
+        if bar is not None and bar[0].inflate(10, 0).collidepoint(pos):
+            _track, thumb = bar                 # on the thumb: drag it from there; on the track: jump there first
+            self.grab = pos[1] - thumb.y if thumb.top <= pos[1] < thumb.bottom else thumb.h // 2
+            self.drag(pos[1], size)
+            return None
         _box, _listing, shown, buttons = self.rects(size)
         for name, rect in buttons.items():
             if rect.collidepoint(pos):
@@ -5671,8 +5954,16 @@ class ImportDialog:
     # ------------------------------------------------------------------ drawing
 
     def draw(self, screen, size, mouse):
+        """Draw the dialog. Returns [(rect, whole text)] of the names cut short to fit, to show whole on hover."""
         box, listing, shown, buttons = self.rects(size)
         coming = self.coming() if self.source is not None else {}
+        cut = []
+
+        def fitted(text, pos, right):
+            shown_text = details.fit_text(self.font, text, right - pos[0])
+            if shown_text != text:
+                cut.append((pygame.Rect(pos[0], pos[1], right - pos[0], IMPORT_ROW_H - 4), text))
+            screen.blit(self.font.render(shown_text, True, TEXT), pos)
         pygame.draw.rect(screen, PANEL_BG, box, border_radius=6)
         pygame.draw.rect(screen, GRID, box, 1, border_radius=6)
         if self.source is None:
@@ -5687,7 +5978,7 @@ class ImportDialog:
             if rect.collidepoint(mouse):
                 pygame.draw.rect(screen, BUTTON_HOT, rect)
             if kind == "map":
-                screen.blit(self.font.render(value[:-5], True, TEXT), (rect.x + 8, rect.y + 4))
+                fitted(value[:-5], (rect.x + 8, rect.y + 4), rect.right - 14)
             elif kind == "kind":
                 group = {(value, n) for n in things_named(self.source, value)}
                 ticked, along = len(group & self.chosen), len(group & set(coming))
@@ -5703,20 +5994,20 @@ class ImportDialog:
                 picture = self.icon(*value)
                 if picture is not None:
                     screen.blit(picture, (tick.right + 10, rect.y + (IMPORT_ROW_H - IMPORT_ICON) // 2))
-                screen.blit(self.font.render(value[1], True, TEXT), (tick.right + 18 + IMPORT_ICON, rect.y + 4))
                 notes = [(f"comes with {coming[value]}", COMING)] if along else []
                 notes += {"same": [("already here", DIM)], "taken": [("name used here", WARN)]}.get(self.state(*value), [])
-                right = rect.right - 8
+                right = rect.right - 14
                 for text, color in reversed(notes):
                     label = self.small.render(text, True, color)
                     right -= label.get_width()
                     screen.blit(label, (right, rect.y + 6))
                     right -= 14
+                fitted(value[1], (tick.right + 18 + IMPORT_ICON, rect.y + 4), right)
         pygame.draw.rect(screen, GRID, listing, 1)
-        if len(self.rows()) > IMPORT_ROWS:                  # where the rows shown are in the whole list
-            track = listing.h * IMPORT_ROWS // len(self.rows())
-            top = listing.y + (listing.h - track) * self.scroll // (len(self.rows()) - IMPORT_ROWS)
-            pygame.draw.rect(screen, DIM, (listing.right - 4, top, 3, track))
+        _listing, bar = self.scrollbar(size)                # where the rows shown are in the whole list
+        if bar is not None:
+            details.draw_scrollbar(screen, bar, self.grab is not None or bar[0].inflate(10, 0).collidepoint(mouse))
+
         if self.source is not None:
             screen.blit(self.small.render("If a name is used here:", True, TEXT), (listing.x, listing.bottom + 20))
             needs = len(with_needs(self.source, self.chosen)) - len(self.chosen)
@@ -5731,6 +6022,7 @@ class ImportDialog:
             screen.blit(text, text.get_rect(center=rect.center))
         if self.error:
             screen.blit(self.small.render(self.error, True, WARN), (box.x + 20, box.bottom - 40))
+        return cut
 
 
 def main():

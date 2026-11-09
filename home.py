@@ -118,9 +118,10 @@ class Home(Pages):
         if not self.use_steam():
             return self.steam_problem_lines()
         out = [[cell("Friends in the game", color=DIM)]]
-        for friend in self.friends[:FRIEND_ROWS]:
-            label = friend.name[:28] + ("  (hosting)" if friend.hosting else "")
-            out.append([cell(label, f"friend:{friend.steam_id}", selected=str(friend.steam_id) == self.join_steam_id)])
+        out += self.scroll_rows([[cell(friend.name[:28] + ("  (hosting)" if friend.hosting else ""),
+                                       f"friend:{friend.steam_id}", selected=str(friend.steam_id) == self.join_steam_id)]
+                                 for friend in self.friends], FRIEND_ROWS)
+
         if not self.friends:
             out.append([cell("None right now", color=DIM)])
         out.append([cell("SteamID", width=LABEL_W), cell(self.shown("steam_id", self.join_steam_id), "input:steam_id")])

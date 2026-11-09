@@ -238,6 +238,20 @@ def test_the_buy_menu_lists_the_entries_and_greys_out_what_cannot_be_afforded():
     menu.draw(surface)
 
 
+def test_a_long_buy_menu_scrolls_with_a_bar_beside_the_entries():
+    level, stats = shop_level(), PlayerStats(money=1000)
+    level.settings.buy_items = [BuyItem(kind="health", amount=10, price=i) for i in range(1, 21)]
+    menu = BuyMenu(None, lambda: level, lambda: stats)
+    menu.show()
+    track, thumb = menu.scrollbar((1280, 800))
+    entries = [i.rect for i in menu.items((1280, 800)) if (i.action or "").startswith("buy:")]
+    assert track.top == entries[0].top and track.bottom == entries[-1].bottom
+    menu.handle(pygame.event.Event(pygame.MOUSEWHEEL, x=0, y=-50), (1280, 800))
+    assert "buy:19" in {i.action for i in menu.items((1280, 800))}
+    assert menu.scrollbar((1280, 800))[1].bottom == track.bottom
+    menu.draw(pygame.Surface((1280, 800), pygame.SRCALPHA))
+
+
 def test_an_entry_for_one_team_is_only_listed_and_sold_to_that_team(tmp_path):
     level = shop_level(mode="teams")
     level.settings.buy_items[3].team = 2                            # the Key: team 2 only

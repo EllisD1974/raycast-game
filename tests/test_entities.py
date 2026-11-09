@@ -215,6 +215,7 @@ def test_the_entity_tool_needs_a_room_on_the_floor_being_edited(ed):
 
 
 def pane_row(ed, key):
+    ed.show_details_row(key)                    # (scrolled into view, as it would be to click it)
     return next(r for r in ed.details_rows() if r.field.key == key)
 
 

@@ -43,6 +43,7 @@ def click(ed, pos, button=1):
 
 
 def row(ed, name):
+    ed.show_details_row(name)                   # (scrolled into view, as it would be to click it)
     return next(r for r in ed.details_rows() if r.field.key == name)
 
 
@@ -120,7 +121,60 @@ def test_the_delete_button_stays_inside_the_pane_even_for_the_longest_panes(ed):
     click(ed, ed.effect_rows()[1].center)
     rect, rows = ed.details_rect(), ed.details_rows()
     assert details.button_rect(rect, rows).bottom <= rect.bottom
-    assert all(r.rect.h >= details.MIN_ROW_H for r in rows)
+    assert all(r.rect.h >= details.ROW_H for r in rows)                   # (the rows scroll rather than shrink)
+    assert rows[-1].rect.bottom > rect.bottom and details.button_kept(rect, rows)
+    click(ed, details.button_rect(rect, rows).center)                      # still there to click
+    assert ed.level.effects == []
+
+
+def test_a_long_pane_scrolls_with_the_wheel_and_its_bar_and_rows_under_the_delete_button_do_not_take_clicks(ed):
+    ed.do("effects")
+    ed.add_effect()
+    effect = ed.selected_effect()
+    rect = ed.details_rect()
+    view = details.view_rect(rect)
+    ed.draw(pygame.display.get_surface())
+    assert ed.scrollbar("details") is not None                             # more rows than fit: a bar shows
+    ed.mouse = (rect.x + 12, view.y + 60)                                  # over a label: the wheel scrolls
+    first = ed.details_rows()[0].rect.y
+    ed.handle_event(pygame.event.Event(pygame.MOUSEWHEEL, x=0, y=-2))
+    assert ed.details_scroll == 96 and ed.details_rows()[0].rect.y == first - 96
+    before = effect.count
+    ed.details_scroll = 0
+    count = next(r for r in ed.details_rows() if r.field.key == "count")
+    ed.mouse = count.plus.center                                           # over a value's controls: it steps
+    ed.handle_event(pygame.event.Event(pygame.MOUSEWHEEL, x=0, y=1))
+    assert effect.count != before and ed.details_scroll == 0
+    track, thumb = ed.scrollbar("details")                                 # drag the bar to the end
+    ed.on_mouse_down(pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=thumb.center, button=1))
+    ed.on_mouse_move(pygame.event.Event(pygame.MOUSEMOTION, pos=(thumb.centerx, track.bottom + 50), rel=(0, 0),
+                                        buttons=(1, 0, 0)))
+    ed.on_mouse_up(pygame.event.Event(pygame.MOUSEBUTTONUP, pos=(thumb.centerx, track.bottom + 50), button=1))
+    view_h, content_h, scroll = ed.scroll_view("details")[0].h, *ed.scroll_view("details")[1:]
+    assert scroll == content_h - view_h > 0
+    rows = ed.details_rows()
+    assert not details.button_kept(rect, rows)                             # at the end it sits under the last row
+    ed.details_scroll = 0
+    rows = ed.details_rows()
+    button = details.button_rect(rect, rows)
+    spots = [(r, (r.plus.centerx, y)) for y in range(button.y - 8, button.y) for r in rows
+             if r.field.kind == "num" and r.plus.collidepoint(r.plus.centerx, y)]
+    hidden, spot = spots[0]                                                # a + just above the button, under its strip
+    value = hidden.field.get()
+    click(ed, spot)
+    assert hidden.field.get() == value and ed.level.effects == [effect]
+
+
+def test_another_thing_selected_starts_the_pane_at_the_top(ed):
+    ed.do("effects")
+    ed.add_effect()
+    ed.add_effect()
+    ed.details_rows()
+    ed.set_scroll("details", 200)
+    assert ed.details_scroll == 200
+    click(ed, ed.effect_rows()[0][0][0].center)
+    ed.details_rows()
+    assert ed.details_scroll == 0
 
 
 def test_values_step_type_and_undo(ed):
