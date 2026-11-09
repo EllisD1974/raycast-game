@@ -5566,7 +5566,8 @@ class Editor:
                 continue
             active = action in (f"tool:{self.tool}", f"layer:{self.layer}", f"shape:{self.shape}") \
                 or (action == "legend" and self.show_legend) or (action == "guns" and self.guns_mode) \
-                or (action == "prefabs" and self.prefabs_mode) or (action == "effects" and self.effects_mode) or (action == "lights" and self.lights_mode)
+                or (action == "prefabs" and self.prefabs_mode) or (action == "effects" and self.effects_mode) or (action == "lights" and self.lights_mode) \
+                or (action == "mapsettings" and self.settings_mode)
             color = BUTTON_ON if active else (BUTTON_HOT if rect.collidepoint(self.mouse) else BUTTON)
             pygame.draw.rect(screen, color, rect, border_radius=4)
             text = self.font.render(label, True, TEXT)

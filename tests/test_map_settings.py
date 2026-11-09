@@ -380,3 +380,21 @@ def test_an_atlas_click_sets_the_selected_entrys_icon(ed):
     atlas = ed.atlas_rect()
     click(ed, (atlas.x + 40, atlas.y + 5))
     assert ed.level.settings.buy_items[0].tile == 1
+
+
+def test_the_map_settings_button_is_lit_while_the_section_shows(tmp_path):
+    editor = map_editor.Editor(str(tmp_path / "m.json"))
+    editor.level = Level.blank(10, 10)
+    screen = pygame.display.get_surface()
+
+    def button_color():
+        editor.mouse = (0, screen.get_height() - 1)                   # (not hovering it)
+        editor.draw(screen)
+        rect = next(r for r, _label, action in editor.buttons if action == "mapsettings")
+        return tuple(screen.get_at((rect.x + 3, rect.centery)))[:3]
+
+    assert button_color() == map_editor.BUTTON
+    editor.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_j, mod=0, unicode="j"))
+    assert editor.settings_mode and button_color() == map_editor.BUTTON_ON
+    editor.do("mapsettings")
+    assert not editor.settings_mode and button_color() == map_editor.BUTTON
