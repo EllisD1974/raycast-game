@@ -214,7 +214,9 @@ from mapfile import (ANIMATION_KINDS, ANIMATION_LABELS, DEFAULTS, EDIT_LAYERS, E
                      BOMB_NUMBERS, SITE_NAMES, SPAWN_TEAMS, SPAWN_TEAM_LABELS, CT_TEAM, T_TEAM,
                      ATTACK_KINDS, ATTACK_KIND_LABELS, ATTACK_NUMBERS, ENEMY_NUMBERS, ENEMY_PATHING,
                      ENEMY_PATHING_LABELS, ENEMY_SPAWN, MAX_ATTACKS, MAX_ENEMIES, SPAWNER_TEAMS, ZOMBIE_NUMBERS,
-                     Attack, Enemy,
+                     Attack, Barricade, BarricadeKind, BARRICADE_TILE, Enemy, unique_thing_name, BARRICADE_NUMBERS, MAX_BARRICADE_BOARDS, MAX_BARRICADE_STAGES,
+                     REWARD_KINDS,
+                     REWARD_KIND_LABELS,
                      BARRIER_SITES, HILL_SITE, KOTH_NAMES, KOTH_NUMBERS,
                      MAX_MONEY, BuyItem)
 from buymenu import entry_tile, price_text
@@ -325,6 +327,7 @@ ENEMY_FIELDS = (("health", "Health", 10.0), ("speed", "Speed (cells/s)", 0.1), (
 ATTACK_FIELDS = (("damage", "Damage", 5.0), ("range", "Reach (cells)", 0.05), ("windup", "Wind-up (s)", 0.05),
                  ("cooldown", "Cooldown (s)", 0.1))
 ENEMY_COLOR_NAMES = ("Tint red", "Tint green", "Tint blue")
+BARRICADE_FILL, BARRICADE_PLANK = (120, 80, 40), (200, 150, 90)     # a barricade on the map
 EDITOR_LAYERS = tuple(name for name in EDIT_LAYERS if name != "site") + ("sides", "site")   # the stored layers, the
                                                             # sides of walls, and bomb sites last (keys 1-9)
 TILE_LAYERS = STAMP_LAYERS + ("sides",)                     # layers painted with atlas tiles
@@ -338,10 +341,10 @@ ELEVATION_STEP = 0.05                           # [ / ] and the Elevation row mo
 SPAWN_FILL, SPAWN_EDGE = (90, 170, 255), (15, 40, 90)   # a spawn point on the map
 MOUNT_ZONE = 0.3                                # an item clicked this close (in cells) to a walled side hangs on it
 TOOLS = {"paint": "B", "erase": "E", "fill": "F", "pick": "I", "start": "S", "spawn": "O", "stairs": "T",
-         "shape": "H", "select": "M", "camera": "C", "entity": "N"}
+         "shape": "H", "select": "M", "camera": "C", "entity": "N", "barricade": "U"}
 TOOL_KEYS = {pygame.K_b: "paint", pygame.K_e: "erase", pygame.K_f: "fill",
              pygame.K_i: "pick", pygame.K_s: "start", pygame.K_o: "spawn", pygame.K_t: "stairs", pygame.K_h: "shape",
-             pygame.K_m: "select", pygame.K_c: "camera", pygame.K_n: "entity"}
+             pygame.K_m: "select", pygame.K_c: "camera", pygame.K_n: "entity", pygame.K_u: "barricade"}
 SHAPES = {"line": "Line", "box": "Box", "filled_box": "Filled box", "ellipse": "Ellipse",
           "filled_ellipse": "Filled ellipse"}           # what the Shape tool draws, and its button
 ENTITY_MODE_COLORS = {"once": (255, 255, 255), "respawn": (90, 210, 255), "persistent": (110, 230, 120),
@@ -447,6 +450,11 @@ def heat(value, lo, hi):
 
 def fmt(value):
     return f"{value:g}"
+
+
+def barricade_icon(barricade):
+    """The atlas tile that pictures a barricade or saved type: its first (whole) stage, or its tile."""
+    return barricade.stages[0] if barricade.stages else barricade.tile
 
 
 def curve_text(points):
@@ -597,6 +605,8 @@ class Editor:
         self.scroll_drag = None                 # (what, how far down its thumb it was grabbed) while a bar is dragged
         self.tips = []                          # [(rect, whole text)] of text drawn cut short, shown whole on hover
         self.effect_selected = None             # index in level.effects of the effect being edited
+        self.barricade_selected = None          # index in level.barricades of the one being edited (Barricade tool)
+        self.place_barricade_kind = ""          # the saved barricade type the Barricade tool places ("": plain)
         self.fx_sim = None                      # [ParticleSystem, settings it was made from, time to next burst]
         self.fx_scaled = {}                     # (tile, pixels) -> a particle picture at that size
         self.place_prefab = ""                  # the prefab the Entity tool places ("" = a plain item)
@@ -781,10 +791,12 @@ class Editor:
     def details_width(self):
         chosen = (self.selected_entity() or self.selected_gun() or self.selected_ammo() or self.selected_prefab()
                   or self.selected_effect() or self.selected_light() or (self.ambient_chosen() or None)
-                  or self.selected_buy_item() or self.selected_enemy() or (self.settings_row() or None))
-        if chosen is None and not self.palette_active():
+                  or self.selected_buy_item() or self.selected_enemy() or self.selected_barricade()
+                  or (self.settings_row() or None))
+        if chosen is None and not self.palette_active() and not self.barricade_palette_active():
             return 0
-        key = (self.revision, id(self.level), id(chosen), self.section_name(), self.place_prefab, self._size())
+        key = (self.revision, id(self.level), id(chosen), self.section_name(), self.place_prefab,
+               self.place_barricade_kind, self.tool, self._size())
         if self._width_cache[0] != key:                 # (asked for all the time: worked out once per change)
             self._width_cache = (key, details.pane_width(self.details_fields(), (self.font, self.small),
                                                          max(PANE_WIDTH, self._size()[0] // 3)))
@@ -810,6 +822,9 @@ class Editor:
         enemy = self.selected_enemy()
         if enemy is not None:
             return self.enemy_fields(enemy)
+        barricade = self.selected_barricade()
+        if barricade is not None:
+            return self.barricade_fields(barricade)
         light = self.selected_light()
         if light is not None:
             return self.light_fields(light)
@@ -827,6 +842,8 @@ class Editor:
         prefab = self.selected_prefab()
         if prefab is not None:
             return self.entity_fields(prefab, is_prefab=True)
+        if self.barricade_palette_active():
+            return self.barricade_palette_fields()
         e = self.selected_entity()
         if e is None:
             return self.palette_fields() if self.palette_active() else []
@@ -1523,6 +1540,13 @@ class Editor:
             return self.settings_selected
         return None
 
+    def selected_barricade(self):
+        """The barricade being edited with the Barricade tool, or None."""
+        i = self.barricade_selected
+        if self.tool == "barricade" and not self.section_open() and i is not None and 0 <= i < len(self.level.barricades):
+            return self.level.barricades[i]
+        return None
+
     def selected_enemy(self):
         """The kind of enemy being edited in the Map settings section (zombies), or None."""
         chosen = self.settings_selected
@@ -1864,12 +1888,18 @@ class Editor:
 
     def deselect(self):
         self.selected, self.field_edit, self.menu_open = None, None, None
+        self.barricade_selected = None
         self.gun_selected = self.ammo_selected = self.prefab_selected = self.effect_selected = None
         self.light_selected = self.settings_selected = None
 
     def delete_selected(self):
         if self.selected_buy_item() is not None:
             self.delete_buy_item()
+            return
+        if self.selected_barricade() is not None:
+            self.begin_edit()
+            del self.level.barricades[self.barricade_selected]
+            self.barricade_selected = None
             return
         if self.selected_enemy() is not None:
             self.delete_enemy()
@@ -1954,6 +1984,8 @@ class Editor:
             return "Remove from the buy menu"
         if self.selected_enemy() is not None:
             return "Delete enemy"
+        if self.selected_barricade() is not None:
+            return "Delete barricade"
         if self.settings_row() is not None:
             return ""
         if self.selected_light() is not None:
@@ -2096,6 +2128,9 @@ class Editor:
                      ("btn", f"Team: {self.spawn_team_label(self.spawn_team)}", "spawn_team"),
                      ("txt", f"{len(self.level.spawners)} spawn point{'s' if len(self.level.spawners) != 1 else ''}"
                              " (0 is used first)", DIM)]
+        if self.tool == "barricade":
+            row2 += [None, ("txt", "Click an open ground floor cell (a gap in a wall) to board it up, or a barricade "
+                                   "to edit it; right-click removes one", DIM)]
         if self.tool == "entity":
             row2 += [None, ("txt", "Pick what to place in the list on the right, click a cell to place it, or click an item to edit it", DIM)]
         row3 = [("btn", f"{name.capitalize()}({key})", f"tool:{name}") for name, key in TOOLS.items()]
@@ -2535,6 +2570,9 @@ class Editor:
         if self.tool == "spawn":
             (self.remove_spawners if button == 3 else self.place_spawner)(cell)
             return
+        if self.tool == "barricade":
+            (self.remove_barricade if button == 3 else self.place_barricade)(cell)
+            return
         if self.tool == "select":
             if button == 3:                             # right-click: stop pasting, or let go of the selection
                 if self.pasting:
@@ -2772,6 +2810,211 @@ class Editor:
             found[0].angle = (found[0].angle + math.pi / 2) % math.tau
             self.say(f"Spawn point faces {math.degrees(found[0].angle):.0f} deg")
 
+    def place_barricade(self, cell):
+        """Barricade tool: board up an open ground floor cell with what is picked to place (a plain barricade, or one
+        of the saved types) and select it, or select the one there."""
+        level = self.level
+        if not level.in_bounds(*cell):
+            return
+        found = level.barricade_at(*cell)
+        if found is not None:
+            self.barricade_selected = found
+            self.field_edit = self.menu_open = None
+            return
+        if self.floor != 0:
+            self.say("Barricades go on the ground floor")
+            return
+        if level.is_solid(*cell) or not level.span_present(0, *cell):
+            self.say("A barricade goes in an open cell: the gap in a wall that enemies come through")
+            return
+        self.begin_edit()
+        kind = self.place_barricade_kind if level.barricade_kind_named(self.place_barricade_kind) else ""
+        level.barricades.append(Barricade(*cell, kind=kind))
+        level.apply_barricade_kinds()
+        self.barricade_selected = len(level.barricades) - 1
+        self.field_edit = self.menu_open = None
+        self.tile_target = "tile"
+        note = "" if level.settings.mode == "zombies" else " (barricades are only used in Zombies)"
+        what = f"A {kind}" if kind else f"Barricade {len(level.barricades)}"
+        self.say(f"{what}: set it up in the Details pane, or save it as a type to place more{note}")
+
+    def remove_barricade(self, cell):
+        found = self.level.barricade_at(*cell)
+        if found is not None and self.floor == 0:
+            self.begin_edit()
+            del self.level.barricades[found]
+            self.barricade_selected = None
+            self.say(f"Removed a barricade ({len(self.level.barricades)} left)")
+
+    def barricade_palette_active(self):
+        """The Barricade tool with no barricade selected shows the list of what to place."""
+        return self.tool == "barricade" and not self.section_open() and self.selected_barricade() is None
+
+    def barricade_palette_fields(self):
+        """The Barricade tool's list of what to place: a plain barricade, or one of the map's saved types."""
+        def pick(name):
+            return lambda: setattr(self, "place_barricade_kind", name)
+
+        fields = [Field("palette", "Place", "header", None, None),
+                  Field("pick_plain", "Plain barricade", "button", (lambda: self.place_barricade_kind == ""), None,
+                        action=pick(""), icon=BARRICADE_TILE)]
+        for i, kind in enumerate(self.level.barricade_kinds):
+            fields.append(Field(f"pick_{i}", kind.name, "button", (lambda n=kind.name: self.place_barricade_kind == n),
+                                None, action=pick(kind.name), icon=barricade_icon(kind)))
+        if not self.level.barricade_kinds:
+            fields.append(Field("no_types", "Types", "info",
+                                (lambda: "none yet: select a barricade, Save as a type"), None))
+        return fields
+
+    def barricade_target(self):
+        """What the Details pane's barricade settings change: the selected barricade's saved type (and so every
+        barricade of it) when it has one, else the barricade itself."""
+        barricade = self.selected_barricade()
+        if barricade is None:
+            return None
+        return self.level.barricade_kind_named(barricade.kind) if barricade.kind else barricade
+
+    def barricade_fields(self, barricade):
+        """One barricade, for the Details pane (Barricade tool): its type, then its settings (those of its type, when
+        it has one, which change every barricade of that type)."""
+        target = self.barricade_target() or barricade
+
+        def field(name, label, kind, **options):
+            return Field(name, label, kind, (lambda n=name: getattr(target, n)),
+                         (lambda v, n=name: self.set_barricade(n, v)), **options)
+
+        names = ("",) + tuple(k.name for k in self.level.barricade_kinds)
+        fields = [Field("where", "Cell", "info", (lambda: f"{barricade.x}, {barricade.y} (ground floor)"), None),
+                  Field("kind", "Type", "enum", (lambda: barricade.kind), self.set_barricade_kind, choices=names,
+                        labels={"": "(its own settings)", **{n: n for n in names if n}})]
+        if barricade.kind:
+            fields += [Field("type_header", f"Type {barricade.kind}: changes all of them", "header", None, None),
+                       Field("type_name", "Type name", "text", (lambda: barricade.kind), self.rename_barricade_kind)]
+        low, high = BARRICADE_NUMBERS["repair_time"]
+        fields += [field("boards", "Boards", "num", step=1, low=1, high=MAX_BARRICADE_BOARDS),
+                   field("repair_time", "Rebuild a board (s)", "num", step=0.1, low=low, high=high),
+                   field("reward_kind", "Rebuilding earns", "enum", choices=REWARD_KINDS, labels=REWARD_KIND_LABELS)]
+        low, high = BARRICADE_NUMBERS["reward"]
+        fields.append(field("reward", "Per board", "num", step=5.0, low=low, high=high))
+        low, high = BARRICADE_NUMBERS["reward_cap"]
+        fields.append(field("reward_cap", "Most per round", "num", step=10.0, low=low, high=high))
+        last = len(self.tiles) - 1
+        if not target.stages:
+            fields.append(field("tile", "Boards look like", "tile", low=0, high=last))
+        fields.append(Field("stages_header", "Damage stages", "header", None, None))
+        for i in range(len(target.stages)):
+            label = "Whole" if i == 0 else ("Last board" if i == len(target.stages) - 1 else f"Stage {i + 1}")
+            fields.append(Field(f"stage{i}", label, "tile", (lambda i=i: target.stages[i]),
+                                (lambda v, i=i: self.set_barricade_stage(i, v)), low=0, high=last))
+        if len(target.stages) < MAX_BARRICADE_STAGES:
+            fields.append(Field("add_stage", "Add stage", "button", None, None, action=self.add_barricade_stage,
+                                text_override="+ Add a stage (more torn down)"))
+        if target.stages:
+            fields.append(Field("remove_stage", "Remove stage", "button", None, None,
+                                action=self.remove_barricade_stage, text_override="Remove the last stage"))
+        if barricade.kind:
+            fields += [Field("detach", "Detach", "button", None, None, action=lambda: self.set_barricade_kind(""),
+                             text_override="Detach (its own settings from now on)"),
+                       Field("delete_type", "Delete type", "button", None, None, action=self.delete_barricade_kind,
+                             text_override=f"Delete the type {barricade.kind}")]
+        else:
+            fields.append(Field("save_type", "Save as a type", "button", None, None, action=self.save_barricade_kind,
+                                text_override="Save as a type (to place more of it)"))
+        return fields
+
+    def new_barricade_kind_name(self, base="Barricade", skip=None):
+        taken = {k.name for k in self.level.barricade_kinds if k is not skip}
+        return base if base not in taken else unique_thing_name(base, taken)
+
+    def save_barricade_kind(self):
+        """Save the selected barricade's settings as a new type, link it to it, and pick that type to place."""
+        barricade = self.selected_barricade()
+        if barricade is None or barricade.kind:
+            return
+        self.begin_edit()
+        kind = BarricadeKind.from_barricade(self.new_barricade_kind_name(), barricade)
+        self.level.barricade_kinds.append(kind)
+        barricade.kind = self.place_barricade_kind = kind.name
+        self.say(f"Saved as the type {kind.name}: it is picked to place (and can be imported into other maps)")
+
+    def set_barricade_kind(self, name):
+        """Link the selected barricade to a saved type (taking its settings), or detach it ("": it keeps them)."""
+        barricade = self.selected_barricade()
+        if barricade is None or barricade.kind == name:
+            return
+        self.begin_edit()
+        barricade.kind = name
+        self.level.apply_barricade_kinds()
+
+    def rename_barricade_kind(self, name):
+        barricade = self.selected_barricade()
+        kind = self.barricade_target()
+        if barricade is None or not barricade.kind or kind is None:
+            return
+        name = self.new_barricade_kind_name(str(name).strip()[:MAX_NAME] or "Barricade", skip=kind)
+        if name == kind.name:
+            return
+        self.begin_edit()
+        for b in self.level.barricades:
+            if b.kind == kind.name:
+                b.kind = name
+        if self.place_barricade_kind == kind.name:
+            self.place_barricade_kind = name
+        kind.name = name
+
+    def delete_barricade_kind(self):
+        """Delete the selected barricade's type: the barricades of it keep its settings as their own."""
+        kind = self.barricade_target()
+        barricade = self.selected_barricade()
+        if barricade is None or not barricade.kind or kind is None:
+            return
+        self.begin_edit()
+        self.level.barricade_kinds.remove(kind)
+        self.level.apply_barricade_kinds()              # (its barricades are detached)
+        if self.place_barricade_kind == kind.name:
+            self.place_barricade_kind = ""
+        self.say(f"Deleted the type {kind.name}: its barricades keep its settings")
+
+    def set_barricade(self, name, value):
+        target = self.barricade_target()
+        if name == "boards":
+            value = int(round(value))
+        if target is None or getattr(target, name) == value:
+            return
+        self.begin_edit()
+        setattr(self.barricade_target(), name, value)
+        self.level.apply_barricade_kinds()
+
+    def set_barricade_stage(self, i, tile):
+        target = self.barricade_target()
+        if target is None or not 0 <= i < len(target.stages) or target.stages[i] == tile:
+            return
+        self.begin_edit()
+        self.barricade_target().stages[i] = tile
+        self.level.apply_barricade_kinds()
+
+    def add_barricade_stage(self):
+        """Add a stage after the others (starting from the last one's tile, or the plain tile) and make the next atlas
+        click set it."""
+        target = self.barricade_target()
+        if target is None or len(target.stages) >= MAX_BARRICADE_STAGES:
+            return
+        self.begin_edit()
+        target = self.barricade_target()
+        target.stages.append(target.stages[-1] if target.stages else target.tile)
+        self.level.apply_barricade_kinds()
+        self.tile_target = f"stage{len(target.stages) - 1}"
+        self.say(f"Stage {len(target.stages)}: click an atlas tile for it (transparent pixels show as gaps)")
+
+    def remove_barricade_stage(self):
+        target = self.barricade_target()
+        if target is None or not target.stages:
+            return
+        self.begin_edit()
+        self.barricade_target().stages.pop()
+        self.level.apply_barricade_kinds()
+        self.tile_target = "tile"
+
     def remove_spawners(self, cell):
         found = self.spawners_in(cell)
         if found:
@@ -2943,6 +3186,18 @@ class Editor:
                 self.say(f"Bullet sprite: tile {min(picked) + 1}")
             else:
                 self.say("Select a gun or an ammo type first (or add one), then click a tile")
+            return
+        barricade = self.barricade_target()
+        if barricade is not None:                       # what the selected barricade (or one of its stages) looks like
+            target = self.tile_target
+            if target.startswith("stage") and target[5:].isdigit() and int(target[5:]) < len(barricade.stages):
+                self.set_barricade_stage(int(target[5:]), min(picked))
+                self.say(f"Barricade stage {int(target[5:]) + 1}: tile {min(picked) + 1}")
+            elif barricade.stages:
+                self.say("Click a stage's picture in the Details pane first, then a tile")
+            else:
+                self.set_barricade("tile", min(picked))
+                self.say(f"Barricade boards: tile {min(picked) + 1}")
             return
         if self.tool == "entity":                       # the tile chosen here is the item's sprite
             chosen = self.selected_entity()
@@ -3977,6 +4232,7 @@ class Editor:
                 draw_problem_outline(screen, self.cell_rect(cx, cy))
         self.draw_entities(screen)
         self.draw_spawners(screen)
+        self.draw_barricades(screen)
         self.draw_start(screen)
         self.draw_camera(screen)
         self.draw_cursor(screen, area)
@@ -5277,6 +5533,12 @@ class Editor:
                      "Co-op: everyone is on one team.", "Friendly fire off: teammates' bullets",
                      "and blasts do not hurt (your own do).", "Knocking out an opponent earns the",
                      "Score / Money per kill. Score and money", "stay when a player is knocked out.")
+        elif self.selected_barricade() is not None:
+            notes = ("Zombies: players can never walk", "through a barricade; enemies tear its",
+                     "boards off, then climb through.", "Players hold E beside it to put boards",
+                     "back, earning the reward up to the", "most per round. Damage stages: one",
+                     "tile each, whole first; transparent", "pixels show as gaps. Click a stage,",
+                     "then an atlas tile. Enemies only get", "through once every board is gone.")
         elif self.selected_enemy() is not None:
             notes = ("Enemies come in at spawn points of the", "Enemies team (Spawn tool: Team).",
                      "Sticky: keeps chasing one player until", "another is nearer by the margin for",
@@ -5335,6 +5597,14 @@ class Editor:
             notes = (f"Cell ({math.floor(e.x)}, {math.floor(e.y)}) on {self.level.names[e.span]}",
                      "Wheel over a value steps it.", "Click a number to type one.",
                      "Click an atlas tile: sets the sprite.", "Esc closes this; Del removes the item.")
+        if self.selected_enemy() is not None:
+            return "Enemy", notes
+        if self.selected_barricade() is not None:
+            return "Barricade", notes
+        if self.barricade_palette_active():
+            return "Barricade to place", ("Click an open ground floor cell (a gap", "in a wall) to board it up with what is",
+                                          "picked here. Select a barricade and", "Save as a type to place more like it;",
+                                          "Import brings types in from other", "maps. Right-click removes one.")
         title = ("Game rules" if rules_row == RULES_ROW else "Buy menu" if rules_row == BUY_ROW
                  else "Buy menu entry" if entry is not None else "Ambient light" if ambient else "Light" if light is not None else "Effect" if effect is not None else "Gun" if gun is not None else "Ammo type" if ammo is not None
                  else "Prefab" if prefab is not None else "Prefab to place" if e is None else "Item")
@@ -5386,6 +5656,24 @@ class Editor:
             if e.elevation and z >= 24:                  # raised or lowered: by how much
                 label = self.small.render(f"{e.elevation:+g}", True, ACCENT)
                 screen.blit(label, (cx + size // 2 + 2, cy - size // 2 - label.get_height() // 2))
+
+    def draw_barricades(self, screen):
+        """Barricades (ground floor only): a brown cell crossed by planks, with its number of boards."""
+        if self.floor != 0:
+            return
+        z = self.zoom
+        for i, b in enumerate(self.level.barricades):
+            rect = self.cell_rect(b.x, b.y)
+            inset = rect.inflate(-max(2, z // 8), -max(2, z // 8))
+            pygame.draw.rect(screen, BARRICADE_FILL, inset)
+            for k in (1, 2, 3):
+                y = inset.y + inset.h * k // 4
+                pygame.draw.line(screen, BARRICADE_PLANK, (inset.x, y), (inset.right - 1, y), max(1, z // 10))
+            if i == self.barricade_selected and self.tool == "barricade":
+                pygame.draw.rect(screen, ACCENT, rect, 2)
+            if z >= 16:
+                label = self.small.render(str(b.boards), True, (255, 255, 255))
+                screen.blit(label, label.get_rect(center=rect.center))
 
     def draw_spawners(self, screen):
         """Spawn points: a blue disc with a facing line and its order, or a hollow ring on another floor."""
@@ -6069,7 +6357,8 @@ class ImportDialog:
                 picture.fill(tuple(round(c * 255 / bright) for c in (thing.r, thing.g, thing.b)))
                 pygame.draw.rect(picture, GRID, picture.get_rect(), 1)
             elif self.tiles:
-                tile = self.tiles[max(0, min(thing.tile, len(self.tiles) - 1))]
+                icon = barricade_icon(thing) if kind == "barricade_kinds" else thing.tile
+                tile = self.tiles[max(0, min(icon, len(self.tiles) - 1))]
                 box = tile.get_bounding_rect()                  # just what is drawn in the tile, made to fit
                 if box.w and box.h:
                     scale = IMPORT_ICON / max(box.w, box.h)

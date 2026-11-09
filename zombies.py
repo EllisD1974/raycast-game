@@ -12,6 +12,12 @@ so), and enemies leave them alone. A teammate holding the use key (E) beside the
 they bleed out and are out until the next round. When nobody is left standing, the game is over: after a moment a new
 game starts at round 1. (Alone, going down is the end.)
 
+Barricades (mapfile.Barricade) board up openings: players can never walk through one, enemies only once its boards
+are all torn off; bullets go through. Barricades side by side are one (Level.barricade_groups), with one count of
+boards. An enemy whose way leads through a boarded one stops at it and tears a board off every break_rate
+seconds; a player holding the use key beside one puts a board back every repair_time seconds, for a reward (up to a
+cap each round). apply_boards keeps a world (the host's and each joiner's own) showing the boards there are.
+
 A round goes: "intermission" (counting down to the next round) -> "live" (enemies come in and attack) -> the
 intermission again; "over" when every player is out.
 
@@ -35,6 +41,9 @@ NOTE_TIME = 3.0                 # seconds a message stays on screen
 NO_WAY = 1e9                    # the cost of chasing a player there is no way to
 REVIVE_REACH = 1.0              # how close (cells, across) a player has to be to a downed one to revive them
 REVIVE_UP = 1.0                 # ... and how far above or below
+TEAR_REACH = 0.95               # how close (cells) an enemy's middle has to be to a barricade's to tear at it
+REPAIR_REACH = 1.3              # how close a player has to be to a barricade's middle to rebuild it
+BREAK_COST = 30                 # the extra cost (pathing.STRAIGHT is one cell) of a way through a boarded barricade
 
 
 @dataclass
@@ -63,6 +72,7 @@ class EnemyState:
     attack_left: float = 0.0    # seconds until that attack lands
     cooldown: float = 0.0       # seconds until it can start another attack
     hit: float = 0.0            # seconds left of showing red
+    tear: float = 0.0           # seconds into tearing the next board off a barricade
 
 
 @dataclass
@@ -81,6 +91,8 @@ class ZombieView:
     enemies: list = field(default_factory=list)     # [kind, x, y, z, angle, red] each
     downed: dict = field(default_factory=dict)      # player id -> (seconds until they bleed out, x, y, z, name)
     revives: dict = field(default_factory=dict)     # downed player id -> (reviver's id, seconds of reviving done)
+    boards: list = field(default_factory=list)      # boards left on each group of barricades (barricade_groups)
+    repairs: dict = field(default_factory=dict)     # player id -> (group index, seconds into the next board)
     crawl: float = 0.6                              # how fast the downed crawl (the map's downed_speed)
     can_buy: bool = True
 
@@ -103,7 +115,9 @@ class ZombieView:
                             for kind, x, y, z, angle, red in self.enemies],
                 "downed": [[pid, round(left, 2), round(x, 3), round(y, 3), round(z, 3), name]
                            for pid, (left, x, y, z, name) in sorted(self.downed.items())],
-                "revives": [[pid, reviver, round(done, 2)] for pid, (reviver, done) in sorted(self.revives.items())]}
+                "revives": [[pid, reviver, round(done, 2)] for pid, (reviver, done) in sorted(self.revives.items())],
+                "boards": list(self.boards),
+                "repairs": [[pid, index, round(done, 2)] for pid, (index, done) in sorted(self.repairs.items())]}
 
     @classmethod
     def from_dict(cls, data, teams=None):
@@ -114,10 +128,12 @@ class ZombieView:
             downed = {int(pid): (float(left), float(x), float(y), float(z), str(name)[:32])
                       for pid, left, x, y, z, name in data["downed"]}
             revives = {int(pid): (int(reviver), float(done)) for pid, reviver, done in data["revives"]}
+            boards = [max(0, int(n)) for n in data["boards"]]
+            repairs = {int(pid): (int(index), float(done)) for pid, index, done in data["repairs"]}
             phase = data["phase"] if data["phase"] in ("intermission", "live", "over") else "intermission"
             return cls({int(p) for p in data["alive"]}, dict(teams or {}), int(data["number"]), phase,
                        float(data["clock"]), int(data["left"]), str(data["msg"])[:80], float(data["msg_left"]),
-                       enemies, downed, revives, max(0.0, min(3.0, float(data["crawl"]))))
+                       enemies, downed, revives, boards, repairs, max(0.0, min(3.0, float(data["crawl"]))))
         except (KeyError, IndexError, TypeError, ValueError):
             return None
 
@@ -136,6 +152,56 @@ def walking_speed(downed, crawl):
     """The speed physics.step is given for a player: MOVE_SPEED, or for a downed one (who is crouched, which slows
     them by CROUCH_MULTIPLIER) whatever makes them crawl at `crawl` cells per second."""
     return crawl / CROUCH_MULTIPLIER if downed else MOVE_SPEED
+
+
+def apply_boards(world, level, boards):
+    """Make `world` show the barricades of `level` with `boards` boards left on each group of them
+    (Level.barricade_groups): each cell as a pane of its stage for how torn down the group is, filling the opening
+    (or, without stages, of its tile as high as the share of boards left), none once they are all gone; bullets go
+    through; always stopping players, stopping enemies while any boards are left, and costing enemies' pathing a
+    detour (BREAK_COST) through them. Only what changed is touched, and the world's revision (pathing) only moves when
+    a group opens up or closes."""
+    shown = world.extras.setdefault("boards", {})
+    for g, (group, left) in enumerate(zip(level.barricade_groups(), boards)):
+        if shown.get(g) == left:
+            continue
+        before = shown.get(g)
+        shown[g] = left
+        total = level.barricades[group[0]].boards
+        cells = []
+        for i in group:
+            barricade = level.barricades[i]
+            x, y = barricade.x, barricade.y
+            if not (0 <= x < world.width and 0 <= y < world.height):
+                continue
+            cells.append((x, y))
+            floor, ceiling = world.floor_of(0, x + 0.5, y + 0.5), world.ceil_of(0, x + 0.5, y + 0.5)
+            if left > 0 and barricade.stages:
+                world.set_pane(x, y, barricade.stage_tile(left, total), ceiling, shoot_through=True)
+            elif left > 0:
+                world.set_pane(x, y, barricade.tile, floor + (ceiling - floor) * left / max(1, total),
+                               shoot_through=True)
+            else:
+                world.set_pane(x, y, -1, 1e9)
+        if before is None:
+            world.set_cost(cells, BREAK_COST)
+        if before is None or (before > 0) != (left > 0):
+            world.set_blocks(cells, players=True, enemies=left > 0)
+
+
+def nearest_group(level, groups, boards, x, y):
+    """The index of the group of barricades missing boards with a cell within REPAIR_REACH of (x, y), the nearest
+    such cell's; None for none."""
+    best = None
+    for g, group in enumerate(groups):
+        if g >= len(boards) or boards[g] >= level.barricades[group[0]].boards:
+            continue
+        for i in group:
+            b = level.barricades[i]
+            distance = math.hypot(b.x + 0.5 - x, b.y + 0.5 - y)
+            if distance <= REPAIR_REACH and (best is None or distance < best[0]):
+                best = (distance, g)
+    return None if best is None else best[1]
 
 
 DEFAULT_KINDS = [Enemy()]
@@ -192,6 +258,13 @@ class ZombieRound:
         self.downed = {}                        # player id -> seconds until they bleed out
         self.revives = {}                       # downed player id -> [reviver's id, seconds of reviving done]
         self.grace = {}                         # player id -> seconds enemies cannot hurt them (just revived)
+        self.groups = game.level.barricade_groups()     # the barricades that act as one
+        self.boards = [game.level.barricades[g[0]].boards for g in self.groups]    # boards left on each group
+        self.repairs = {}                       # player id -> [group index, seconds into the next board]
+        self.repaid = {}                        # player id -> what rebuilding has earned them this round
+        self.barricade_cells = {(game.level.barricades[i].x, game.level.barricades[i].y): g
+                                for g, group in enumerate(self.groups) for i in group}     # cell -> its group
+        apply_boards(game.world, game.level, self.boards)
 
     # ------------------------------------------------------------------ what Game asks of a round
 
@@ -202,7 +275,8 @@ class ZombieRound:
         return ZombieView({pid for pid, s in players.items() if s.alive}, {pid: s.team for pid, s in players.items()},
                           self.number, self.phase, self.clock, self.to_spawn + len(self.enemies), self.message,
                           self.message_left, self.shown_enemies(), downed,
-                          {pid: tuple(entry) for pid, entry in self.revives.items()},
+                          {pid: tuple(entry) for pid, entry in self.revives.items()}, list(self.boards),
+                          {pid: tuple(entry) for pid, entry in self.repairs.items()},
                           self.game.level.settings.downed_speed)
 
     def can_buy(self):
@@ -223,6 +297,9 @@ class ZombieRound:
         if pid in self.downed:
             return downed_inputs(wish, self.game.level.settings)
         if self.revive_step(pid, wish.use, dt):
+            self.repairs.pop(pid, None)
+            wish = replace(wish, fire=False)            # (hands busy)
+        elif self.repair_step(pid, wish.use, dt):
             wish = replace(wish, fire=False)
         return wish
 
@@ -270,6 +347,61 @@ class ZombieRound:
             self.revive(mine, pid)
         return True
 
+    # ------------------------------------------------------------------ barricades
+
+    def repair_step(self, pid, use, dt):
+        """A standing player's step toward putting a board back on the barricade beside them (the nearest missing
+        some: a group of them is rebuilt as one) while they hold the use key. True while they are rebuilding."""
+        body = self.game.players[pid].body
+        level = self.game.level
+        if not use or body.span != 0:
+            self.repairs.pop(pid, None)
+            return False
+        index = nearest_group(level, self.groups, self.boards, body.x, body.y)
+        if index is None:
+            self.repairs.pop(pid, None)
+            return False
+        entry = self.repairs.get(pid)
+        if entry is None or entry[0] != index:
+            entry = self.repairs[pid] = [index, 0.0]
+        entry[1] += dt
+        barricade = level.barricades[self.groups[index][0]]                 # (the group's settings)
+        if entry[1] >= barricade.repair_time:
+            entry[1] = 0.0
+            self.boards[index] += 1
+            apply_boards(self.game.world, level, self.boards)
+            amount = max(0.0, min(barricade.reward, barricade.reward_cap - self.repaid.get(pid, 0.0)))
+            self.repaid[pid] = self.repaid.get(pid, 0.0) + amount
+            stats = self.game.players[pid].stats
+            if barricade.reward_kind == "score":
+                stats.score += amount
+            else:
+                self.pay(pid, amount)
+            if self.boards[index] >= barricade.boards:
+                self.repairs.pop(pid, None)
+        return True
+
+    def tear(self, enemy, kind, goal, dt):
+        """If `enemy`'s way to `goal` (a body) goes next through a boarded barricade it is at, tear at it (a board off
+        every break_rate seconds) and say so (True): it stays where it is meanwhile."""
+        paths = self.pathing(kind.height)
+        here = paths.place_of(enemy.body)
+        to = paths.next_place(paths.field(paths.place_of(goal)), here)
+        index = self.barricade_cells.get((to[1], to[2])) if to is not None and to[0] == 0 else None
+        if index is None or self.boards[index] <= 0:
+            enemy.tear = 0.0
+            return False
+        cx, cy = to[1] + 0.5, to[2] + 0.5                   # (the cell of the group in its way)
+        if math.hypot(cx - enemy.body.x, cy - enemy.body.y) > TEAR_REACH + kind.radius:
+            return False
+        enemy.body.angle = math.atan2(cy - enemy.body.y, cx - enemy.body.x)
+        enemy.tear += dt
+        if enemy.tear >= kind.break_rate:
+            enemy.tear = 0.0
+            self.boards[index] -= 1
+            apply_boards(self.game.world, self.game.level, self.boards)
+        return True
+
     def revive(self, pid, reviver=None):
         """A downed player gets up: with the map's revive_health, safe from enemies for a moment, and the one who
         revived them is paid."""
@@ -301,6 +433,7 @@ class ZombieRound:
         self.game.players[pid].alive = self.phase != "over"
 
     def left(self, pid):
+        self.repairs.pop(pid, None)
         self.downed.pop(pid, None)
         self.grace.pop(pid, None)
         self.revives = {d: entry for d, entry in self.revives.items() if pid not in (d, entry[0])}
@@ -355,6 +488,7 @@ class ZombieRound:
         settings = self.game.level.settings
         self.number += 1
         self.phase = "live"
+        self.repaid = {}
         self.to_spawn = round(curve_at(settings.zombie_count, self.number))
         self.spawn_wait = 0.0
         self.say(f"Round {self.number}")
@@ -385,6 +519,9 @@ class ZombieRound:
         self.clock = game.level.settings.intermission
         self.to_spawn = 0
         self.downed, self.revives, self.grace = {}, {}, {}
+        self.boards = [game.level.barricades[g[0]].boards for g in self.groups]
+        self.repairs, self.repaid = {}, {}
+        apply_boards(game.world, game.level, self.boards)
         game.spawns.restart()
         for state in game.players.values():
             state.stats.money = game.level.settings.start_money
@@ -521,6 +658,8 @@ class ZombieRound:
                     ready = next((i for i, a in enumerate(kind.attacks) if self.reach(enemy, kind, a, body)), None)
                     if ready is not None and enemy.cooldown <= 0:
                         enemy.attack, enemy.attack_left = ready, kind.attacks[ready].windup
+                    elif ready is None and self.tear(enemy, kind, body, dt):
+                        pass                            # (tearing the boards off a barricade on its way)
                     elif ready is None:
                         point = self.pathing(kind.height).steer(enemy.body, body)
                         if point is not None:

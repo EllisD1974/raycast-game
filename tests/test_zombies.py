@@ -432,6 +432,147 @@ def test_players_out_keep_their_guns_if_the_map_says_so():
         assert bool(game.players[1].inventory.guns) == keep
 
 
+# ------------------------------------------------------------------ barricades
+
+WINDOW = (12, 5)
+
+
+def barricade_game(players=(0,), boards=3, **kwargs):
+    """The zombie room cut in two by a wall at x = 12 with one boarded window at WINDOW: players on the left,
+    enemies coming in on the right."""
+    from mapfile import Barricade
+    level = zombie_level(**kwargs)
+    for y in range(1, 11):
+        if (12, y) != WINDOW:
+            level.set("walls", 12, y, 1)
+    level.barricades = [Barricade(*WINDOW, boards=boards, repair_time=0.5, reward=10, reward_cap=25)]
+    game = Game(level, World(level, 32), random.Random(1), character_tile=FIRST_CHARACTER)
+    for pid in players:
+        game.add_player(pid)
+    return game
+
+
+def test_barricades_are_saved_and_loaded():
+    from mapfile import Barricade
+    level = zombie_level()
+    level.barricades = [Barricade(3, 4, boards=4, reward_kind="score", tile=7)]
+    again = parse_level(json.loads(level_text(level)))
+    assert again.barricades == level.barricades and again.barricade_at(3, 4) == 0
+    data = json.loads(level_text(level))
+    data["barricades"] += [{"x": 3, "y": 4}, {"x": 99, "y": 1}, {"y": 2}, {"x": 5, "y": 5, "boards": 500,
+                                                                       "reward_kind": "gold", "repair_time": "x"}]
+    again = parse_level(data)
+    assert [(b.x, b.y) for b in again.barricades] == [(3, 4), (5, 5)]
+    assert again.barricades[1].boards == 20 and again.barricades[1].reward_kind == "money"
+    assert again.barricades[1].repair_time == Barricade().repair_time
+    assert '"barricades"' not in level_text(Level.blank(5, 5))
+
+
+def test_a_barricade_stops_players_always_and_enemies_while_it_has_boards():
+    game = barricade_game()
+    world = game.world
+    x, y = WINDOW
+    assert world.span_at(x + 0.5, y + 0.5, 0.0) == -1                       # players
+    assert world.for_enemies().span_at(x + 0.5, y + 0.5, 0.0) == -1         # enemies, boarded
+    assert world.pane_tex[y, x] == 2 and world.pane_top[y, x] == pytest.approx(1.0)
+    game.round.boards[0] = 1
+    from zombies import apply_boards
+    apply_boards(world, game.level, game.round.boards)
+    assert world.pane_top[y, x] == pytest.approx(1 / 3)                     # a third of the boards left
+    game.round.boards[0] = 0
+    apply_boards(world, game.level, game.round.boards)
+    assert world.for_enemies().span_at(x + 0.5, y + 0.5, 0.0) == 0          # open to enemies
+    assert world.span_at(x + 0.5, y + 0.5, 0.0) == -1                       # never to players
+    assert world.pane_tex[y, x] == -1
+
+
+def test_enemies_tear_the_boards_off_and_come_through():
+    game = barricade_game(enemies=[Enemy(speed=3.0, break_rate=0.5, attacks=[Attack(damage=10)])],
+                          zombie_count=[[1, 1]])
+    me = game.players[0]
+    place(me.body, 3.5, 5.5)
+    go_live(game)
+    assert play(game, 10.0, until=lambda: game.round.boards[0] < 3)
+    enemy = next(iter(game.round.enemies.values()))
+    assert enemy.body.x > 12.5                                              # still outside, at the window
+    assert play(game, 3.0, until=lambda: game.round.boards[0] == 0)
+    health = me.stats.health
+    assert play(game, 10.0, until=lambda: me.stats.health < health)         # through, and at the player
+    assert enemy.body.x < 12.0
+
+
+def test_enemies_go_round_by_a_door_when_that_is_shorter_than_breaking_in():
+    game = barricade_game(enemies=[Enemy(speed=3.0)], zombie_count=[[1, 1]])
+    game.level.set("walls", 12, 6, 0)                                       # an open doorway beside the window
+    game.world = World(game.level, 32)
+    game.round = ZombieRound(game)
+    place(game.players[0].body, 3.5, 6.5)
+    go_live(game)
+    assert play(game, 10.0, until=lambda: any(e.body.x < 12 for e in game.round.enemies.values()))
+    assert game.round.boards[0] == 3
+
+
+def test_holding_e_beside_a_barricade_rebuilds_it_for_a_capped_reward():
+    game = barricade_game(spawners=())
+    game.round.start_round()                                # (a round with nobody coming: the cap is per round)
+    game.round.boards[0] = 0
+    me = game.players[0]
+    place(me.body, 11.5, 5.5)
+    play(game, 0.1, {0: Inputs(use=True)})
+    assert game.round.view().repairs[0][0] == 0
+    assert not game.round.act(0, Inputs(use=True, fire=True), DT).fire      # (hands busy)
+    play(game, 0.5, {0: Inputs(use=True)})
+    assert game.round.boards[0] == 1 and me.stats.money == 10
+    play(game, 2.0, {0: Inputs(use=True)})
+    assert game.round.boards[0] == 3                                        # whole: no more
+    assert me.stats.money == 25                                             # 10 + 10 + 5: the cap
+    assert 0 not in game.round.repairs
+
+
+def test_rebuilding_pays_again_next_round_and_letting_go_starts_the_board_over():
+    game = barricade_game(spawners=())
+    game.round.start_round()
+    game.round.boards[0] = 0
+    me = game.players[0]
+    place(me.body, 11.5, 5.5)
+    game.round.repaid[0] = 25
+    play(game, 0.6, {0: Inputs(use=True)})
+    assert game.round.boards[0] == 1 and me.stats.money == 0                # capped this round
+    game.round.start_round()
+    play(game, 0.3, {0: Inputs(use=True)})
+    play(game, DT, {0: Inputs()})
+    play(game, 0.3, {0: Inputs(use=True)})
+    assert game.round.boards[0] == 1                                        # (let go halfway: started over)
+    play(game, 0.3, {0: Inputs(use=True)})
+    assert game.round.boards[0] == 2 and me.stats.money == 10
+
+
+def test_a_new_game_puts_every_board_back():
+    game = barricade_game()
+    game.round.boards[0] = 0
+    from zombies import apply_boards
+    apply_boards(game.world, game.level, game.round.boards)
+    game.round.new_game()
+    assert game.round.boards == [3] and game.world.pane_tex[WINDOW[1], WINDOW[0]] == 2
+
+
+def test_a_joiners_world_shows_the_boards_the_host_says_are_left():
+    game = barricade_game()
+    host = HostSession(game, net.Host("pw", port=0))
+    client = ClientSession(net.Client("127.0.0.1", host.host.port, "pw"), make_world, FIRST_CHARACTER)
+    x, y = WINDOW
+    try:
+        run([host, client], lambda: client.ready and isinstance(client.round, ZombieView))
+        assert client.world.for_enemies().span_at(x + 0.5, y + 0.5, 0.0) == -1
+        game.round.boards[0] = 0
+        run([host, client], lambda: client.round.boards == [0])
+        assert client.world.for_enemies().span_at(x + 0.5, y + 0.5, 0.0) == 0
+        assert client.world.span_at(x + 0.5, y + 0.5, 0.0) == -1 and client.world.pane_tex[y, x] == -1
+    finally:
+        client.close()
+        host.close()
+
+
 # ------------------------------------------------------------------ what players see
 
 def test_enemies_are_drawn_tinted_and_as_tall_as_their_kind():
@@ -448,7 +589,8 @@ def test_enemies_are_drawn_tinted_and_as_tall_as_their_kind():
 
 def test_the_view_goes_over_the_network_and_back():
     view = ZombieView({0, 2}, {}, 3, "live", 0.0, 12, "Round 3", 1.5, [(0, 1.5, 2.5, 0.0, 0.5, 0.25)],
-                      {2: (12.5, 3.5, 4.5, 0.0, "Sam")}, {2: (0, 1.25)}, 0.8)
+                      downed={2: (12.5, 3.5, 4.5, 0.0, "Sam")}, revives={2: (0, 1.25)}, boards=[3, 0],
+                      repairs={0: (1, 0.5)}, crawl=0.8)
     again = ZombieView.from_dict(json.loads(json.dumps(view.to_dict())))
     assert again == view
     assert ZombieView.from_dict({"mode": "zombies", "enemies": [[1, 2]]}) is None
@@ -593,3 +735,188 @@ def test_the_downed_hud_draws_for_everyone():
     for pid in (0, 1):
         draw_downed(picture, font, big, Lens(), game.players[pid].body, game.round.view(), pid, game.players[pid],
                     game.level)
+
+
+def test_the_barricade_tool_boards_up_gaps_and_edits_them(ed):
+    from mapfile import Barricade
+    ed.level.set("walls", 4, 4, 1)
+    ed.do("tool:barricade")
+    ed.map_click((4, 4), 1)
+    assert ed.level.barricades == [] and "open cell" in ed.message
+    ed.map_click((5, 4), 1)
+    assert ed.level.barricades == [Barricade(5, 4)] and ed.selected_barricade() is ed.level.barricades[0]
+    keys = [r.field.key for r in ed.details_rows()]
+    assert {"boards", "repair_time", "reward", "reward_cap", "reward_kind", "tile"} <= set(keys)
+    ed.set_barricade("boards", 9.4)
+    assert ed.level.barricades[0].boards == 9
+    ed.draw(pygame.display.get_surface())
+    ed.do("undo")
+    assert ed.level.barricades[0].boards == 6
+    ed.map_click((5, 4), 3)
+    assert ed.level.barricades == []
+    ed.do("undo")
+    ed.map_click((5, 4), 1)
+    assert ed.details_delete_label() == "Delete barricade"
+    ed.delete_selected()
+    assert ed.level.barricades == []
+
+
+def test_barricades_move_with_the_map_and_are_copied_with_an_area():
+    from mapfile import Barricade, copy_area, paste_area
+    level = Level.blank(10, 10)
+    level.barricades = [Barricade(3, 3)]
+    level.resize_edges(left=2, top=1)
+    assert (level.barricades[0].x, level.barricades[0].y) == (5, 4)
+    area = copy_area(level, (4, 3), (6, 5), 0)
+    paste_area(level, area, 7, 6, 0)
+    assert sorted((b.x, b.y) for b in level.barricades) == [(5, 4), (8, 7)]
+    level.resize(6, 6)
+    assert [(b.x, b.y) for b in level.barricades] == [(5, 4)]
+
+
+def test_a_barricade_with_stages_shows_the_one_for_how_torn_down_it_is():
+    from mapfile import Barricade
+    from zombies import apply_boards
+    b = Barricade(0, 0, boards=6, stages=[40, 41, 42])
+    assert [b.stage_tile(left) for left in (6, 5, 4, 3, 2, 1)] == [40, 40, 41, 41, 42, 42]
+    assert Barricade(0, 0, boards=4, stages=[7]).stage_tile(1) == 7
+    assert Barricade(0, 0, boards=2, stages=[1, 2, 3, 4]).stage_tile(1) == 3     # (more stages than boards)
+    assert Barricade(0, 0, tile=9).stage_tile(3) == 9                           # no stages: its tile
+    game = barricade_game(boards=3)
+    game.level.barricades[0].stages = [3, 4, 5]
+    world, (x, y) = game.world, WINDOW
+    world.extras.clear()
+    for left, tile in ((3, 3), (2, 4), (1, 5)):
+        game.round.boards[0] = left
+        apply_boards(world, game.level, game.round.boards)
+        assert world.pane_tex[y, x] == tile and world.pane_top[y, x] == pytest.approx(1.0)   # (filling it)
+        assert world.for_enemies().span_at(x + 0.5, y + 0.5, 0.0) == -1                       # still closed
+    game.round.boards[0] = 0
+    apply_boards(world, game.level, game.round.boards)
+    assert world.pane_tex[y, x] == -1 and world.for_enemies().span_at(x + 0.5, y + 0.5, 0.0) == 0
+
+
+def test_stages_are_saved_and_kept_apart_in_copies():
+    from mapfile import Barricade
+    level = zombie_level()
+    level.barricades = [Barricade(3, 4, stages=[8, 9])]
+    again = parse_level(json.loads(level_text(level)))
+    assert again.barricades[0].stages == [8, 9]
+    copy = level.copy()
+    copy.barricades[0].stages.append(10)
+    assert level.barricades[0].stages == [8, 9]
+    data = json.loads(level_text(level))
+    data["barricades"][0]["stages"] = [1, "x", 999, True] + [2] * 20
+    assert parse_level(data).barricades[0].stages == [1, 255] + [2] * 10
+
+
+def test_the_editor_adds_stages_and_atlas_clicks_set_them(ed):
+    ed.do("tool:barricade")
+    ed.map_click((5, 4), 1)
+    barricade = ed.selected_barricade()
+    ed.add_barricade_stage()
+    ed.add_barricade_stage()
+    assert barricade.stages == [barricade.tile, barricade.tile] and ed.tile_target == "stage1"
+    keys = [r.field.key for r in ed.details_rows()]
+    assert {"stage0", "stage1", "add_stage", "remove_stage"} <= set(keys) and "tile" not in keys
+    ed.set_barricade_stage(1, 33)
+    ed.tile_target = "stage0"
+    ed.set_barricade_stage(0, 31)
+    assert barricade.stages == [31, 33]
+    ed.draw(pygame.display.get_surface())
+    ed.remove_barricade_stage()
+    assert barricade.stages == [31]
+    ed.do("undo")
+    assert ed.level.barricades[0].stages == [31, 33]
+
+
+# ------------------------------------------------------------------ saved barricade types
+
+def test_barricade_types_are_saved_and_barricades_take_their_settings():
+    from mapfile import Barricade, BarricadeKind
+    level = Level.blank(10, 10)
+    level.barricade_kinds = [BarricadeKind("Steel", boards=10, reward=25, stages=[5, 6])]
+    level.barricades = [Barricade(3, 3, kind="Steel"), Barricade(4, 4, boards=2), Barricade(5, 5, kind="Gone")]
+    level.apply_barricade_kinds()
+    assert (level.barricades[0].boards, level.barricades[0].reward, level.barricades[0].stages) == (10, 25, [5, 6])
+    assert level.barricades[1].boards == 2 and level.barricades[2].kind == ""      # (no such type: detached)
+    level.barricades[0].stages.append(9)
+    assert level.barricade_kinds[0].stages == [5, 6]                                # (copies, not shared)
+    again = parse_level(json.loads(level_text(level)))
+    assert again.barricade_kinds == level.barricade_kinds
+    assert again.barricades[0].kind == "Steel" and again.barricades[0].stages == [5, 6]
+    assert '"barricade_kinds"' not in level_text(Level.blank(5, 5))
+
+
+def test_saving_a_barricade_as_a_type_and_placing_more_of_it(ed):
+    ed.do("tool:barricade")
+    assert ed.barricade_palette_active()
+    assert [r.field.key for r in ed.details_rows()][:2] == ["palette", "pick_plain"]
+    ed.map_click((5, 4), 1)
+    ed.set_barricade("boards", 9)
+    ed.add_barricade_stage()
+    ed.set_barricade_stage(0, 40)
+    ed.save_barricade_kind()
+    kind = ed.level.barricade_kinds[0]
+    assert kind.name == "Barricade" and kind.boards == 9 and kind.stages == [40]
+    assert ed.level.barricades[0].kind == "Barricade" and ed.place_barricade_kind == "Barricade"
+    ed.deselect()
+    ed.map_click((5, 6), 1)                                 # placed from the type
+    second = ed.level.barricades[1]
+    assert second.kind == "Barricade" and second.boards == 9 and second.stages == [40]
+    ed.set_barricade("reward", 50)                          # changes the type: both follow
+    ed.set_barricade_stage(0, 41)
+    assert kind.reward == 50 and [b.reward for b in ed.level.barricades] == [50, 50]
+    assert [b.stages for b in ed.level.barricades] == [[41], [41]]
+    ed.draw(pygame.display.get_surface())
+    ed.do("undo")
+    assert [b.stages for b in ed.level.barricades] == [[40], [40]]
+
+
+def test_renaming_detaching_and_deleting_a_type(ed):
+    from mapfile import Barricade, BarricadeKind
+    ed.level.barricade_kinds = [BarricadeKind("Wood", boards=4), BarricadeKind("Steel", boards=8)]
+    ed.level.barricades = [Barricade(2, 2, kind="Wood"), Barricade(3, 3, kind="Wood"), Barricade(4, 4)]
+    ed.level.apply_barricade_kinds()
+    ed.do("tool:barricade")
+    ed.place_barricade_kind = "Wood"
+    ed.map_click((2, 2), 1)
+    ed.rename_barricade_kind("Steel")                       # (taken: kept unique)
+    assert ed.level.barricade_kinds[0].name == "Steel 2"
+    ed.rename_barricade_kind("Planks")
+    assert [b.kind for b in ed.level.barricades] == ["Planks", "Planks", ""] and ed.place_barricade_kind == "Planks"
+    ed.set_barricade_kind("")                               # detach this one: it keeps the settings
+    assert ed.level.barricades[0].kind == "" and ed.level.barricades[0].boards == 4
+    ed.set_barricade_kind("Steel")
+    assert ed.level.barricades[0].boards == 8
+    ed.map_click((3, 3), 1)
+    ed.delete_barricade_kind()
+    assert [k.name for k in ed.level.barricade_kinds] == ["Steel"]
+    assert ed.level.barricades[1].kind == "" and ed.level.barricades[1].boards == 4
+    assert ed.place_barricade_kind == ""
+
+
+def test_barricade_types_can_be_imported_from_another_map():
+    from mapfile import Barricade, BarricadeKind, import_things
+    source = Level.blank(8, 8)
+    source.barricade_kinds = [BarricadeKind("Steel", boards=8, stages=[3, 4])]
+    level = Level.blank(8, 8)
+    level.barricade_kinds = [BarricadeKind("Steel", boards=2)]
+    level.barricades = [Barricade(2, 2, kind="Steel")]
+    level.apply_barricade_kinds()
+    import_things(level, source, {("barricade_kinds", "Steel")}, taken="replace")
+    assert level.barricade_kinds[0].stages == [3, 4] and level.barricades[0].boards == 8   # (they follow the type)
+    source.barricade_kinds[0].stages.append(5)
+    assert level.barricade_kinds[0].stages == [3, 4]
+
+
+def test_the_import_dialog_lists_and_pictures_barricade_types(ed):
+    import map_editor
+    from mapfile import BarricadeKind
+    dialog = map_editor.ImportDialog("", [], ed.level, ed.font, ed.small, ed.tiles)
+    dialog.source = Level.blank(6, 6)
+    dialog.source.barricade_kinds = [BarricadeKind("Steel", stages=[3, 4])]
+    dialog.source_name = "other"
+    assert dialog.rows() == [("kind", "barricade_kinds"), ("thing", ("barricade_kinds", "Steel"))]
+    assert dialog.icon("barricade_kinds", "Steel") is not None                 # (its whole stage's picture)
+    dialog.draw(pygame.display.get_surface(), pygame.display.get_surface().get_size(), (0, 0))

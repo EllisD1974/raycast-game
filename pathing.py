@@ -86,16 +86,19 @@ class Pathing:
                 if not dx or not dy:
                     straight[(dx, dy)] = to is not None
                 if to is not None:
-                    out.append((to, cost))
-                    self.into[to].append((place, cost))
+                    step = cost + w.path_cost(*to)      # (more through something to break)
+                    out.append((to, step))
+                    self.into[to].append((place, step))
 
     def open(self, s, cx, cy):
         """True if a body can be on floor s of cell (cx, cy)."""
         w = self.world
         if not (0 <= cx < w.width and 0 <= cy < w.height) or not w.span_on[s, cy, cx]:
             return False
-        if w.blocked[cy, cx] or w.solid_from[cy, cx] <= s or w.mover_blocked(s, cx, cy):
+        if w.blocked[cy, cx] or w.solid_from[cy, cx] <= s:
             return False
+        if w.mover_blocked(s, cx, cy) and not w.path_cost(s, cx, cy):
+            return False                        # (stopped there, and it is nothing they can break)
         if s == 0 and w.has_barriers and w.barred(cx, cy):
             return False
         return plane_z(w.ceil_plane, s, cx, cy, 0.5, 0.5) - plane_z(w.floor_plane, s, cx, cy, 0.5, 0.5) \

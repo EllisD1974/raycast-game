@@ -235,6 +235,103 @@ class Enemy:
                    **clamped_numbers(cls, data, ENEMY_NUMBERS))
 
 
+REWARD_KINDS = ("money", "score")
+REWARD_KIND_LABELS = {"money": "Money", "score": "Score"}
+BARRICADE_TILE = 2                              # the atlas's wood (make_atlas.py): what boards look like by default
+MAX_BARRICADE_BOARDS = 20
+MAX_BARRICADE_STAGES = 12
+BARRICADE_NUMBERS = {"repair_time": (0.1, 30.0), "reward": (0.0, 1000000.0), "reward_cap": (0.0, 1000000.0)}
+
+
+@dataclass
+class Barricade:
+    """A boarded-up opening in zombies mode: an open ground floor cell (x, y) that players can never walk through
+    and enemies only once every board is torn off. Enemies coming that way stop to tear the boards off; players
+    rebuild them by holding the use key (E) beside it. Bullets and blasts go through it.
+
+    Barricades in cells side by side are one barricade (Level.barricade_groups): torn down and rebuilt together,
+    with the boards, rebuild time and reward of the first of them in the map's list; each cell shows its own
+    pictures for how far the whole is torn down.
+
+    boards       how many boards it has when whole
+    repair_time  seconds of holding E to put one board back
+    reward, reward_kind   what each board put back earns (money or score) ...
+    reward_cap   ... up to this much per player per round (so a window cannot be farmed)
+    tile         the atlas tile the boards are drawn with when it has no stages: a pane as tall as the share of
+                 boards left
+    stages       atlas tiles it is drawn with as it is torn down, whole first and most damaged last, each filling
+                 the opening (give them transparent pixels where boards are missing, to see through the gaps).
+                 The share of boards gone picks the stage (see stage_tile); it can only be walked through once
+                 every board is gone, whatever the picture shows"""
+    x: int = 0
+    y: int = 0
+    boards: int = 6
+    repair_time: float = 1.0
+    reward: float = 10.0
+    reward_kind: str = "money"
+    reward_cap: float = 100.0
+    tile: int = BARRICADE_TILE
+    stages: list = field(default_factory=list)
+    kind: str = ""                              # the BarricadeKind it is placed from ("" for its own settings)
+
+    def stage_tile(self, left, boards=None):
+        """The tile it shows with `left` of `boards` (its own, unless given: a group's) on, left above 0: with stages,
+        the one for the share of boards torn off (all on: the first; one left: the last); without, its tile."""
+        if not self.stages:
+            return self.tile
+        boards = max(1, self.boards if boards is None else boards)
+        gone = max(0, boards - left)
+        return self.stages[min(len(self.stages) - 1, gone * len(self.stages) // boards)]
+
+    @classmethod
+    def from_dict(cls, data):
+        stages = data.get("stages")
+        return cls(max(0, int(data["x"])), max(0, int(data["y"])),
+                   boards=max(1, min(MAX_BARRICADE_BOARDS, int(data.get("boards", 6)))),
+                   reward_kind=data.get("reward_kind") if data.get("reward_kind") in REWARD_KINDS else "money",
+                   tile=max(0, min(255, int(data.get("tile", BARRICADE_TILE)))),
+                   stages=read_stages(data.get("stages")), kind=str(data.get("kind", ""))[:MAX_NAME],
+                   **clamped_numbers(cls, data, BARRICADE_NUMBERS))
+
+
+def read_stages(stages):
+    """A barricade's stage tiles from a file: atlas tile indices, at most MAX_BARRICADE_STAGES."""
+    if not isinstance(stages, list):
+        return []
+    return [max(0, min(255, int(t))) for t in stages
+            if isinstance(t, (int, float)) and not isinstance(t, bool)][:MAX_BARRICADE_STAGES]
+
+
+BARRICADE_KIND_FIELDS = ("boards", "repair_time", "reward", "reward_kind", "reward_cap", "tile", "stages")
+
+
+@dataclass
+class BarricadeKind:
+    """A saved barricade (a type of barricade): a name and every setting of a Barricade but its place. Barricades
+    placed from it (Barricade.kind) take its settings (Level.apply_barricade_kinds), so changing it changes them
+    all; it can be brought into another map with the editor's Import."""
+    name: str = "Barricade"
+    boards: int = 6
+    repair_time: float = 1.0
+    reward: float = 10.0
+    reward_kind: str = "money"
+    reward_cap: float = 100.0
+    tile: int = BARRICADE_TILE
+    stages: list = field(default_factory=list)
+
+    def clone(self):
+        return replace(self, stages=list(self.stages))
+
+    @classmethod
+    def from_barricade(cls, name, barricade):
+        return cls(name, **{key: getattr(barricade, key) for key in BARRICADE_KIND_FIELDS}).clone()
+
+    @classmethod
+    def from_dict(cls, data):
+        settings = Barricade.from_dict(dict(data, x=0, y=0))
+        return cls.from_barricade(str(data.get("name", ""))[:MAX_NAME] or "Barricade", settings)
+
+
 MAX_CURVE_POINTS = 24
 
 
@@ -1046,8 +1143,10 @@ def default_floor_name(index):
 class Level:
     def __init__(self, grids, start_x=1.5, start_y=1.5, start_angle=0.0, start_span=0, names=None,
                  entities=None, guns=None, ammo_types=None, prefabs=None, effects=None, lights=None, ambient=1.0,
-                 spawners=None, settings=None, enemies=None):
+                 spawners=None, settings=None, enemies=None, barricades=None, barricade_kinds=None):
         self.grids = grids
+        self.barricade_kinds = list(barricade_kinds or [])     # saved barricades to place more of (BarricadeKind)
+        self.barricades = list(barricades or [])    # boarded-up openings (see Barricade; zombies mode)
         self.enemies = list(enemies or [])          # kinds of enemy defined for this map (see Enemy; zombies mode)
         self.settings = settings or MapSettings()   # how the map is played (see MapSettings)
         self.spawners = list(spawners or [])        # where players come into the game (see Spawner)
@@ -1085,7 +1184,49 @@ class Level:
                      [e.clone() for e in self.entities], [replace(g) for g in self.guns],
                      [replace(a) for a in self.ammo_types], [p.clone() for p in self.prefabs],
                      [replace(f) for f in self.effects], [replace(light) for light in self.lights], self.ambient,
-                     [replace(s) for s in self.spawners], self.settings.copy(), [e.clone() for e in self.enemies])
+                     [replace(s) for s in self.spawners], self.settings.copy(), [e.clone() for e in self.enemies],
+                     [replace(b, stages=list(b.stages)) for b in self.barricades],
+                     [k.clone() for k in self.barricade_kinds])
+
+    def barricade_kind_named(self, name):
+        return next((k for k in self.barricade_kinds if k.name == name), None)
+
+    def apply_barricade_kinds(self):
+        """Give every barricade placed from a saved type that type's settings. One whose type no longer exists is
+        detached: it keeps the settings it last had."""
+        for barricade in self.barricades:
+            kind = self.barricade_kind_named(barricade.kind) if barricade.kind else None
+            if kind is None:
+                barricade.kind = ""
+                continue
+            for key in BARRICADE_KIND_FIELDS:
+                value = getattr(kind, key)
+                setattr(barricade, key, list(value) if isinstance(value, list) else value)
+
+    def barricade_groups(self):
+        """The barricades that act as one: [[index, ...], ...], each group the barricades joined cell to cell (side
+        by side, not corner to corner), in order of their first index, which is the one whose settings count."""
+        at = {(b.x, b.y): i for i, b in enumerate(self.barricades)}
+        seen, groups = set(), []
+        for i, b in enumerate(self.barricades):
+            if i in seen:
+                continue
+            group, todo = [], [(b.x, b.y)]
+            seen.add(i)
+            while todo:
+                x, y = todo.pop()
+                group.append(at[(x, y)])
+                for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+                    j = at.get((nx, ny))
+                    if j is not None and j not in seen:
+                        seen.add(j)
+                        todo.append((nx, ny))
+            groups.append(sorted(group))
+        return groups
+
+    def barricade_at(self, x, y):
+        """The index of the barricade in cell (x, y), or None."""
+        return next((i for i, b in enumerate(self.barricades) if (b.x, b.y) == (x, y)), None)
 
     def enemy_named(self, name):
         return next((e for e in self.enemies if e.name == name), None)
@@ -1370,6 +1511,7 @@ class Level:
         self.start_y = min(self.start_y, height - 0.5)
         self.entities = [e for e in self.entities if e.x < width and e.y < height]
         self.spawners = [s for s in self.spawners if s.x < width and s.y < height]
+        self.barricades = [b for b in self.barricades if b.x < width and b.y < height]
 
     def resize_edges(self, left=0, right=0, top=0, bottom=0):
         """Add (positive) or remove (negative) columns and rows along each side, keeping the cells
@@ -1393,6 +1535,8 @@ class Level:
                          if 0 <= e.x + left < width and 0 <= e.y + top < height]
         self.spawners = [replace(s, x=s.x + left, y=s.y + top) for s in self.spawners
                          if 0 <= s.x + left < width and 0 <= s.y + top < height]
+        self.barricades = [replace(b, x=b.x + left, y=b.y + top) for b in self.barricades
+                           if 0 <= b.x + left < width and 0 <= b.y + top < height]
         return left, top
 
     @staticmethod
@@ -1499,6 +1643,7 @@ class Level:
         found = []
         places = [("start position", self.start_x, self.start_y, self.start_span)]
         places += [(f"spawner {i + 1} (order {s.order})", s.x, s.y, s.span) for i, s in enumerate(self.spawners)]
+        places += [(f"barricade {i + 1}", b.x + 0.5, b.y + 0.5, 0) for i, b in enumerate(self.barricades)]
         for what, x, y, span in places:
             sx, sy = int(x), int(y)
             if self.is_solid(sx, sy, span):
@@ -1659,8 +1804,21 @@ def parse_level(data, label="level"):
             enemy = Enemy.from_dict(item)
             if level.enemy_named(enemy.name) is None:
                 level.enemies.append(enemy)
+    for item in data.get("barricade_kinds", []):
+        if isinstance(item, dict):
+            kind = BarricadeKind.from_dict(item)
+            if level.barricade_kind_named(kind.name) is None:
+                level.barricade_kinds.append(kind)
+    for item in data.get("barricades", []):
+        try:
+            barricade = Barricade.from_dict(item)
+        except (KeyError, TypeError, ValueError):
+            continue
+        if level.in_bounds(barricade.x, barricade.y) and level.barricade_at(barricade.x, barricade.y) is None:
+            level.barricades.append(barricade)
     level.settings = MapSettings.from_dict(data.get("settings", {}))
     level.apply_prefabs()
+    level.apply_barricade_kinds()
     return level
 
 
@@ -1702,7 +1860,11 @@ def level_text(level):
         + ('  "prefabs": [\n' + ",\n".join("    " + json.dumps(asdict(p)) for p in level.prefabs) + "\n  ],\n"
            if level.prefabs else "")
         + ('  "enemies": [\n' + ",\n".join("    " + json.dumps(asdict(e)) for e in level.enemies) + "\n  ],\n"
-           if level.enemies else "") +
+           if level.enemies else "")
+        + ('  "barricade_kinds": [\n' + ",\n".join("    " + json.dumps(asdict(k)) for k in level.barricade_kinds)
+           + "\n  ],\n" if level.barricade_kinds else "")
+        + ('  "barricades": [\n' + ",\n".join("    " + json.dumps(asdict(b)) for b in level.barricades) + "\n  ],\n"
+           if level.barricades else "") +
         '  "grids": {\n' + ",\n".join(blocks) + "\n  }\n}\n"
     )
     return text
@@ -1728,6 +1890,7 @@ class Area:
     walls: dict = field(default_factory=dict)   # (dx, dy) -> {wall layer: value} of the walls in it
     entities: list = field(default_factory=list)
     spawners: list = field(default_factory=list)
+    barricades: list = field(default_factory=list)      # (only ever on the ground floor)
 
 
 def area_rect(level, a, b):
@@ -1746,6 +1909,10 @@ def _in(thing, x0, y0, x1, y1, floor):
     return thing.span == floor and x0 <= math.floor(thing.x) <= x1 and y0 <= math.floor(thing.y) <= y1
 
 
+def _barricade_in(barricade, x0, y0, x1, y1, floor):
+    return floor == 0 and x0 <= barricade.x <= x1 and y0 <= barricade.y <= y1
+
+
 def copy_area(level, a, b, floor):
     """The Area of `floor` between cells a and b."""
     x0, y0, x1, y1 = area_rect(level, a, b)
@@ -1759,6 +1926,8 @@ def copy_area(level, a, b, floor):
                 area.walls[(x - x0, y - y0)] = {layer: level.grids[layer][y][x] for layer in WALL_LAYERS}
     area.entities = [e.clone(x=e.x - x0, y=e.y - y0) for e in level.entities if _in(e, x0, y0, x1, y1, floor)]
     area.spawners = [replace(s, x=s.x - x0, y=s.y - y0) for s in level.spawners if _in(s, x0, y0, x1, y1, floor)]
+    area.barricades = [replace(b, x=b.x - x0, y=b.y - y0) for b in level.barricades
+                       if _barricade_in(b, x0, y0, x1, y1, floor)]
     return area
 
 
@@ -1780,6 +1949,7 @@ def clear_area(level, a, b, floor):
                 _clear_wall(level, x, y)
     level.entities = [e for e in level.entities if not _in(e, x0, y0, x1, y1, floor)]
     level.spawners = [s for s in level.spawners if not _in(s, x0, y0, x1, y1, floor)]
+    level.barricades = [b for b in level.barricades if not _barricade_in(b, x0, y0, x1, y1, floor)]
 
 
 def paste_area(level, area, x, y, floor):
@@ -1792,6 +1962,7 @@ def paste_area(level, area, x, y, floor):
         return
     level.entities = [e for e in level.entities if not _in(e, x0, y0, x1, y1, floor)]
     level.spawners = [s for s in level.spawners if not _in(s, x0, y0, x1, y1, floor)]
+    level.barricades = [b for b in level.barricades if not _barricade_in(b, x0, y0, x1, y1, floor)]
     for cy in range(y0, y1 + 1):
         for cx in range(x0, x1 + 1):
             dx, dy = cx - x, cy - y
@@ -1809,14 +1980,19 @@ def paste_area(level, area, x, y, floor):
     inside = lambda t: x0 <= math.floor(t.x + x) <= x1 and y0 <= math.floor(t.y + y) <= y1
     level.entities += [e.clone(x=e.x + x, y=e.y + y, span=floor) for e in area.entities if inside(e)]
     level.spawners += [replace(s, x=s.x + x, y=s.y + y, span=floor) for s in area.spawners if inside(s)]
+    if floor == 0:                                      # (a barricade only stands on the ground floor)
+        level.barricades += [replace(b, x=b.x + x, y=b.y + y) for b in area.barricades
+                             if x0 <= b.x + x <= x1 and y0 <= b.y + y <= y1]
     level.apply_prefabs()
 
 
 # --------------------------------------------------------------------------- bringing things in from another map
 
 IMPORT_KINDS = {"prefabs": "Prefabs", "lights": "Lights", "effects": "Effects", "guns": "Guns",
-                "ammo_types": "Ammo types"}                 # what can be brought in from another map, and its label
-IMPORT_ORDER = ("lights", "effects", "ammo_types", "guns", "prefabs")    # each kind only names kinds before it
+                "ammo_types": "Ammo types",
+                "barricade_kinds": "Barricade types"}       # what can be brought in from another map, and its label
+IMPORT_ORDER = ("lights", "effects", "ammo_types", "guns", "prefabs",
+                "barricade_kinds")                          # each kind only names kinds before it
 REFERENCES = {                                              # the fields of each kind that name another thing
     "lights": (),
     "effects": (("light", "lights"),),
@@ -1825,6 +2001,7 @@ REFERENCES = {                                              # the fields of each
                    ("explosion_effects", "effects"), ("explosion_lights", "lights")),
     "guns": (("ammo", "ammo_types"), ("muzzle", "effects"), ("flash", "lights")),
     "prefabs": (("light", "lights"), ("emits", "effects"), ("gun", "guns"), ("ammo", "ammo_types")),
+    "barricade_kinds": (),
 }
 TAKEN_CHOICES = ("keep", "replace", "copy")                 # what to do when an imported name is already used
 
@@ -1909,7 +2086,7 @@ def import_things(level, source, picks, taken="copy"):
         mine = getattr(level, kind)
         for name in sorted(n for k, n in wanted if k == kind):
             thing = things_named(source, kind)[name]
-            thing = thing.clone() if kind == "prefabs" else replace(thing)
+            thing = thing.clone() if kind in ("prefabs", "barricade_kinds") else replace(thing)
             existing = things_named(level, kind)
             if name in existing and taken == "keep":
                 result.kept.append((kind, name))
@@ -1940,6 +2117,7 @@ def import_things(level, source, picks, taken="copy"):
                 mine.append(thing)
                 result.added.append((kind, name))
     level.apply_prefabs()                                       # (copies placed from a replaced prefab follow it)
+    level.apply_barricade_kinds()                               # (and barricades from a replaced type)
     return result
 
 

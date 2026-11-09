@@ -153,7 +153,7 @@ def _surface(fb, zb, x, r0, r1, y_near, y_far, t0, t1, px, py, rdx, rdy, tex, te
 
 
 @njit(cache=True)
-def _composite_panes(fb, x, n, pane_t, pane_tx, pane_id, pane_zlo, pane_zhi, pane_shade,
+def _composite_panes(fb, zb, x, n, pane_t, pane_tx, pane_id, pane_zlo, pane_zhi, pane_shade,
                      pane_ytop, pane_ybot, textures, eye_z, horizon, focal):
     """Blend the see-through wall faces recorded for a column over what is already drawn.
 
@@ -161,7 +161,9 @@ def _composite_panes(fb, x, n, pane_t, pane_tx, pane_id, pane_zlo, pane_zhi, pan
     everything behind the panes. They are laid on top from the farthest to the nearest, each
     only in the rows that were still visible when the ray reached it, so a pane never shows
     through a nearer opaque wall. Alpha 0 leaves the picture alone, 255 replaces it, and
-    anything between mixes the texture with what is behind it (glass)."""
+    anything between mixes the texture with what is behind it (glass). Where it replaces it, the
+    pane is what is seen there, so its distance goes in the depth buffer: a sprite behind solid
+    boards is hidden by them."""
     tsize = textures.shape[1]
     for p in range(n - 1, -1, -1):
         t = pane_t[p]
@@ -178,6 +180,7 @@ def _composite_panes(fb, x, n, pane_t, pane_tx, pane_id, pane_zlo, pane_zhi, pan
             if alpha == 255:
                 for c in range(3):
                     fb[x, r, c] = np.uint8(textures[tex, ty, pane_tx[p], c] * shade)
+                zb[x, r] = min(zb[x, r], t)
             else:
                 a = alpha / 255.0
                 for c in range(3):
@@ -364,7 +367,7 @@ def _render_column(fb, zb, x, px, py, eye_z, eye_span, rdx, rdy, horizon, focal,
             for c in range(3):
                 fb[x, r, c] = bg[c]
 
-    _composite_panes(fb, x, n_panes, pane_t, pane_tx, pane_id, pane_zlo, pane_zhi, pane_shade,
+    _composite_panes(fb, zb, x, n_panes, pane_t, pane_tx, pane_id, pane_zlo, pane_zhi, pane_shade,
                      pane_ytop, pane_ybot, textures, eye_z, horizon, focal)
 
 

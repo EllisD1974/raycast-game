@@ -60,6 +60,7 @@ class World:
             self.wall_sides[y, x, i, 1:] = side_band(level, x, y, SIDES[i])
         self.pane_tex = np.full((h, w), -1, np.int32)           # see-through wall tile per cell, or -1
         self.pane_top = np.full((h, w), 1e9, np.float32)        # how high that pane reaches (a short wall)
+        self.pane_open = np.zeros((h, w), np.uint8)             # 1: that pane lets bullets through (set_pane)
         wall_floor = np.array(level.grids["wall_floor"], np.int32)
         self.blocked = (self.solid != 0) & (wall_floor == 0)    # what the player cannot enter on any floor
         transparent = np.zeros(tile_count, bool) if transparent_tiles is None else np.asarray(transparent_tiles, bool)
@@ -79,6 +80,9 @@ class World:
         self.player_block = np.zeros((floors, h, w), np.uint8)  # floors of cells players cannot enter (set_blocks)
         self.enemy_block = np.zeros((floors, h, w), np.uint8)   # the same for enemies
         self.light_occluder = (self.solid_from == 0).astype(np.uint8)   # walls that fill every floor stop light
+        self.enemy_cost = np.zeros((floors, h, w), np.int32)    # extra cost of pathing through (set_cost)
+        self.tile_count = tile_count
+        self.extras = {}                                        # what a game mode keeps with the world (shared)
         self.revision = np.zeros(1, np.int64)                   # (an array so every view shares it)
         self._opened = {}                                       # (x, y) -> what close_cells covered up there
 
@@ -151,6 +155,26 @@ class World:
             if enemies is not None:
                 self.enemy_block[floor, y, x] = enemies
         self.revision[0] += 1
+
+    def set_cost(self, cells, cost, floor=0):
+        """Make finding the way for enemies through each (x, y) of `cells` on `floor` cost `cost` more (in
+        pathing.STRAIGHT steps), and let it through even while enemy_block stops them there: something they can
+        break (a boarded-up window), worth the detour only when the way round is longer."""
+        for x, y in cells:
+            self.enemy_cost[floor, y, x] = cost
+        self.revision[0] += 1
+
+    def path_cost(self, s, cx, cy):
+        """The extra cost of pathing through floor s of (cx, cy) for this world's movers (only enemies have any)."""
+        return int(self.enemy_cost[s, cy, cx]) if self.enemies else 0
+
+    def set_pane(self, x, y, tile, top, shoot_through=False):
+        """Show a see-through pane of atlas tile `tile` in open cell (x, y) of the ground floor up to height `top`,
+        or none (tile -1). It stops bullets (and sight, and blasts) below its top, like glass, unless shoot_through;
+        walking is up to set_blocks."""
+        self.pane_tex[y, x] = tile if 0 <= tile < self.tile_count else -1
+        self.pane_top[y, x] = top
+        self.pane_open[y, x] = shoot_through
 
     def mover_blocked(self, s, cx, cy):
         """True if set_blocks stops this world's movers (players, or enemies in the for_enemies view) on floor `s`
@@ -238,7 +262,7 @@ class World:
         if self.barrier[cy, cx]:
             if self.barred(cx, cy) and z < plane_z(self.ceil_plane, 0, cx, cy, x - cx, y - cy):
                 return False                    # (a barrier fills the ground floor's room, not the floors above)
-        elif self.pane_tex[cy, cx] >= 0 and z < self.pane_top[cy, cx]:
+        elif self.pane_tex[cy, cx] >= 0 and z < self.pane_top[cy, cx] and not self.pane_open[cy, cx]:
             return False
         fx, fy = x - cx, y - cy
         for s in range(min(self.floors, int(self.solid_from[cy, cx]))):     # (none in a wall, or a closed door)

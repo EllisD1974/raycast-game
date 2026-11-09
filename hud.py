@@ -9,7 +9,7 @@ from bomb import can_defuse, can_plant, clock_text, site_under
 from constants import HEIGHT, WIDTH
 from koth import HillView, on_hill
 from respawn import RespawnView
-from zombies import REVIVE_REACH, REVIVE_UP, ZombieView
+from zombies import REVIVE_REACH, REVIVE_UP, ZombieView, nearest_group
 from mapfile import CT_TEAM, DEFUSE_KIT, KOTH_NAMES, SITE_NAMES, T_TEAM, TEAM_NAMES
 
 TEXT = (255, 255, 255)
@@ -281,6 +281,31 @@ def draw_downed(picture, font, big, renderer, camera, view, me_id, me, level):
     if near:
         shadowed(picture, font, f"Hold E to revive {near[0][1][4] or 'your teammate'}", (WIDTH // 2, HEIGHT // 2 + 44),
                  HIGHLIGHT, center=True)
+
+
+def draw_rebuild(picture, font, view, me_id, me, level):
+    """Zombies: "Hold E to rebuild" beside a barricade missing boards (with what a board earns), and the next board's
+    progress while this player rebuilds it."""
+    if not isinstance(view, ZombieView) or me_id not in view.alive or me_id in view.downed:
+        return
+    if any(reviver == me_id for reviver, _ in view.revives.values()):
+        return                                          # (reviving says so itself)
+    groups = level.barricade_groups()
+    mine = view.repairs.get(me_id)
+    if mine is not None and 0 <= mine[0] < min(len(groups), len(view.boards)):
+        barricade = level.barricades[groups[mine[0]][0]]                    # (the group's settings)
+        draw_bar(picture, font, f"Rebuilding... {view.boards[mine[0]]} of {barricade.boards} boards",
+                 mine[1] / max(0.01, barricade.repair_time))
+        return
+    body = me.body
+    if body.span != 0:
+        return
+    g = nearest_group(level, groups, view.boards, body.x, body.y)
+    if g is not None:
+        barricade = level.barricades[groups[g][0]]
+        reward = (f" (+${barricade.reward:g})" if barricade.reward_kind == "money"
+                  else f" (+{barricade.reward:g} score)") if barricade.reward > 0 else ""
+        shadowed(picture, font, f"Hold E to rebuild{reward}", (WIDTH // 2, HEIGHT // 2 + 44), HIGHLIGHT, center=True)
 
 
 def draw_respawn(picture, font, view, me_id, watching=None):
