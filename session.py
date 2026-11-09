@@ -32,7 +32,7 @@ from koth import HillView, hill_sprite
 from respawn import RespawnView
 from zombies import ZombieView, enemy_sprites
 from constants import CROUCH_HEIGHT, PLAYER_HEIGHT
-from game import (MAX_STEP_DT, NO_TEAM, Events, Inputs, PlayerState, character_sprite, character_tile_for, clean_name,
+from game import (MAX_STEP_DT, NO_TEAM, Events, Inputs, PlayerState, character_sprite, character_tile_for, clean_name, speed_of,
                   move_body, shown_name, watchable_ids)
 from inventory import GunState, Inventory
 from lighting import LightSystem, follow as follow_lights, item_lights
@@ -310,7 +310,7 @@ class ClientSession:
         self.loads = 0                          # maps loaded so far: the first, then one for each reload
         self.level = self.world = self.items = None
         self.me = PlayerState(Player(0.0, 0.0, 0.0))
-        self.pending = []                       # (seq, Inputs, dt) sent and not yet carried out by the host
+        self.pending = []                       # (seq, Inputs, dt, speed) sent and not yet carried out by the host
         self.seq = 0
         self.recent = deque(maxlen=REPEAT_STEPS)    # the last steps as sent, sent again with each new one
         self.acked = 0                          # the last of our steps the host has said it carried out
@@ -348,10 +348,10 @@ class ClientSession:
             self.recent.append(dict(wish.to_dict(), seq=self.seq, dt=dt))
             steps = [step for step in self.recent if step["seq"] > self.acked]
             self.client.send(net.HOST_ID, {"type": "inputs", "steps": steps}, reliable=False)
-            ours = self.predicted(wish)
-            self.pending.append((self.seq, ours, dt))
+            ours, speed = self.predicted(wish), speed_of(self.round, self.id)
+            self.pending.append((self.seq, ours, dt, speed))
             self.sent_at[self.seq] = time.monotonic()
-            move_body(self.world.for_team(self.me.team), self.me.body, ours, dt)
+            move_body(self.world.for_team(self.me.team), self.me.body, ours, dt, speed)
         if self.items:
             self.items.clock += dt              # (only the bobbing: the host decides what is picked up)
         if self.game_time is not None:
@@ -374,7 +374,8 @@ class ClientSession:
         """The step as the host will run it: in bomb defusal, without moving while frozen, out of the round, planting
         or defusing; in King of the Hill, not while waiting to respawn (looking around is always ours)."""
         if self.round is None or self.round.may_move(self.id, self.me.body, wish.use, self.level):
-            return wish
+            restrict = getattr(self.round, "restrict", None)    # (zombies: a downed player only crawls)
+            return wish if restrict is None else restrict(self.id, wish, self.level)
         return Inputs(turn=wish.turn, tilt=wish.tilt, crouch=wish.crouch)
 
     def round_view(self):
@@ -474,8 +475,8 @@ class ClientSession:
             self.ping = time.monotonic() - self.sent_at[mine["ack"]]
         self.sent_at = {seq: t for seq, t in self.sent_at.items() if seq > mine["ack"]}
         self.pending = [step for step in self.pending if step[0] > mine["ack"]]
-        for _, wish, dt in self.pending:
-            move_body(self.world.for_team(self.me.team), body, wish, dt)
+        for _, wish, dt, speed in self.pending:
+            move_body(self.world.for_team(self.me.team), body, wish, dt, speed)
         self.me.body = body
         money = mine.get("money", 0.0)
         self.me.stats = PlayerStats(mine["score"], mine["health"], mine["max_health"],

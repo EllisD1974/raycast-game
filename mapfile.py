@@ -745,7 +745,9 @@ KOTH_NUMBERS = {"hill_time": (10.0, 3600.0), "unlock_time": (0.0, 600.0), "captu
                 "win_limit": (1.0, 99.0)}
 # Zombies settings that are numbers: (lowest, highest).
 ZOMBIE_NUMBERS = {"max_alive": (1.0, 500.0), "spawn_interval": (0.0, 60.0), "intermission": (0.0, 300.0),
-                  "game_over_time": (1.0, 60.0)}
+                  "game_over_time": (1.0, 60.0), "bleed_out": (1.0, 600.0), "revive_time": (0.1, 60.0),
+                  "revive_reward": (0.0, MAX_MONEY), "revive_health": (1.0, 10000.0), "downed_speed": (0.0, 3.0),
+                  "revive_grace": (0.0, 30.0)}
 ZOMBIE_COUNT = [[1, 6], [5, 18], [10, 40], [20, 110]]      # round -> enemies in it
 ZOMBIE_HEALTH = [[1, 1.0], [10, 2.0], [20, 4.0]]            # round -> what their health is multiplied by
 
@@ -865,7 +867,13 @@ class MapSettings:
     max_alive        at most this many enemies are in the map at once (the rest wait their turn)
     spawn_interval   seconds between one enemy coming in and the next
     intermission     seconds between rounds (and before the first)
-    game_over_time   seconds the game over message shows before a new game starts"""
+    game_over_time   seconds the game over message shows before a new game starts
+    A player at 0 health goes down instead of out while someone else is still standing: they crawl at
+    downed_speed (cells per second), can shoot when downed_can_shoot, and are out (until the next round) after
+    bleed_out seconds unless a teammate revives them by holding the use key (E) beside them for revive_time.
+    The reviver earns revive_reward; the revived player gets up with revive_health and cannot be hurt by enemies for
+    revive_grace seconds. Nobody standing is game over (alone, going down is). Players who were out come back at
+    the next round with only what a new player carries, unless keep_guns."""
     mode: str = "ffa"
     friendly_fire: bool = False
     max_health: float = 100.0
@@ -913,6 +921,14 @@ class MapSettings:
     spawn_interval: float = 1.5
     intermission: float = 10.0
     game_over_time: float = 8.0
+    bleed_out: float = 30.0
+    revive_time: float = 3.0
+    revive_reward: float = 100.0
+    revive_health: float = 50.0
+    downed_speed: float = 0.6
+    revive_grace: float = 2.0
+    downed_can_shoot: bool = True
+    keep_guns: bool = False
 
     def copy(self):
         return replace(self, buy_items=[replace(b) for b in self.buy_items],
@@ -967,6 +983,8 @@ class MapSettings:
                    bomb_light=str(data.get("bomb_light", ""))[:MAX_NAME],
                    **{key: number(key, low, high) for key, (low, high) in BOMB_NUMBERS.items()},
                    **{key: number(key, low, high) for key, (low, high) in KOTH_NUMBERS.items()},
+                   downed_can_shoot=bool(data.get("downed_can_shoot", base.downed_can_shoot)),
+                   keep_guns=bool(data.get("keep_guns", base.keep_guns)),
                    zombie_count=read_curve(data.get("zombie_count"), ZOMBIE_COUNT, 0.0, 10000.0),
                    zombie_health=read_curve(data.get("zombie_health"), ZOMBIE_HEALTH, 0.01, 1000.0),
                    **{key: number(key, low, high) for key, (low, high) in ZOMBIE_NUMBERS.items()})

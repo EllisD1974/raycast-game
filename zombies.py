@@ -5,7 +5,12 @@ The map defines kinds of enemy (mapfile.Enemy: health, speed, size, attacks, who
 tougher as the rounds go on (zombie_health), no more than max_alive at once, one every spawn_interval seconds. They
 find their way to the players (pathing.py) and attack whoever they reach. Players earn money for every hit and kill.
 When all of a round's enemies are dead the next round starts after the intermission, and the players who were knocked
-out come back. When every player is out, the game is over: after a moment a new game starts at round 1.
+out come back.
+
+A player at 0 health goes down while someone else is still standing: they crawl, can still shoot (if the map says
+so), and enemies leave them alone. A teammate holding the use key (E) beside them for a while revives them; otherwise
+they bleed out and are out until the next round. When nobody is left standing, the game is over: after a moment a new
+game starts at round 1. (Alone, going down is the end.)
 
 A round goes: "intermission" (counting down to the next round) -> "live" (enemies come in and attack) -> the
 intermission again; "over" when every player is out.
@@ -15,9 +20,9 @@ ZombieRound stands in for Game.round (like bomb.Round). Enemies are targets the 
 ZombieRound.view() and sends it to joiners as a dict.
 """
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
-from constants import PLAYER_HEIGHT, PLAYER_RADIUS
+from constants import CROUCH_MULTIPLIER, MOVE_SPEED, PLAYER_HEIGHT, PLAYER_RADIUS
 from mapfile import ENEMY_SPAWN, MAX_MONEY, Enemy, curve_at
 from pathing import Pathing, STRAIGHT
 from physics import Player, can_stand, spawn_at, step
@@ -28,6 +33,8 @@ HIT_FLASH = 0.25                # seconds an enemy shows red after being hurt
 CROWD = 0.9                     # how hard enemies closer than their two radii push apart (share of the overlap a step)
 NOTE_TIME = 3.0                 # seconds a message stays on screen
 NO_WAY = 1e9                    # the cost of chasing a player there is no way to
+REVIVE_REACH = 1.0              # how close (cells, across) a player has to be to a downed one to revive them
+REVIVE_UP = 1.0                 # ... and how far above or below
 
 
 @dataclass
@@ -72,32 +79,63 @@ class ZombieView:
     message: str = ""
     message_left: float = 0.0
     enemies: list = field(default_factory=list)     # [kind, x, y, z, angle, red] each
+    downed: dict = field(default_factory=dict)      # player id -> (seconds until they bleed out, x, y, z, name)
+    revives: dict = field(default_factory=dict)     # downed player id -> (reviver's id, seconds of reviving done)
+    crawl: float = 0.6                              # how fast the downed crawl (the map's downed_speed)
     can_buy: bool = True
 
     def may_move(self, pid, body, use, level):
-        """Whether a player may move this step: anyone not out."""
+        """Whether a player may move this step: anyone not out (a downed player crawls: see restrict)."""
         return pid in self.alive
+
+    def restrict(self, pid, wish, level):
+        """The Inputs a player not out may use: all of them, but a downed player only crawls (see downed_inputs)."""
+        return downed_inputs(wish, level.settings) if pid in self.downed else wish
+
+    def speed_of(self, pid):
+        return walking_speed(pid in self.downed, self.crawl)
 
     def to_dict(self):
         return {"mode": self.mode, "alive": sorted(self.alive), "number": self.number, "phase": self.phase,
                 "clock": round(self.clock, 2), "left": self.left, "msg": self.message,
-                "msg_left": round(self.message_left, 2),
+                "msg_left": round(self.message_left, 2), "crawl": self.crawl,
                 "enemies": [[kind, round(x, 3), round(y, 3), round(z, 3), round(angle, 2), round(red, 2)]
-                            for kind, x, y, z, angle, red in self.enemies]}
+                            for kind, x, y, z, angle, red in self.enemies],
+                "downed": [[pid, round(left, 2), round(x, 3), round(y, 3), round(z, 3), name]
+                           for pid, (left, x, y, z, name) in sorted(self.downed.items())],
+                "revives": [[pid, reviver, round(done, 2)] for pid, (reviver, done) in sorted(self.revives.items())]}
 
     @classmethod
     def from_dict(cls, data, teams=None):
         """The view in a snapshot; None if it is not one (it came off the network)."""
         try:
-            enemies = []
-            for kind, x, y, z, angle, red in data["enemies"]:
-                enemies.append((int(kind), float(x), float(y), float(z), float(angle), float(red)))
+            enemies = [(int(kind), float(x), float(y), float(z), float(angle), float(red))
+                       for kind, x, y, z, angle, red in data["enemies"]]
+            downed = {int(pid): (float(left), float(x), float(y), float(z), str(name)[:32])
+                      for pid, left, x, y, z, name in data["downed"]}
+            revives = {int(pid): (int(reviver), float(done)) for pid, reviver, done in data["revives"]}
             phase = data["phase"] if data["phase"] in ("intermission", "live", "over") else "intermission"
             return cls({int(p) for p in data["alive"]}, dict(teams or {}), int(data["number"]), phase,
                        float(data["clock"]), int(data["left"]), str(data["msg"])[:80], float(data["msg_left"]),
-                       enemies)
+                       enemies, downed, revives, max(0.0, min(3.0, float(data["crawl"]))))
         except (KeyError, IndexError, TypeError, ValueError):
             return None
+
+
+def downed_inputs(wish, settings):
+    """What a downed player may do of what they asked for: crawl (crouched: no jumping or sprinting), look around,
+    and shoot, reload and switch guns if the map lets them (downed_can_shoot); not use anything or buy."""
+    from game import Inputs                         # (game imports this module)
+    shoot = settings.downed_can_shoot
+    return Inputs(forward=wish.forward, strafe=wish.strafe, turn=wish.turn, tilt=wish.tilt, crouch=True,
+                  fire=wish.fire and shoot, reload=wish.reload and shoot, equip=wish.equip if shoot else (),
+                  cycle=wish.cycle if shoot else 0)
+
+
+def walking_speed(downed, crawl):
+    """The speed physics.step is given for a player: MOVE_SPEED, or for a downed one (who is crouched, which slows
+    them by CROUCH_MULTIPLIER) whatever makes them crawl at `crawl` cells per second."""
+    return crawl / CROUCH_MULTIPLIER if downed else MOVE_SPEED
 
 
 DEFAULT_KINDS = [Enemy()]
@@ -151,14 +189,21 @@ class ZombieRound:
         self.message, self.message_left = "", 0.0
         self.paths = {}                         # body height -> Pathing (the places differ with height)
         self.spawn_turn = 0                     # which spawner the next enemy comes in at
+        self.downed = {}                        # player id -> seconds until they bleed out
+        self.revives = {}                       # downed player id -> [reviver's id, seconds of reviving done]
+        self.grace = {}                         # player id -> seconds enemies cannot hurt them (just revived)
 
     # ------------------------------------------------------------------ what Game asks of a round
 
     def view(self):
         players = self.game.players
+        downed = {pid: (left, players[pid].body.x, players[pid].body.y, players[pid].body.z, players[pid].name)
+                  for pid, left in self.downed.items()}
         return ZombieView({pid for pid, s in players.items() if s.alive}, {pid: s.team for pid, s in players.items()},
                           self.number, self.phase, self.clock, self.to_spawn + len(self.enemies), self.message,
-                          self.message_left, self.shown_enemies())
+                          self.message_left, self.shown_enemies(), downed,
+                          {pid: tuple(entry) for pid, entry in self.revives.items()},
+                          self.game.level.settings.downed_speed)
 
     def can_buy(self):
         return True
@@ -170,22 +215,95 @@ class ZombieRound:
         return enemy_sprites(self.game.level, self.shown_enemies(), first_tile, viewer_angle)
 
     def act(self, pid, wish, dt):
-        """The Inputs a player may use this step: only looking around while out."""
+        """The Inputs a player may use this step: only looking around while out, crawling while down, and not
+        shooting while reviving someone (holding the use key beside them, which this step counts toward)."""
         from game import Inputs                         # (game imports this module)
         if not self.game.players[pid].alive:
             return Inputs(turn=wish.turn, tilt=wish.tilt)
+        if pid in self.downed:
+            return downed_inputs(wish, self.game.level.settings)
+        if self.revive_step(pid, wish.use, dt):
+            wish = replace(wish, fire=False)
         return wish
 
+    def speed_of(self, pid):
+        return walking_speed(pid in self.downed, self.game.level.settings.downed_speed)
+
     def killed(self, pid):
-        """A player was knocked out: out until the next round starts (the game is over if nobody is left)."""
-        self.game.players[pid].alive = False
+        """A player's health ran out: down, while anyone else is standing to revive them; else out until the next
+        round starts (and the game is over if nobody is left standing)."""
+        if pid in self.downed:
+            return                                  # (already down: hurting them more changes nothing)
+        if any(other != pid for other in self.standing()):
+            self.downed[pid] = self.game.level.settings.bleed_out
+            self.revives.pop(next((d for d, (r, _) in self.revives.items() if r == pid), None), None)
+        else:
+            self.game.players[pid].alive = False
+        self.check_over()
+
+    # ------------------------------------------------------------------ going down and reviving
+
+    def in_reach(self, body, other):
+        return (math.hypot(other.x - body.x, other.y - body.y) <= REVIVE_REACH
+                and abs(other.z - body.z) <= REVIVE_UP)
+
+    def revive_step(self, pid, use, dt):
+        """A standing player's step toward reviving the downed player beside them while they hold the use key.
+        True while they are reviving someone."""
+        mine = next((d for d, (r, _) in self.revives.items() if r == pid), None)
+        players = self.game.players
+        body = players[pid].body
+        if mine is not None and (not use or mine not in self.downed or not self.in_reach(body, players[mine].body)):
+            del self.revives[mine]                  # (let go, or moved away: it starts over)
+            mine = None
+        if not use:
+            return False
+        if mine is None:
+            free = [d for d in self.downed if d not in self.revives and d in players
+                    and self.in_reach(body, players[d].body)]
+            if not free:
+                return False
+            mine = min(free, key=lambda d: math.hypot(players[d].body.x - body.x, players[d].body.y - body.y))
+            self.revives[mine] = [pid, 0.0]
+        self.revives[mine][1] += dt
+        if self.revives[mine][1] >= self.game.level.settings.revive_time:
+            self.revive(mine, pid)
+        return True
+
+    def revive(self, pid, reviver=None):
+        """A downed player gets up: with the map's revive_health, safe from enemies for a moment, and the one who
+        revived them is paid."""
+        settings = self.game.level.settings
+        state = self.game.players[pid]
+        self.downed.pop(pid, None)
+        self.revives.pop(pid, None)
+        state.stats.health = min(state.stats.max_health, settings.revive_health)
+        self.grace[pid] = settings.revive_grace
+        if reviver is not None:
+            self.pay(reviver, settings.revive_reward)
+            self.game.notes.setdefault(reviver, []).append(f"Revived {state.name or 'a teammate'}")
+
+    def bleed(self, dt):
+        """Downed players' time runs out: out until the next round. Grace after a revive runs out too."""
+        for pid in list(self.downed):
+            self.downed[pid] -= dt
+            if self.downed[pid] <= 0:
+                del self.downed[pid]
+                self.revives.pop(pid, None)
+                self.game.players[pid].alive = False
+        for pid in list(self.grace):
+            self.grace[pid] -= dt
+            if self.grace[pid] <= 0:
+                del self.grace[pid]
         self.check_over()
 
     def joined(self, pid):
         self.game.players[pid].alive = self.phase != "over"
 
     def left(self, pid):
-        pass
+        self.downed.pop(pid, None)
+        self.grace.pop(pid, None)
+        self.revives = {d: entry for d, entry in self.revives.items() if pid not in (d, entry[0])}
 
     def after_leaving(self):
         self.check_over()
@@ -223,8 +341,8 @@ class ZombieRound:
             state.stats.money = min(MAX_MONEY, state.stats.money + amount)
 
     def standing(self):
-        """{player id: PlayerState} of the players not out."""
-        return {pid: s for pid, s in self.game.players.items() if s.alive}
+        """{player id: PlayerState} of the players not out or down."""
+        return {pid: s for pid, s in self.game.players.items() if s.alive and pid not in self.downed}
 
     def check_over(self):
         if self.phase != "over" and self.game.players and not self.standing():
@@ -242,13 +360,20 @@ class ZombieRound:
         self.say(f"Round {self.number}")
 
     def end_round(self):
-        """Every enemy of the round is dead: the players who were out come back, and the intermission starts."""
+        """Every enemy of the round is dead: the downed get up, the players who were out come back (with only what a
+        new player carries, unless the map keeps their guns), and the intermission starts."""
+        settings = self.game.level.settings
         self.phase = "intermission"
-        self.clock = self.game.level.settings.intermission
+        self.clock = settings.intermission
         self.say(f"Round {self.number} survived")
+        for pid in list(self.downed):
+            self.revive(pid)
         for state in self.game.players.values():
             if not state.alive:
+                kept = state.inventory
                 self.game.respawn(state)
+                if settings.keep_guns:
+                    state.inventory = kept
                 state.alive = True
 
     def new_game(self):
@@ -259,6 +384,7 @@ class ZombieRound:
         self.phase = "intermission"
         self.clock = game.level.settings.intermission
         self.to_spawn = 0
+        self.downed, self.revives, self.grace = {}, {}, {}
         game.spawns.restart()
         for state in game.players.values():
             state.stats.money = game.level.settings.start_money
@@ -272,6 +398,9 @@ class ZombieRound:
             self.clock -= dt
             if self.clock <= 0:
                 self.new_game()
+            return
+        self.bleed(dt)
+        if self.phase == "over":
             return
         if self.phase == "intermission":
             self.clock -= dt
@@ -383,7 +512,8 @@ class ZombieRound:
                     enemy.attack_left -= dt
                     attack = kind.attacks[enemy.attack] if enemy.attack < len(kind.attacks) else None
                     if enemy.attack_left <= 0:
-                        if attack is not None and self.reach(enemy, kind, attack, body):
+                        if (attack is not None and self.reach(enemy, kind, attack, body)
+                                and enemy.target not in self.grace and enemy.target in self.standing()):
                             game.hurt(enemy.target, attack.damage)
                         enemy.cooldown = attack.cooldown if attack is not None else 0.0
                         enemy.attack = None

@@ -9,7 +9,7 @@ from bomb import can_defuse, can_plant, clock_text, site_under
 from constants import HEIGHT, WIDTH
 from koth import HillView, on_hill
 from respawn import RespawnView
-from zombies import ZombieView
+from zombies import REVIVE_REACH, REVIVE_UP, ZombieView
 from mapfile import CT_TEAM, DEFUSE_KIT, KOTH_NAMES, SITE_NAMES, T_TEAM, TEAM_NAMES
 
 TEXT = (255, 255, 255)
@@ -235,6 +235,52 @@ def draw_zombies(picture, font, big, view, me_id, watching=None):
         if watching:
             text += f" - watching {watching} (left / right click: next / previous)"
         shadowed(picture, font, text, (middle, HEIGHT - 70), DIM, center=True)
+
+
+def draw_downed(picture, font, big, renderer, camera, view, me_id, me, level):
+    """Zombies: a marker over each downed teammate (with their bleed-out time), at the edge of the picture toward them
+    when they are not in view; and what this player can do about it: "Hold E to revive", the revive's progress, or,
+    when they are down themselves, how long they have left and who is reviving them."""
+    if not isinstance(view, ZombieView) or me_id not in view.alive:
+        return
+    width, height = picture.get_size()
+    revive_time = max(0.01, level.settings.revive_time)
+    for pid, (left, x, y, z, name) in view.downed.items():
+        if pid == me_id or math.hypot(x - camera.x, y - camera.y) <= REVIVE_REACH * 2:
+            continue                                    # (close by, the revive prompt says it)
+        text = f"+ {name or 'Teammate'} {max(0, math.ceil(left))}s"
+        spot = renderer.project(camera, x, y, z + 0.4)
+        if spot is not None and 0 <= spot[0] < width:
+            shadowed(picture, font, text, (int(spot[0]), max(48, min(height - 90, int(spot[1]) - 24))), DANGER,
+                     center=True)
+            continue
+        turn = math.atan2(y - camera.y, x - camera.x) - camera.angle
+        turn = (turn + math.pi) % math.tau - math.pi
+        text = "< " + text if turn < 0 else text + " >"         # (to the left of the view, or to the right)
+        x = 8 if turn < 0 else width - 8 - font.size(text)[0]
+        shadowed(picture, font, text, (x, height // 2), DANGER)
+    if me_id in view.downed:
+        left = view.downed[me_id][0]
+        shadowed(picture, big, f"DOWNED - {max(0, math.ceil(left))}s", (WIDTH // 2, HEIGHT // 2 + 30), DANGER,
+                 center=True)
+        helper = view.revives.get(me_id)
+        if helper is not None:
+            draw_bar(picture, font, "Being revived...", helper[1] / revive_time)
+        else:
+            shadowed(picture, font, "Wait for a teammate to revive you", (WIDTH // 2, HEIGHT - 70), DIM,
+                     center=True)
+        return
+    mine = next((pid for pid, (reviver, _) in view.revives.items() if reviver == me_id), None)
+    if mine is not None:
+        name = view.downed.get(mine, (0, 0, 0, 0, ""))[4] or "teammate"
+        draw_bar(picture, font, f"Reviving {name}...", view.revives[mine][1] / revive_time)
+        return
+    body = me.body
+    near = [(pid, entry) for pid, entry in view.downed.items() if pid != me_id and pid not in view.revives
+            and math.hypot(entry[1] - body.x, entry[2] - body.y) <= REVIVE_REACH and abs(entry[3] - body.z) <= REVIVE_UP]
+    if near:
+        shadowed(picture, font, f"Hold E to revive {near[0][1][4] or 'your teammate'}", (WIDTH // 2, HEIGHT // 2 + 44),
+                 HIGHLIGHT, center=True)
 
 
 def draw_respawn(picture, font, view, me_id, watching=None):

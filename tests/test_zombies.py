@@ -154,15 +154,18 @@ def test_later_rounds_have_tougher_enemies():
 
 
 def test_killing_every_enemy_ends_the_round_and_brings_the_out_players_back():
-    game = zombie_game(players=(0, 1))
+    game = zombie_game(players=(0, 1, 2), bleed_out=0.1)
     go_live(game)
     play(game, 0.3)
     game.hurt(1, 1000)
+    game.hurt(2, 1000)
+    play(game, 0.2)                                         # 1 and 2 bleed out
     assert not game.players[1].alive and game.round.phase == "live"
     for enemy in list(game.round.enemies.values()):
         game.round.hurt_target(("z", enemy.ident), 1000, 0, None)
     play(game, DT * 2)
-    assert game.round.phase == "intermission" and game.players[1].alive
+    assert game.round.phase == "intermission" and game.players[1].alive and game.players[2].alive
+    assert game.players[1].stats.health == game.players[1].stats.max_health
     assert "Round 1 survived" in game.round.message
 
 
@@ -295,6 +298,140 @@ def test_a_map_without_enemy_kinds_sends_plain_zombies():
     assert game.round.enemies
 
 
+# ------------------------------------------------------------------ going down and reviving
+
+def down(game, pid):
+    game.hurt(pid, 10000)
+    assert pid in game.round.downed and game.players[pid].alive
+
+
+def test_a_player_with_a_teammate_standing_goes_down_instead_of_out():
+    game = zombie_game(players=(0, 1))
+    go_live(game)
+    down(game, 1)
+    assert game.round.phase == "live"
+    assert game.round.view().downed[1][0] == game.level.settings.bleed_out
+
+
+def test_alone_going_down_is_game_over():
+    game = zombie_game()
+    go_live(game)
+    game.hurt(0, 10000)
+    assert game.round.phase == "over" and not game.round.downed
+
+
+def test_nobody_left_standing_is_game_over():
+    game = zombie_game(players=(0, 1))
+    go_live(game)
+    down(game, 1)
+    game.hurt(0, 10000)
+    assert game.round.phase == "over"
+
+
+def test_a_downed_player_crawls_crouched_and_may_shoot():
+    game = zombie_game(players=(0, 1), downed_speed=0.6)
+    go_live(game)
+    down(game, 1)
+    body = game.players[1].body
+    place(body, 5.5, 5.5)
+    body.angle = 0.0
+    play(game, 1.0, {1: Inputs(forward=1, sprint=True, jump=True, fire=True)})
+    assert body.crouched and body.on_ground
+    assert body.x - 5.5 == pytest.approx(0.6, abs=0.05)
+    assert game.round.act(1, Inputs(fire=True, use=True), DT).fire
+    assert not game.round.act(1, Inputs(use=True), DT).use
+
+
+def test_a_downed_player_may_not_shoot_on_maps_that_say_so():
+    game = zombie_game(players=(0, 1), downed_can_shoot=False)
+    go_live(game)
+    down(game, 1)
+    assert not game.round.act(1, Inputs(fire=True), DT).fire
+
+
+def test_bleeding_out():
+    game = zombie_game(players=(0, 1), bleed_out=1.0)
+    go_live(game)
+    down(game, 1)
+    play(game, 1.1)
+    assert not game.players[1].alive and 1 not in game.round.downed and game.round.phase == "live"
+
+
+def test_a_revive_takes_holding_e_beside_them_and_pays():
+    game = zombie_game(players=(0, 1), revive_time=1.0, revive_reward=100, revive_health=40)
+    go_live(game)
+    down(game, 1)
+    place(game.players[1].body, 5.5, 5.5)
+    place(game.players[0].body, 6.2, 5.5)
+    play(game, 0.5, {0: Inputs(use=True, fire=True)})
+    assert game.round.view().revives[1][0] == 0 and 1 in game.round.downed
+    assert not game.round.act(0, Inputs(use=True, fire=True), DT).fire        # (no shooting while reviving)
+    play(game, 0.6, {0: Inputs(use=True)})
+    assert 1 not in game.round.downed
+    assert game.players[1].stats.health == 40 and game.players[0].stats.money == 100
+
+
+def test_letting_go_or_walking_away_starts_the_revive_over():
+    game = zombie_game(players=(0, 1), revive_time=1.0)
+    go_live(game)
+    down(game, 1)
+    place(game.players[1].body, 5.5, 5.5)
+    place(game.players[0].body, 6.2, 5.5)
+    play(game, 0.6, {0: Inputs(use=True)})
+    play(game, DT, {0: Inputs()})
+    assert 1 not in game.round.revives
+    play(game, 0.6, {0: Inputs(use=True)})
+    place(game.players[0].body, 9.5, 5.5)                   # too far now
+    play(game, 0.6, {0: Inputs(use=True)})
+    assert 1 in game.round.downed and 1 not in game.round.revives
+
+
+def test_enemies_leave_the_downed_alone_and_spare_the_just_revived():
+    game = zombie_game(players=(0, 1), enemies=[Enemy(speed=0.1, attacks=[Attack(damage=10, windup=0.0,
+                                                                                    cooldown=0.1)])],
+                       zombie_count=[[1, 1]], revive_grace=1.0)
+    go_live(game)
+    play(game, 0.3)
+    enemy = next(iter(game.round.enemies.values()))
+    place(game.players[0].body, 2.5, 9.5)
+    victim = game.players[1]
+    place(victim.body, enemy.body.x - 0.6, enemy.body.y)
+    down(game, 1)
+    play(game, 1.0)
+    assert victim.stats.health == 0 and enemy.target == 0  # (left alone, chasing the one standing)
+    game.round.revive(1)
+    place(victim.body, enemy.body.x - 0.6, enemy.body.y)
+    health = victim.stats.health
+    play(game, 0.5)
+    assert victim.stats.health == health                    # in its grace
+    play(game, 1.5)
+    assert victim.stats.health < health
+
+
+def test_the_downed_get_up_when_the_round_is_won():
+    game = zombie_game(players=(0, 1))
+    go_live(game)
+    play(game, 0.3)
+    down(game, 1)
+    for enemy in list(game.round.enemies.values()):
+        game.round.hurt_target(("z", enemy.ident), 1000, 0, None)
+    play(game, DT * 2)
+    assert not game.round.downed and game.players[1].stats.health == game.level.settings.revive_health
+
+
+def test_players_out_keep_their_guns_if_the_map_says_so():
+    from mapfile import Gun
+    for keep in (False, True):
+        game = zombie_game(players=(0, 1, 2), bleed_out=0.1, keep_guns=keep)
+        game.level.guns = [Gun(name="Rifle")]
+        go_live(game)
+        game.players[1].inventory.give_gun(game.level.guns[0])
+        down(game, 1)
+        play(game, 0.2)
+        game.round.end_round()
+        assert bool(game.players[1].inventory.guns) == keep
+
+
 # ------------------------------------------------------------------ what players see
 
 def test_enemies_are_drawn_tinted_and_as_tall_as_their_kind():
@@ -310,7 +447,8 @@ def test_enemies_are_drawn_tinted_and_as_tall_as_their_kind():
 
 
 def test_the_view_goes_over_the_network_and_back():
-    view = ZombieView({0, 2}, {}, 3, "live", 0.0, 12, "Round 3", 1.5, [(0, 1.5, 2.5, 0.0, 0.5, 0.25)])
+    view = ZombieView({0, 2}, {}, 3, "live", 0.0, 12, "Round 3", 1.5, [(0, 1.5, 2.5, 0.0, 0.5, 0.25)],
+                      {2: (12.5, 3.5, 4.5, 0.0, "Sam")}, {2: (0, 1.25)}, 0.8)
     again = ZombieView.from_dict(json.loads(json.dumps(view.to_dict())))
     assert again == view
     assert ZombieView.from_dict({"mode": "zombies", "enemies": [[1, 2]]}) is None
@@ -405,3 +543,53 @@ def test_spawn_points_can_be_for_enemies(ed):
     assert ed.spawn_team == ENEMY_SPAWN and ed.spawn_team_label(ed.spawn_team) == "Enemies"
     ed.do("spawn_team")
     assert ed.spawn_team == 0
+
+
+def test_a_downed_joiner_crawls_on_its_own_screen_as_on_the_host():
+    level = zombie_level(downed_speed=0.6)
+    host = HostSession(Game(level, World(level, 32), random.Random(1), character_tile=FIRST_CHARACTER),
+                       net.Host("pw", port=0))
+    client = ClientSession(net.Client("127.0.0.1", host.host.port, "pw"), make_world, FIRST_CHARACTER)
+    try:
+        run([host, client], lambda: client.ready and isinstance(client.round, ZombieView))
+        host.game.hurt(client.id, 10000)
+        run([host, client], lambda: client.id in client.round.downed)
+        place(host.game.players[client.id].body, 5.5, 5.5)
+        run([host, client], lambda: abs(client.me.body.x - 5.5) < 0.01)
+        client.me.body.angle = host.game.players[client.id].body.angle = 0.0
+        start = client.me.body.x
+        for _ in range(30):
+            client.step(Inputs(forward=1, sprint=True), DT)
+        assert client.me.body.x - start == pytest.approx(0.3, abs=0.05)     # crawling, ahead of the host
+        run([host, client], lambda: abs(host.game.players[client.id].body.x - client.me.body.x) < 0.02)
+    finally:
+        client.close()
+        host.close()
+
+
+class Lens:
+    """A renderer that only projects (what draw_downed asks of it): everything ahead lands mid-picture."""
+
+    def project(self, camera, x, y, z):
+        ahead = (x - camera.x) * math.cos(camera.angle) + (y - camera.y) * math.sin(camera.angle)
+        return (320.0, 180.0, ahead) if ahead > 0.1 else None
+
+
+def test_the_downed_hud_draws_for_everyone():
+    from hud import draw_downed
+    game = zombie_game(players=(0, 1, 2))
+    go_live(game)
+    down(game, 1)
+    place(game.players[1].body, 5.5, 5.5)
+    place(game.players[0].body, 6.0, 5.5)
+    place(game.players[2].body, 9.5, 5.5)
+    game.players[2].body.angle = 0.0                        # (facing away: the marker goes to the edge)
+    picture = pygame.Surface((640, 360))
+    font, big = pygame.font.Font(None, 22), pygame.font.Font(None, 30)
+    for pid in (0, 1, 2):
+        draw_downed(picture, font, big, Lens(), game.players[pid].body, game.round.view(), pid, game.players[pid],
+                    game.level)
+    play(game, 0.2, {0: Inputs(use=True)})
+    for pid in (0, 1):
+        draw_downed(picture, font, big, Lens(), game.players[pid].body, game.round.view(), pid, game.players[pid],
+                    game.level)

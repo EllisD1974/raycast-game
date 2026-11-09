@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 
 from bomb import Round
 from character import PICTURES, SHIRTS, VIEWS, character_view
-from constants import PLAYER_HEIGHT
+from constants import MOVE_SPEED, PLAYER_HEIGHT
 from entities import Entities, PlayerStats
 from explosions import blast_results
 from inventory import Inventory
@@ -73,11 +73,18 @@ class Inputs:
                    bool(data.get("use")), bool(data.get("drop")), bool(data.get("crouch")))
 
 
-def move_body(world, body, wish, dt):
-    """Move and turn a player's body by what `wish` asked for over dt seconds. A joiner runs this too,
-    ahead of the host, to predict where its own moves will put it."""
-    step(world, body, wish.forward, wish.strafe, wish.turn, wish.jump, dt, wish.sprint, wish.crouch)
+def move_body(world, body, wish, dt, speed=MOVE_SPEED):
+    """Move and turn a player's body by what `wish` asked for over dt seconds, walking at `speed` (a downed player in
+    zombies crawls). A joiner runs this too, ahead of the host, to predict where its own moves will put it."""
+    step(world, body, wish.forward, wish.strafe, wish.turn, wish.jump, dt, wish.sprint, wish.crouch, speed)
     look(body, wish.tilt)
+
+
+def speed_of(round_, player_id):
+    """How fast a player walks in a round (or a round's view, for a joiner's prediction): MOVE_SPEED unless the
+    round says otherwise (a downed player in zombies crawls)."""
+    speed = getattr(round_, "speed_of", None)
+    return MOVE_SPEED if speed is None else speed(player_id)
 
 
 def muzzle_event(effect, body, offset=None, shift=(0.0, 0.0, 0.0)):
@@ -387,7 +394,8 @@ class Game:
             inventory.equip(slot)
         if wish.cycle:
             inventory.cycle(wish.cycle)
-        move_body(self.world.for_team(state.team), body, wish, dt)     # (through their own team's barriers only)
+        move_body(self.world.for_team(state.team), body, wish, dt,     # (through their own team's barriers only)
+                  speed_of(self.round, player_id))
         fired = inventory.update(dt, wish.fire, wish.reload)
         for gun in fired:
             self.projectiles.fire(body, gun, self.level.ammo_for(gun), player_id, state.team)

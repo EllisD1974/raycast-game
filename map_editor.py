@@ -313,7 +313,10 @@ KOTH_FIELDS = (("hill_time", "Time to hold (s)", 10.0), ("unlock_time", "Point u
                ("win_limit", "Rounds to win", 1.0))
 # Zombies settings in the Map settings section, likewise.
 ZOMBIE_FIELDS = (("max_alive", "Most enemies at once", 1.0), ("spawn_interval", "Between spawns (s)", 0.25),
-                 ("intermission", "Between rounds (s)", 1.0), ("game_over_time", "Game over pause (s)", 1.0))
+                 ("intermission", "Between rounds (s)", 1.0), ("game_over_time", "Game over pause (s)", 1.0),
+                 ("bleed_out", "Downed bleed out (s)", 5.0), ("downed_speed", "Downed crawl (cells/s)", 0.1),
+                 ("revive_time", "Revive takes (s)", 0.5), ("revive_reward", "Money / revive", 10.0),
+                 ("revive_health", "Health after revive", 5.0), ("revive_grace", "Safe after revive (s)", 0.5))
 # An enemy kind's numbers in the Details pane, and its attacks'.
 ENEMY_FIELDS = (("health", "Health", 10.0), ("speed", "Speed (cells/s)", 0.1), ("height", "Height", 0.05),
                 ("radius", "Radius", 0.05), ("kill_reward", "Money / kill", 10.0), ("hit_reward", "Money / hit", 5.0),
@@ -1591,7 +1594,11 @@ class Editor:
             for name, label, step in ZOMBIE_FIELDS:
                 low, high = ZOMBIE_NUMBERS[name]
                 fields.append(field(name, label, "num", step=step, low=low, high=high))
-            fields += [Field("zombie_count_note", "Enemies a round", "info",
+            fields += [field("downed_can_shoot", "Downed can shoot", "enum", choices=(False, True),
+                             labels={False: "No", True: "Yes"}),
+                       field("keep_guns", "Back next round with", "enum", choices=(False, True),
+                             labels={False: "Only the start gun", True: "Their guns"}),
+                       Field("zombie_count_note", "Enemies a round", "info",
                              (lambda: curve_text(rules.zombie_count)), None),
                        Field("zombie_health_note", "Health times", "info",
                              (lambda: curve_text(rules.zombie_health)), None)]
