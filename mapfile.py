@@ -249,7 +249,7 @@ class Barricade:
     and enemies only once every board is torn off. Enemies coming that way stop to tear the boards off; players
     rebuild them by holding the use key (E) beside it. Bullets and blasts go through it.
 
-    Barricades in cells side by side are one barricade (Level.barricade_groups): torn down and rebuilt together,
+    Barricades in cells that touch (side by side or corner to corner) are one barricade (Level.barricade_groups): torn down and rebuilt together,
     with the boards, rebuild time and reward of the first of them in the map's list; each cell shows its own
     pictures for how far the whole is torn down.
 
@@ -1205,7 +1205,7 @@ class Level:
 
     def barricade_groups(self):
         """The barricades that act as one: [[index, ...], ...], each group the barricades joined cell to cell (side
-        by side, not corner to corner), in order of their first index, which is the one whose settings count."""
+        by side or corner to corner), in order of their first index, which is the one whose settings count."""
         at = {(b.x, b.y): i for i, b in enumerate(self.barricades)}
         seen, groups = set(), []
         for i, b in enumerate(self.barricades):
@@ -1216,7 +1216,7 @@ class Level:
             while todo:
                 x, y = todo.pop()
                 group.append(at[(x, y)])
-                for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+                for nx, ny in ((x + dx, y + dy) for dx in (-1, 0, 1) for dy in (-1, 0, 1) if dx or dy):
                     j = at.get((nx, ny))
                     if j is not None and j not in seen:
                         seen.add(j)

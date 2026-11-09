@@ -13,8 +13,8 @@ they bleed out and are out until the next round. When nobody is left standing, t
 game starts at round 1. (Alone, going down is the end.)
 
 Barricades (mapfile.Barricade) board up openings: players can never walk through one, enemies only once its boards
-are all torn off; bullets go through. Barricades side by side are one (Level.barricade_groups), with one count of
-boards. An enemy whose way leads through a boarded one stops at it and tears a board off every break_rate
+are all torn off; bullets go through. Barricades that touch (side by side or corner to corner) are one
+(Level.barricade_groups), with one count of boards. An enemy whose way leads through a boarded one stops at it and tears a board off every break_rate
 seconds; a player holding the use key beside one puts a board back every repair_time seconds, for a reward (up to a
 cap each round). apply_boards keeps a world (the host's and each joiner's own) showing the boards there are.
 

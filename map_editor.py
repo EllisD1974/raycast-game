@@ -2884,9 +2884,15 @@ class Editor:
                          (lambda v, n=name: self.set_barricade(n, v)), **options)
 
         names = ("",) + tuple(k.name for k in self.level.barricade_kinds)
-        fields = [Field("where", "Cell", "info", (lambda: f"{barricade.x}, {barricade.y} (ground floor)"), None),
-                  Field("kind", "Type", "enum", (lambda: barricade.kind), self.set_barricade_kind, choices=names,
-                        labels={"": "(its own settings)", **{n: n for n in names if n}})]
+        fields = [Field("where", "Cell", "info", (lambda: f"{barricade.x}, {barricade.y} (ground floor)"), None)]
+        group = next(g for g in self.level.barricade_groups() if self.barricade_selected in g)
+        if len(group) > 1:
+            first = self.level.barricades[group[0]]
+            note = ("its boards, rebuild and reward count for all" if group[0] == self.barricade_selected
+                    else f"the one at {first.x}, {first.y} sets boards, rebuild, reward")
+            fields.append(Field("group", f"Acts as one with {len(group) - 1} touching", "info", (lambda: note), None))
+        fields.append(Field("kind", "Type", "enum", (lambda: barricade.kind), self.set_barricade_kind, choices=names,
+                            labels={"": "(its own settings)", **{n: n for n in names if n}}))
         if barricade.kind:
             fields += [Field("type_header", f"Type {barricade.kind}: changes all of them", "header", None, None),
                        Field("type_name", "Type name", "text", (lambda: barricade.kind), self.rename_barricade_kind)]
@@ -5662,6 +5668,7 @@ class Editor:
         if self.floor != 0:
             return
         z = self.zoom
+        leaders = {g[0] for g in self.level.barricade_groups()}       # (one count of boards per group)
         for i, b in enumerate(self.level.barricades):
             rect = self.cell_rect(b.x, b.y)
             inset = rect.inflate(-max(2, z // 8), -max(2, z // 8))
@@ -5671,7 +5678,7 @@ class Editor:
                 pygame.draw.line(screen, BARRICADE_PLANK, (inset.x, y), (inset.right - 1, y), max(1, z // 10))
             if i == self.barricade_selected and self.tool == "barricade":
                 pygame.draw.rect(screen, ACCENT, rect, 2)
-            if z >= 16:
+            if z >= 16 and i in leaders:
                 label = self.small.render(str(b.boards), True, (255, 255, 255))
                 screen.blit(label, label.get_rect(center=rect.center))
 

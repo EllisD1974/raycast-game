@@ -920,3 +920,79 @@ def test_the_import_dialog_lists_and_pictures_barricade_types(ed):
     assert dialog.rows() == [("kind", "barricade_kinds"), ("thing", ("barricade_kinds", "Steel"))]
     assert dialog.icon("barricade_kinds", "Steel") is not None                 # (its whole stage's picture)
     dialog.draw(pygame.display.get_surface(), pygame.display.get_surface().get_size(), (0, 0))
+
+
+# ------------------------------------------------------------------ barricades side by side, and shooting through
+
+def wide_window_game(**kwargs):
+    """The barricade room with a window two cells wide: (12, 5) and (12, 6), with stages."""
+    from mapfile import Barricade
+    game = barricade_game(**kwargs)
+    level = game.level
+    level.set("walls", 12, 6, 0)
+    level.barricades = [Barricade(12, 5, boards=4, repair_time=0.5, stages=[3, 4]),
+                        Barricade(12, 6, boards=9, stages=[7, 8])]          # (its own boards do not count)
+    game.world = World(level, 32)
+    game.round = ZombieRound(game)
+    return game
+
+
+def test_barricades_that_touch_are_one_group():
+    from mapfile import Barricade
+    level = Level.blank(10, 10)
+    level.barricades = [Barricade(2, 2), Barricade(6, 1), Barricade(2, 3), Barricade(3, 4), Barricade(7, 7),
+                        Barricade(4, 5)]
+    assert level.barricade_groups() == [[0, 2, 3, 5], [1], [4]]            # (corner to corner joins too)
+
+
+def test_a_group_is_torn_down_and_shown_as_one():
+    from zombies import apply_boards
+    game = wide_window_game()
+    assert game.round.boards == [4]
+    world = game.world
+    assert (world.pane_tex[5, 12], world.pane_tex[6, 12]) == (3, 7)         # each its own picture, whole
+    game.round.boards[0] = 1
+    apply_boards(world, game.level, game.round.boards)
+    assert (world.pane_tex[5, 12], world.pane_tex[6, 12]) == (4, 8)         # both at their last stage
+    assert world.for_enemies().span_at(12.5, 6.5, 0.0) == -1
+    game.round.boards[0] = 0
+    apply_boards(world, game.level, game.round.boards)
+    assert world.for_enemies().span_at(12.5, 5.5, 0.0) == 0 and world.for_enemies().span_at(12.5, 6.5, 0.0) == 0
+
+
+def test_an_enemy_at_either_cell_tears_at_the_whole_group():
+    game = wide_window_game(enemies=[Enemy(speed=3.0, break_rate=0.25)], zombie_count=[[1, 1]])
+    place(game.players[0].body, 3.5, 6.5)
+    go_live(game)
+    assert play(game, 10.0, until=lambda: game.round.boards == [0])     # (4 boards, from one enemy at one cell)
+    enemies = game.world.for_enemies()
+    assert enemies.span_at(12.5, 5.5, 0.0) == 0 and enemies.span_at(12.5, 6.5, 0.0) == 0   # both open together
+
+
+def test_rebuilding_beside_either_cell_rebuilds_the_group():
+    game = wide_window_game(spawners=())
+    game.round.start_round()
+    game.round.boards[0] = 0
+    place(game.players[0].body, 11.5, 6.6)                  # beside the second cell
+    play(game, 0.55, {0: Inputs(use=True)})
+    assert game.round.boards == [1]                         # (the first one's rebuild time)
+    assert game.world.pane_tex[5, 12] == 4 and game.world.pane_tex[6, 12] == 8
+
+
+def test_bullets_and_sight_go_through_a_barricade():
+    from test_world_changes import shot_lands
+    game = barricade_game()
+    world = game.world
+    assert world.for_enemies().span_at(12.5, 5.5, 0.0) == -1               # (closed to walking)
+    assert world.point_open(12.5, 5.5, 0.5) and world.line_clear((10.5, 5.5, 0.5), (14.5, 5.5, 0.5))
+    assert shot_lands(world) > 18.0                                         # (fired from 3.5: on to the far wall)
+
+
+def test_the_editor_says_which_barricades_act_as_one(ed):
+    from mapfile import Barricade
+    ed.level.barricades = [Barricade(3, 3), Barricade(3, 4)]
+    ed.do("tool:barricade")
+    ed.map_click((3, 4), 1)
+    group = next(r.field for r in ed.details_rows() if r.field.key == "group")
+    assert "1 touching" in group.label and "3, 3" in group.get()
+    ed.draw(pygame.display.get_surface())
