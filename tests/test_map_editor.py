@@ -143,6 +143,41 @@ def test_stairs_tool_raises_heights_along_a_dragged_line(ed):
     assert ed.level.grids["floor_h"][2][2:6] == [0.0] * 4
 
 
+def test_stairs_on_the_wall_height_layer_build_steps_from_short_walls(ed):
+    level = ed.level
+    for x in range(10):
+        for y in range(10):
+            level.set("ceil_h", x, y, 3.0)      # a room tall enough for the steps
+    level.set("walls", 4, 2, 7)                 # one step's wall is already there
+    ed.do("layer:wall_h")
+    ed.do("tool:stairs")
+    mouse(ed, pygame.MOUSEBUTTONDOWN, cell_pos(ed, 2, 2))
+    assert ed.layer == "wall_h"
+    mouse(ed, pygame.MOUSEMOTION, cell_pos(ed, 5, 2))
+    mouse(ed, pygame.MOUSEBUTTONUP, cell_pos(ed, 5, 2))
+    assert level.grids["wall_h"][2][2:6] == [0.5, 0.75, 1.0, 1.25]
+    assert level.walls[2][2] == ed.primary_id() and level.walls[2][4] == 7
+    room = 3.0
+    assert all(level.short_wall_top(x, 2) is not None for x in range(2, 6))
+    assert level.grids["wall_ceil"][2][2:6] == [room] * 4      # each keeps the room's ceiling
+    for x in range(1, 7):                                      # a low ceiling beside the stairs
+        for y in (1, 3):
+            level.set("ceil_h", x, y, 1.0)
+    assert all(level.wall_ceiling(x, 2) == room for x in range(2, 6))
+    ed.do("undo")
+    assert not ed.level.walls[2][2] and ed.level.grids["wall_h"][2][2:6] == [0.0] * 4
+
+
+def test_wall_stairs_never_reach_a_full_height_wall(ed):
+    ed.do("layer:wall_h")
+    ed.do("tool:stairs")
+    ed.stair_step = -0.25
+    mouse(ed, pygame.MOUSEBUTTONDOWN, cell_pos(ed, 2, 2))
+    mouse(ed, pygame.MOUSEMOTION, cell_pos(ed, 5, 2))
+    mouse(ed, pygame.MOUSEBUTTONUP, cell_pos(ed, 5, 2))
+    assert all(h > 0 for h in ed.level.grids["wall_h"][2][2:6])
+
+
 def test_ramp_layer_paints_direction_and_rotates(ed):
     ed.do("layer:ramp")
     click(ed, 3, 3)

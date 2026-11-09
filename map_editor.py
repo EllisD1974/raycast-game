@@ -66,7 +66,8 @@ T top, B bottom. Cells, the start and the 3D camera stay where they are on the m
 
 Tools: B paint, E erase, F fill, I pick from the map, S set the start (on the floor you are
 editing; click it again to rotate, drag it to move it), T stairs (drag a line on the FloorH layer: heights rise by
-the Step each cell, starting at the brush value), H shapes (drag a line, box or ellipse, outline
+the Step each cell, starting at the brush value; on the WallH layer it builds the steps from short walls
+instead, each keeping the ceiling of the room it stands in), H shapes (drag a line, box or ellipse, outline
 or filled, chosen on the second toolbar row; it paints what the brush paints on the layer you are
 on, right-drag erases the shape, Shift makes a square or circle, Esc cancels).
 Ctrl+Z / Ctrl+Y undo / redo, Ctrl+S save,
@@ -2411,19 +2412,20 @@ class Editor:
         else:
             level.set(self.gname(), cx, cy, self.brush_value())
 
-    def put_tile(self, x, y, tile_id):
-        """Set one cell of a tile layer (walls, floor or ceiling texture) to `tile_id`."""
-        level = self.level
-        if self.layer == "walls" and level.in_bounds(x, y) and not level.walls[y][x]:
+    def put_tile(self, x, y, tile_id, layer=None):
+        """Set one cell of a tile layer (walls, floor or ceiling texture; the active one unless given)
+        to `tile_id`."""
+        level, layer = self.level, layer or self.layer
+        if layer == "walls" and level.in_bounds(x, y) and not level.walls[y][x]:
             for side in SIDES:                                  # a new wall shows its own tile on every side
                 for name in (f"side_{side}", f"side_{side}_from", f"side_{side}_to"):
                     level.set(name, x, y, DEFAULTS[name])
-        if self.layer == "walls" and level.in_bounds(x, y) and not level.is_solid(x, y, self.floor):
+        if layer == "walls" and level.in_bounds(x, y) and not level.is_solid(x, y, self.floor):
             level.set("wall_h", x, y, DEFAULTS["wall_h"])      # a new wall starts full height
             level.set("wall_floor", x, y, self.floor)          # ... and on this floor, not the ones below
             if self.floor > 0:                                  # its base: this floor's brush height
                 level.set(self.gname("floor_h"), x, y, self.brush(self.gname("floor_h")))
-        level.set(self.gname(), x, y, tile_id)
+        level.set(self.gname(layer), x, y, tile_id)
 
     def edits_upper_wall(self, cx, cy):
         """True when the FloorH / CeilH layers here set the base / top of a wall that starts on the
@@ -2572,9 +2574,9 @@ class Editor:
         elif tool == "entity":
             self.place_entity(cell)
         elif tool == "stairs":
-            if self.layer != "floor_h":
+            if self.layer not in ("floor_h", "wall_h"):
                 self.layer = "floor_h"
-                self.say("Stairs paint floor heights: switched to the FloorH layer")
+                self.say("Stairs paint floor heights (or wall steps on WallH): switched to the FloorH layer")
             self.stairs_drag = (cell, cell)
 
     def entities_in(self, cell):
@@ -2821,19 +2823,40 @@ class Editor:
         self.say(f"Picked {fmt(value)}")
 
     def stairs_heights(self):
-        """[(cell, height)] along the current stairs drag."""
+        """[(cell, height)] along the current stairs drag: floor heights, or on the WallH layer the
+        heights of the walls that make the steps (never 0, which would be a full-height wall)."""
         start, end = self.stairs_drag
-        base = self.brush(self.gname("floor_h"))
-        return [(cell, round(base + i * self.stair_step, 4))
+        layer = "wall_h" if self.layer == "wall_h" else "floor_h"
+        base = self.brush(self.gname(layer))
+        low = VALUE_LIMITS["wall_h"][0] if layer == "wall_h" else -math.inf
+        return [(cell, max(low, round(base + i * self.stair_step, 4)))
                 for i, cell in enumerate(line_cells(start, end))]
 
     def finish_stairs(self):
-        steps = self.stairs_heights()
+        steps = [((x, y), height) for (x, y), height in self.stairs_heights() if self.level.in_bounds(x, y)]
         self.stairs_drag = None
+        if not steps:
+            return
         self.begin_edit()
         for (x, y), height in steps:
-            self.set_height(x, y, "floor_h", height)
+            if self.layer == "wall_h":
+                self.put_wall_step(x, y, height)
+            else:
+                self.set_height(x, y, "floor_h", height)
         self.say(f"Stairs: {len(steps)} cells, {fmt(steps[0][1])} to {fmt(steps[-1][1])}")
+
+    def put_wall_step(self, x, y, height):
+        """One step of wall stairs: a short wall (a new one with the selected tile where there is
+        none) `height` tall. A ground-floor step keeps the ceiling over it fixed at the room's ceiling
+        there, so building next to the stairs later (a higher floor beside them, with a lower ceiling
+        under it) does not bring the automatic ceiling down onto the steps."""
+        level = self.level
+        ceiling = level.grids["ceil_h"][y][x]              # the room this step goes (or went) in
+        if not level.is_solid(x, y, self.floor):
+            self.put_tile(x, y, self.primary_id(), "walls")
+        level.set("wall_h", x, y, height)
+        if not level.wall_floor(x, y) and not level.has_explicit_wall_ceiling(x, y):
+            level.set("wall_ceil", x, y, max(ceiling, level.auto_wall_ceiling(x, y)))
 
     def shape_drag_cells(self):
         """The cells the shape being dragged covers now (Shift: a square box or a circle)."""
