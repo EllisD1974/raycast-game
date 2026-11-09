@@ -187,6 +187,7 @@ class Attack:
 
 
 DEFAULT_ENEMY_COLOR = (150, 210, 140)           # a sickly green
+DEFAULT_ENEMY_SHEET = "zombie"                  # assets/zombie.png (character.sheet_names)
 
 
 @dataclass
@@ -205,6 +206,8 @@ class Enemy:
     kill_reward, hit_reward   money for the player who kills it, and for each bullet or blast of theirs that hurts it
     break_rate     seconds it takes to tear one board off a barricade
     color          [red, green, blue] 0-255 its picture is tinted with (white: as drawn)
+    sheet          the sprite sheet it is drawn from: the name of a picture in assets/ laid out like character.png
+                   (character.sheet_names), or "" for the players' own character in a green shirt
     weight         a curve (see curve_at) of round -> how likely each enemy coming in is to be this kind, against the
                    other kinds' weights that round: 0 for none (a tough kind can start at 0 and only rise later)
     max_per_round  at most this many of it in one round (0: no limit)"""
@@ -221,6 +224,7 @@ class Enemy:
     hit_reward: float = 10.0
     break_rate: float = 1.0
     color: list = field(default_factory=lambda: list(DEFAULT_ENEMY_COLOR))
+    sheet: str = DEFAULT_ENEMY_SHEET
     weight: list = field(default_factory=lambda: [[1, 1.0]])
     max_per_round: float = 0.0
 
@@ -238,6 +242,7 @@ class Enemy:
                    if isinstance(attacks, list) else [Attack()],
                    pathing=data.get("pathing") if data.get("pathing") in ENEMY_PATHING else "sticky",
                    color=[max(0, min(255, int(c))) for c in color] if good_color else list(DEFAULT_ENEMY_COLOR),
+                   sheet=str(data.get("sheet", DEFAULT_ENEMY_SHEET))[:MAX_NAME],
                    weight=read_curve(data.get("weight"), [[1, 1.0]], *CURVE_LIMITS["weight"]),
                    **clamped_numbers(cls, data, ENEMY_NUMBERS))
 

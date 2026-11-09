@@ -202,6 +202,7 @@ import numpy as np
 import pygame
 
 from atlas import ATLAS_PATH, atlas_array, transparent_tiles, unpack_atlas
+from character import sheet_names
 from constants import FOV_DEG, HEIGHT, MOUSE_SENSITIVITY, PLAYER_HEIGHT, TILE, WIDTH
 from mapfile import (ANIMATION_KINDS, ANIMATION_LABELS, DEFAULTS, EDIT_LAYERS, EFFECT_LABELS, ENTITY_EFFECTS,
                      ENTITY_MODES, GUN_MODE_LABELS, GUN_MODES, MAP_PATH, MAX_HIT_NAMES, MAX_NAME, MAX_NAME_LENGTH, MIN_WALL_GAP,
@@ -1699,7 +1700,12 @@ class Editor:
             return Field(name, label, kind, (lambda n=name: getattr(enemy, n)),
                          (lambda v, n=name: self.set_enemy(n, v)), **options)
 
+        sheets = ("",) + sheet_names()
+        if enemy.sheet not in sheets:                   # (a sheet this computer does not have: kept, and shown)
+            sheets += (enemy.sheet,)
         fields = [field("name", "Name", "text"),
+                  field("sheet", "Sprite sheet", "enum", choices=sheets,
+                        labels={name: name or "Player (green shirt)" for name in sheets}),
                   field("pathing", "Chases", "enum", choices=ENEMY_PATHING, labels=ENEMY_PATHING_LABELS)]
         if enemy.pathing == "sticky":
             low, high = ENEMY_NUMBERS["switch_margin"]

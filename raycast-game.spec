@@ -9,7 +9,8 @@ dist/RaycastGame/RaycastEditor.exe the map editor    (its "Play" button starts R
 On Linux the same command makes dist/RaycastGame/RaycastGame and RaycastEditor (no .exe), with libsteam_api.so in place
 of steam_api64.dll. PyInstaller cannot cross-build: the Linux build is made on Linux (.github/workflows/build-linux.yml).
 
-The folder carries assets/textures.png, assets/character.png and the maps next to the programs' own files. The renderer's numba source files are
+The folder carries the pictures in assets/ (textures.png, character.png and the enemies' sprite sheets) and the maps
+next to the programs' own files. The renderer's numba source files are
 included too: numba compiles from them (and caches the result) when the program starts.
 
 The version the programs show (version.py) is put in version.txt beside them: RAYCAST_VERSION when it is set (the Build
@@ -31,10 +32,9 @@ with open(version_file, "w", encoding="utf-8") as f:
 print(f"Building version {build_version}")
 
 datas = [
-    (os.path.join(root, "assets", "textures.png"), "assets"),
-    (os.path.join(root, "assets", "character.png"), "assets"),
     (version_file, "."),
-] + [(path, "maps") for path in glob.glob(os.path.join(root, "maps", "*.json"))]    # (not maps/tests: made for testing)
+] + [(path, "assets") for path in glob.glob(os.path.join(root, "assets", "*.png"))]   # atlas, character, enemy sheets
+datas += [(path, "maps") for path in glob.glob(os.path.join(root, "maps", "*.json"))]    # (not maps/tests: made for testing)
 for source in ("raykernel.py", "raypitch.py", "raylight.py"):     # numba reads these to compile and cache the renderer
     datas.append((os.path.join(root, source), "."))
 binaries = []

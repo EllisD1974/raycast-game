@@ -579,6 +579,7 @@ def test_a_joiners_world_shows_the_boards_the_host_says_are_left():
 # ------------------------------------------------------------------ what players see
 
 def test_enemies_are_drawn_tinted_and_as_tall_as_their_kind():
+    from character import SHIRTS, sheet_names
     game = zombie_game(enemies=[Enemy(height=1.2, color=[255, 255, 255]), Enemy(name="B", color=[100, 200, 50])])
     go_live(game)
     play(game, 0.3)
@@ -586,7 +587,7 @@ def test_enemies_are_drawn_tinted_and_as_tall_as_their_kind():
     assert len(sprites) == 2
     for sprite in sprites:
         assert sprite[3] in (1.2, 0.8)
-        assert (sprite[4] - FIRST_CHARACTER) // 16 == SHIRT
+        assert (sprite[4] - FIRST_CHARACTER) // 16 == len(SHIRTS) + sheet_names().index("zombie")   # its sheet
         assert (len(sprite) == 5) == (sprite[3] == 1.2)     # white: drawn as it is; else tinted
 
 
@@ -613,6 +614,38 @@ def test_a_joiner_sees_the_round_and_the_enemies():
     finally:
         client.close()
         host.close()
+
+
+# ------------------------------------------------------------------ sprite sheets
+
+def test_the_zombie_picture_in_assets_is_a_sprite_sheet_with_its_pictures_after_the_players():
+    from character import PICTURES, SHIRTS, character_tiles, sheet_names, sheet_tiles
+    assert "zombie" in sheet_names() and "character" not in sheet_names() and "textures" not in sheet_names()
+    assert len(sheet_tiles()) == len(sheet_names()) * PICTURES
+    assert len(character_tiles()) == len(SHIRTS) * PICTURES
+
+
+def test_an_enemy_is_drawn_from_its_kinds_sprite_sheet():
+    from character import PICTURES, SHIRTS, sheet_names
+    from game import character_tile_for
+    from zombies import enemy_tile
+    zombie = sheet_names().index("zombie")
+    sheets = FIRST_CHARACTER + len(SHIRTS) * PICTURES
+    assert enemy_tile(FIRST_CHARACTER, Enemy()) == sheets + zombie * PICTURES        # zombie.png by default
+    assert enemy_tile(FIRST_CHARACTER, Enemy(), 0.0, 0.0) == sheets + zombie * PICTURES + 4   # (its back)
+    player_look = character_tile_for(FIRST_CHARACTER, SHIRT, 0.0, 0.0)
+    assert enemy_tile(FIRST_CHARACTER, Enemy(sheet=""), 0.0, 0.0) == player_look
+    assert enemy_tile(FIRST_CHARACTER, Enemy(sheet="not here"), 0.0, 0.0) == player_look
+    level = zombie_level(enemies=[Enemy(sheet="")])
+    drawn = enemy_sprites(level, [[0, 5.5, 5.5, 0.0, 0.0, 0.0]], FIRST_CHARACTER, 0.0)
+    assert drawn[0][4] == player_look
+
+
+def test_an_enemys_sprite_sheet_is_saved_and_defaults_to_the_zombie_sheet():
+    level = zombie_level(enemies=[Enemy(name="Ghoul", sheet=""), Enemy(name="Zombie")])
+    again = parse_level(json.loads(level_text(level)))
+    assert [e.sheet for e in again.enemies] == ["", "zombie"]
+    assert Enemy.from_dict({"name": "Old"}).sheet == "zombie"        # (maps from before sheets)
 
 
 # ------------------------------------------------------------------ the editor
@@ -670,6 +703,10 @@ def test_editing_an_enemy_and_its_attacks(ed):
     assert enemy.speed == 4.0 and enemy.color[0] == 255 and enemy.attacks[1].damage == 70
     ed.set_enemy("pathing", "nearest")
     assert "switch_margin" not in [r.field.key for r in ed.details_rows()]
+    sheet = next(r.field for r in ed.details_rows() if r.field.key == "sheet")
+    assert "" in sheet.choices and "zombie" in sheet.choices and sheet.get() == "zombie"
+    ed.set_enemy("sheet", "")
+    assert enemy.sheet == ""
     ed.remove_attack(0)
     assert [a.damage for a in enemy.attacks] == [70]
     ed.draw(pygame.display.get_surface())

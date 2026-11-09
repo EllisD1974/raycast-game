@@ -37,7 +37,7 @@ import net
 import steamnet
 from atlas import ATLAS_PATH, atlas_array, transparent_tiles, unpack_atlas
 from buymenu import BuyMenu
-from character import character_tiles
+from character import character_tiles, sheet_tiles
 from constants import FPS_CAP, HEIGHT, MOUSE_SENSITIVITY, TURN_SPEED, WIDTH
 from game import NO_TEAM, Events, Game, Inputs, next_watch
 from hud import draw_downed, draw_hud, draw_hurt, draw_names, draw_rebuild, draw_round, hurt_flash
@@ -246,7 +246,8 @@ class Graphics:
 
     def load(self, atlas):
         tiles = unpack_atlas(atlas)
-        textures = atlas_array(tiles + character_tiles())       # the character pictures follow the atlas's tiles
+        textures = atlas_array(tiles + character_tiles() + sheet_tiles())   # the character pictures follow the atlas's
+                                                                            # tiles, then the enemies' sprite sheets
         self.tiles, self.character_tile = tiles, len(tiles)
         self.see_through = transparent_tiles(textures)[:len(tiles)]   # tiles with alpha make see-through walls
         self.renderer = Renderer(textures)

@@ -29,13 +29,14 @@ ZombieRound.view() and sends it to joiners as a dict.
 import math
 from dataclasses import dataclass, field, replace
 
+from character import ENEMY_SHIRT, PICTURES, SHIRTS, character_view, sheet_names
 from constants import CROUCH_MULTIPLIER, MOVE_SPEED, PLAYER_HEIGHT, PLAYER_RADIUS
 from mapfile import ENEMY_SPAWN, MAX_MONEY, Enemy, curve_at
 from pathing import Pathing, STRAIGHT
 from physics import Player, can_stand, spawn_at, step
 
 RETHINK = 0.25                  # seconds between an enemy looking again at who to chase
-SHIRT = 2                       # the character pictures' shirt color enemies are drawn in (green)
+SHIRT = ENEMY_SHIRT             # the character pictures' shirt color enemies are drawn in (green)
 HIT_FLASH = 0.25                # seconds an enemy shows red after being hurt
 CROWD = 0.9                     # how hard enemies closer than their two radii push apart (share of the overlap a step)
 NOTE_TIME = 3.0                 # seconds a message stays on screen
@@ -223,10 +224,22 @@ def enemy_tint(color, red):
     return tuple(o + (t - o) * red for o, t in zip(own, HIT_TINT))
 
 
+def enemy_tile(first_tile, enemy, viewer_angle=None, angle=None):
+    """The picture of an enemy facing `angle` seen looking along `viewer_angle`: from its kind's sprite sheet, which
+    follows the players' pictures (character.sheet_tiles); without one here, the players' character in SHIRT's
+    color."""
+    from game import character_tile_for              # (game imports this module)
+    names = sheet_names()
+    if enemy.sheet not in names:
+        return character_tile_for(first_tile, SHIRT, viewer_angle, angle)
+    view = 0 if viewer_angle is None or angle is None else character_view(viewer_angle, angle)
+    return first_tile + (len(SHIRTS) + names.index(enemy.sheet)) * PICTURES + view
+
+
 def enemy_sprites(level, enemies, first_tile, viewer_angle=None):
     """The renderer's sprites of `enemies` ([kind, x, y, z, angle, red] each, see ZombieView) seen by someone looking
-    along `viewer_angle`: the character pictures in SHIRT's color, as tall as the kind, tinted its color."""
-    from game import character_tile_for              # (game imports this module)
+    along `viewer_angle`: pictures from the kind's sprite sheet (enemy_tile), as tall as the kind, tinted its
+    color."""
     if first_tile is None:
         return []
     out = []
@@ -235,7 +248,7 @@ def enemy_sprites(level, enemies, first_tile, viewer_angle=None):
         enemy = kinds[kind] if 0 <= kind < len(kinds) else None
         if enemy is None:
             continue
-        tile = character_tile_for(first_tile, SHIRT, viewer_angle, angle)
+        tile = enemy_tile(first_tile, enemy, viewer_angle, angle)
         tint = enemy_tint(enemy.color, red)
         out.append((x, y, z, enemy.height, tile) + (() if tint is None else (0.0, 1.0, 0.0, tint)))
     return out
