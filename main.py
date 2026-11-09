@@ -40,7 +40,7 @@ from buymenu import BuyMenu
 from character import character_tiles, sheet_tiles
 from constants import FPS_CAP, HEIGHT, MOUSE_SENSITIVITY, TURN_SPEED, WIDTH
 from game import NO_TEAM, Events, Game, Inputs, next_watch
-from hud import draw_downed, draw_hud, draw_hurt, draw_names, draw_rebuild, draw_round, hurt_flash
+from hud import draw_downed, draw_hud, draw_offer, draw_hurt, draw_names, draw_rebuild, draw_round, hurt_flash
 from home import Home
 from mapfile import KOTH_NAMES, MAP_PATH, TEAM_TITLES, load_or_default
 from menu import DIM, GameSettings, Menu
@@ -559,16 +559,17 @@ def play(screen, clock, graphics, settings, session, map_path, from_home=False):
             team = {"bomb": TEAM_TITLES, "koth": KOTH_NAMES}.get(rules.mode, {}).get(me.team, me.team)
         if hidden is not None and shown is not None:        # watching someone: their HUD and the gun in their hand
             draw_hud(picture, font, shown.stats, message if message_left > 0 else "", shown.inventory, graphics.tiles,
-                     money=rules.uses_money())
+                     money=session.level.uses_money(), score=session.level.uses_score())
         else:
             draw_hud(picture, font, me.stats, message if message_left > 0 else "", me.inventory if hidden is None and
                      (view is None or session.id in view.alive) else None, graphics.tiles, kick,
-                     money=rules.uses_money(), team=team,
+                     money=session.level.uses_money(), score=session.level.uses_score(), team=team,
                      buy_key=rules.buy_menu and not buy.open and (view is None or view.can_buy))
         draw_round(picture, font, big_font, view, session.id, me, session.level, watching)
         if hidden is None:
             draw_downed(picture, font, big_font, graphics.renderer, camera, view, session.id, me, session.level)
             draw_rebuild(picture, font, view, session.id, me, session.level)
+            draw_offer(picture, font, session.items, view, session.id, me)
         overlay = None
         if menu.open or buy.open:
             overlay = pygame.Surface(screen.window.size, pygame.SRCALPHA)

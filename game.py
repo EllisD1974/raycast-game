@@ -44,7 +44,7 @@ class Inputs:
     equip: tuple = ()               # gun slots (0 based) to take out, in order
     cycle: int = 0                  # steps through the guns, as with the mouse wheel
     buy: tuple = ()                 # entries of the map's buy menu (0 based) to buy, in order
-    use: bool = False               # the use key (E) is held: plants or defuses the bomb
+    use: bool = False               # the use key (E) is held: plants or defuses the bomb, buys an item
     drop: bool = False              # throw the bomb (G), the way the player looks
     crouch: bool = False            # Ctrl is held: crouch (see physics.set_crouch)
 
@@ -271,6 +271,7 @@ class Game:
         self.hurts = {}             # player id -> damage taken, until take_hurts()
         self.flashes = []           # lights to flash, (name, x, y, z), until take_flashes()
         self.notes = {}             # player id -> messages for them (what they bought), until advance_world()
+        self.using = set()          # the players holding the use key last step (an item is bought on the press)
         self.clock = 0.0            # seconds the world has run (the planted bomb blinks by it)
         self.round = make_round(self)       # bomb defusal's or King of the Hill's rounds (None in the other modes)
 
@@ -378,6 +379,7 @@ class Game:
         if self.round is not None and player_id in self.players:
             self.round.left(player_id)
         self.players.pop(player_id, None)
+        self.using.discard(player_id)
         if self.round is not None:
             self.round.after_leaving()
 
@@ -390,6 +392,11 @@ class Game:
         for index in wish.buy:
             self.notes.setdefault(player_id, []).append(self.buy(player_id, index))
         body, inventory = state.body, state.inventory
+        if wish.use and player_id not in self.using and state.alive:     # (pressed, not held: one buy a press)
+            bought = self.items.buy(body, state.stats, inventory)
+            if bought is not None:
+                self.notes.setdefault(player_id, []).append(bought)
+        (self.using.add if wish.use else self.using.discard)(player_id)
         for slot in wish.equip:
             inventory.equip(slot)
         if wish.cycle:

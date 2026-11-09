@@ -7,6 +7,7 @@ import pygame
 
 from bomb import can_defuse, can_plant, clock_text, site_under
 from constants import HEIGHT, WIDTH
+from entities import offer_text
 from koth import HillView, on_hill
 from respawn import RespawnView
 from zombies import REVIVE_REACH, REVIVE_UP, ZombieView, nearest_group
@@ -107,12 +108,15 @@ def draw_weapon(picture, tiles, state, kick=0.0):
     picture.blit(art, (x, y))
 
 
-def draw_hud(picture, font, stats, message, inventory=None, tiles=None, kick=0.0, money=False, team=None, buy_key=False):
-    """`money` shows the player's money (on maps where it means something), `team` their team (None: not on one),
-    and `buy_key` a reminder that B opens the buy menu."""
+def draw_hud(picture, font, stats, message, inventory=None, tiles=None, kick=0.0, money=False, team=None, buy_key=False,
+             score=True):
+    """`score` and `money` show the player's score and money (on maps where they mean something), `team` their team
+    (None: not on one), and `buy_key` a reminder that B opens the buy menu."""
     shadowed(picture, font, f"Health {stats.health:g}", (8, 8))
-    shadowed(picture, font, f"Score {stats.score:g}", (8, 26))
-    y = 44
+    y = 26
+    if score:
+        shadowed(picture, font, f"Score {stats.score:g}", (8, y))
+        y += 18
     if money:
         shadowed(picture, font, f"Money ${stats.money:g}", (8, y), HIGHLIGHT)
         y += 18
@@ -306,6 +310,17 @@ def draw_rebuild(picture, font, view, me_id, me, level):
         reward = (f" (+${barricade.reward:g})" if barricade.reward_kind == "money"
                   else f" (+{barricade.reward:g} score)") if barricade.reward > 0 else ""
         shadowed(picture, font, f"Hold E to rebuild{reward}", (WIDTH // 2, HEIGHT // 2 + 44), HIGHLIGHT, center=True)
+
+
+def draw_offer(picture, font, items, view, me_id, me):
+    """"E: buy ... for $..." beside an item for sale (dim while this player cannot afford it)."""
+    if items is None or (view is not None and me_id not in view.alive) or me_id in getattr(view, "downed", {}):
+        return
+    item = items.offer(me.body)
+    if item is not None:
+        e = item.entity
+        shadowed(picture, font, f"E: buy {offer_text(e)} for ${e.price:g}", (WIDTH // 2, HEIGHT // 2 + 64),
+                 HIGHLIGHT if me.stats.money >= e.price else DIM, center=True)
 
 
 def draw_respawn(picture, font, view, me_id, watching=None):

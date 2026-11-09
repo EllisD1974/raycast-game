@@ -70,6 +70,11 @@ class LocalSession:
         """The map being played (its settings say whether there is a buy menu, and what is in it)."""
         return self.game.level
 
+    @property
+    def items(self):
+        """The items in the world (Entities), as a joiner has them too (to say what is for sale beside us)."""
+        return self.game.items
+
     def step(self, wish, dt, elapsed=None):
         """`dt` is the frame time the game runs by (capped); `elapsed` the real time since the last frame,
         which a network session paces itself by (it is dt if not given)."""

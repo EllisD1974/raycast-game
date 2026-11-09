@@ -266,8 +266,8 @@ def test_the_pane_only_shows_the_fields_that_apply(ed):
     ed.do("tool:entity")
     ed.map_click((4, 4), 1)
     keys = [r.field.key for r in ed.details_rows()]
-    assert keys == ["this_copy", "elevation", "item_settings", "tile", "mode", "effect", "amount", "size", "lift", "shown",
-                    "emits", "light", "animations", "add_animation", "make_prefab"]
+    assert keys == ["this_copy", "elevation", "item_settings", "tile", "mode", "effect", "amount", "price", "size", "lift",
+                    "shown", "emits", "light", "animations", "add_animation", "make_prefab"]
     ed.level.entities[0].effect = "none"
     ed.level.entities[0].mode = "respawn"
     keys = [r.field.key for r in ed.details_rows()]

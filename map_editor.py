@@ -919,6 +919,8 @@ class Editor:
                   info("effect", "Effect", self.effect_text(e))]
         if e.mode == "respawn":
             fields.append(info("respawn", "Respawns after", f"{e.respawn:g} s"))
+        if e.price > 0 and e.mode != "scenery":
+            fields.append(info("price", "Price", f"${e.price:g}, bought with E"))
         fields += [info("size", "Size", f"{e.size:g}"), info("lift", "Lift", f"{e.lift:g}"),
                    info("emits", "Emits", (e.emits or "none") + (f"  from {e.emits_offset_x:g}, {e.emits_offset_y:g}, "
                                                                   f"{e.emits_offset_z:g}" if e.emits and e.emits_override else "")),
@@ -972,6 +974,8 @@ class Editor:
                                 low=0.0, high=1000.0))
         if e.mode == "respawn":
             fields.append(field("respawn", "Respawn", "num", step=1.0, low=0.0, high=600.0, unit="s"))
+        if e.mode != "scenery":
+            fields.append(field("price", "Price ($)", "num", step=50.0, low=0.0, high=MAX_MONEY))
         fields += [field("size", "Size", "num", step=0.1, low=0.1, high=3.0),
                    field("lift", "Lift", "num", step=0.1, low=-2.0, high=5.0),
                    field("shown", "Sprite", "enum", choices=(True, False), labels={True: "Shown", False: "Hidden"}),

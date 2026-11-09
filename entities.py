@@ -11,6 +11,7 @@ from constants import PLAYER_HEIGHT
 from mapfile import wall_facing
 
 TOUCH_RADIUS = 0.45             # how close (in cells, on the map) the player must get to an item
+BUY_REACH = 1.0                 # how close they must be to buy one that is for sale (it may hang on a wall)
 MAX_HEALTH = 100.0
 
 
@@ -47,6 +48,13 @@ def describe(entity):
     if entity.effect == "ammo":
         return f"+{amount} {entity.ammo or 'Bullet'} ammo"
     return "Picked up"
+
+
+def offer_text(entity):
+    """What an item for sale gives, for "E: buy ..." beside it."""
+    amount = f"{entity.amount:g}"
+    return {"score": f"{amount} score", "health": f"{amount} health", "item": f"{amount} {entity.item or 'Item'}",
+            "gun": entity.gun or "a gun", "ammo": f"{amount} {entity.ammo or 'Bullet'} ammo"}.get(entity.effect, "it")
 
 
 class Entities:
@@ -87,12 +95,35 @@ class Entities:
         return out
 
     @staticmethod
-    def _touched(item, player):
+    def _touched(item, player, reach=TOUCH_RADIUS):
         e = item.entity
-        if math.hypot(player.x - e.x, player.y - e.y) > TOUCH_RADIUS:
+        if math.hypot(player.x - e.x, player.y - e.y) > reach:
             return False
         top = player.z + getattr(player, "height", PLAYER_HEIGHT)
         return player.z < item.z + e.size and top > item.z      # the heights overlap
+
+    def offer(self, player):
+        """The nearest item for sale that `player` stands close enough to buy, or None."""
+        near = [item for item in self.items if item.present and item.entity.price > 0
+                and item.entity.mode != "scenery" and self._touched(item, player, BUY_REACH)]
+        return min(near, key=lambda i: math.hypot(player.x - i.entity.x, player.y - i.entity.y), default=None)
+
+    def buy(self, player, stats, inventory=None):
+        """`player` pressed the use key: buy the item for sale beside them, if they have the money. Returns the
+        message to show them (None when nothing is for sale there)."""
+        item = self.offer(player)
+        if item is None:
+            return None
+        e = item.entity
+        if stats.money < e.price:
+            return f"Not enough money for {offer_text(e)} (${e.price:g})"
+        stats.money -= e.price
+        self._apply(e, stats, inventory, self.guns)
+        if e.mode == "once":
+            item.present = False
+        elif e.mode == "respawn":
+            item.present, item.back_at = False, self.clock + e.respawn
+        return f"Bought {offer_text(e)} for ${e.price:g}"
 
     def advance(self, dt):
         """Move the clock on dt seconds and bring back the respawning items whose time is up."""
@@ -108,8 +139,8 @@ class Entities:
         they are still picked up but give nothing."""
         messages = []
         for item in self.items:
-            if not item.present or item.entity.mode == "scenery":
-                continue
+            if not item.present or item.entity.mode == "scenery" or item.entity.price > 0:
+                continue                                # (one for sale is bought with the use key: see buy)
             e = item.entity
             touching = self._touched(item, player)
             if touching and who not in item.touching:

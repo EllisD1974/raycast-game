@@ -78,7 +78,7 @@ _UPPER_DEFAULTS = {"floor_tex": 3, "ceil_tex": 6, "floor_h": 0.0, "ceil_h": 0.0,
 
 
 ENTITY_MODES = ("once", "respawn", "persistent", "scenery")
-PREFAB_FIELDS = ("tile", "mode", "effect", "amount", "respawn", "size", "lift", "item", "gun", "ammo",
+PREFAB_FIELDS = ("tile", "mode", "effect", "amount", "respawn", "size", "lift", "item", "gun", "ammo", "price",
                  "shown", "emits", "emits_override", "emits_offset_x", "emits_offset_y", "emits_offset_z", "light")
 ENTITY_EFFECTS = ("none", "score", "health", "item", "gun", "ammo")
 MODE_LABELS = {"once": "Pick up once", "respawn": "Respawns", "persistent": "Stays", "scenery": "Scenery"}
@@ -750,6 +750,8 @@ class Entity:
                          only counts after you have stepped away from it
     effect   what the player gets: none, score (+amount points) or health (+amount, capped)
     amount   size of the effect
+    price    0: touching it picks it up. Above 0: it is for sale: standing by it and pressing the use key (E) buys
+             it for that much money (what touching it would give); touching it alone does nothing
     respawn  seconds until a respawning item comes back
     size     sprite height in world units (it is as wide as it is tall)
     lift     height of the sprite's bottom above the floor
@@ -787,6 +789,7 @@ class Entity:
     item: str = ""                  # effect "item": the name of the thing put in the inventory
     gun: str = ""                   # effect "gun": the name of the gun it hands out
     ammo: str = ""                  # effect "ammo": the name of the ammo type it gives (amount rounds)
+    price: float = 0.0              # money it costs, bought with E (0: picked up by touching it)
     shown: bool = True              # draw the sprite
     emits: str = ""                 # the particle effect it sends out
     emits_override: bool = False    # use emits_offset_* instead of the effect's own start offset
@@ -821,6 +824,7 @@ class Entity:
                                    if isinstance(a, dict)],
                        item=str(data.get("item", ""))[:MAX_NAME], gun=str(data.get("gun", ""))[:MAX_NAME],
                        ammo=str(data.get("ammo", ""))[:MAX_NAME],
+                       price=max(0.0, min(MAX_MONEY, float(data.get("price", 0.0)))),
                        shown=bool(data.get("shown", base.shown)), emits=str(data.get("emits", ""))[:MAX_NAME],
                        emits_override=bool(data.get("emits_override", False)),
                        emits_offset_x=float(data.get("emits_offset_x", 0.0)),
@@ -1060,7 +1064,8 @@ class MapSettings:
 
     def uses_money(self):
         """True if money means anything on this map (so the HUD shows it)."""
-        return (self.buy_menu and self.buy_cost == "money") or self.start_money > 0 or self.kill_money > 0
+        return (self.buy_menu and self.buy_cost == "money") or self.start_money > 0 or self.kill_money > 0 \
+            or self.mode == "zombies"                   # (zombies pay for every hit and kill)
 
     def has_waiting(self):
         """True if knocked-out players are out for a while (bomb defusal, King of the Hill, or a respawn delay), so
@@ -1256,6 +1261,21 @@ class Level:
 
     def enemy_named(self, name):
         return next((e for e in self.enemies if e.name == name), None)
+
+    def uses_money(self):
+        """True if money means anything on this map (so the HUD shows it): its settings use it, or an item is for
+        sale."""
+        return self.settings.uses_money() or any(e.price > 0 for e in self.entities)
+
+    def uses_score(self):
+        """True if score means anything on this map (so the HUD shows it): something earns it (knocking out an
+        opponent, a score item, a barricade boarded up for score) or the buy menu costs it."""
+        rules = self.settings
+        return ((rules.kill_score > 0 and rules.mode not in ("coop", "zombies"))
+                or (rules.buy_menu and rules.buy_cost == "score")
+                or any(e.effect == "score" for e in self.entities)
+                or (rules.mode == "zombies" and any(b.reward_kind == "score" and b.reward > 0
+                                                    for b in self.barricades)))
 
     def prefab_named(self, name):
         for prefab in self.prefabs:
