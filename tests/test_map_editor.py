@@ -168,6 +168,19 @@ def test_stairs_on_the_wall_height_layer_build_steps_from_short_walls(ed):
     assert not ed.level.walls[2][2] and ed.level.grids["wall_h"][2][2:6] == [0.0] * 4
 
 
+def test_erasing_a_wall_step_keeps_the_ceiling_over_it(ed):
+    level = ed.level
+    for x in range(10):
+        for y in range(10):
+            level.set("ceil_h", x, y, 2.0)      # a low room beside the step
+    level.set("walls", 4, 4, 1)
+    level.set("wall_h", 4, 4, 1.0)
+    level.set("wall_ceil", 4, 4, 6.0)           # the step's own ceiling: open up to 6
+    ed.do("layer:walls")
+    click(ed, 4, 4, button=3)
+    assert not level.walls[4][4] and level.grids["ceil_h"][4][4] == 6.0
+
+
 def test_wall_stairs_never_reach_a_full_height_wall(ed):
     ed.do("layer:wall_h")
     ed.do("tool:stairs")

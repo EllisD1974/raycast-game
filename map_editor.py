@@ -2472,14 +2472,16 @@ class Editor:
     def open_like_neighbors(self, x, y):
         """Before a ground wall is erased, give its cell the room around it: the floor and ceiling
         stored under a wall are never seen, so left as they are they could leave a sunken pocket
-        (say floor 0, ceiling 1 beside a floor at 2) that still looks and blocks like a wall."""
+        (say floor 0, ceiling 1 beside a floor at 2) that still looks and blocks like a wall. A wall
+        with its own ceiling (a short wall's, say a step's) leaves that ceiling, which is the one
+        you could see over it, not the lower one of a room beside it."""
         level = self.level
         if not level.in_bounds(x, y) or not level.walls[y][x] or level.wall_floor(x, y):
             return
         if not level._beside(x, y, "floor_h"):          # boxed in by walls: nothing to match
             return
         level.set("floor_h", x, y, level.wall_base(x, y))
-        level.set("ceil_h", x, y, level.auto_wall_ceiling(x, y))
+        level.set("ceil_h", x, y, level.wall_ceiling(x, y))
         for name in ("floor_tex", "ceil_tex"):          # the most common texture beside it
             values = level._beside(x, y, name)
             level.set(name, x, y, max(set(values), key=values.count))
