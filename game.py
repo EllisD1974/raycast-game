@@ -10,13 +10,14 @@ from dataclasses import dataclass, field
 
 from bomb import Round
 from character import PICTURES, SHIRTS, VIEWS, character_view
-from constants import PLAYER_HEIGHT
+from constants import MOVE_SPEED, PLAYER_HEIGHT
 from entities import Entities, PlayerStats
 from explosions import blast_results
 from inventory import Inventory
 from koth import HillRound
 from respawn import RESPAWN_MODES, Respawns
-from mapfile import MAX_BUY_ITEMS, MAX_MONEY
+from zombies import ZombieRound
+from mapfile import ENEMY_SPAWN, MAX_BUY_ITEMS, MAX_MONEY
 from physics import look, spawn, spawn_at, step
 from projectiles import MUZZLE, Projectiles, muzzle_shift
 
@@ -43,7 +44,7 @@ class Inputs:
     equip: tuple = ()               # gun slots (0 based) to take out, in order
     cycle: int = 0                  # steps through the guns, as with the mouse wheel
     buy: tuple = ()                 # entries of the map's buy menu (0 based) to buy, in order
-    use: bool = False               # the use key (E) is held: plants or defuses the bomb
+    use: bool = False               # the use key (E) is held: plants or defuses the bomb, buys an item
     drop: bool = False              # throw the bomb (G), the way the player looks
     crouch: bool = False            # Ctrl is held: crouch (see physics.set_crouch)
 
@@ -72,11 +73,18 @@ class Inputs:
                    bool(data.get("use")), bool(data.get("drop")), bool(data.get("crouch")))
 
 
-def move_body(world, body, wish, dt):
-    """Move and turn a player's body by what `wish` asked for over dt seconds. A joiner runs this too,
-    ahead of the host, to predict where its own moves will put it."""
-    step(world, body, wish.forward, wish.strafe, wish.turn, wish.jump, dt, wish.sprint, wish.crouch)
+def move_body(world, body, wish, dt, speed=MOVE_SPEED):
+    """Move and turn a player's body by what `wish` asked for over dt seconds, walking at `speed` (a downed player in
+    zombies crawls). A joiner runs this too, ahead of the host, to predict where its own moves will put it."""
+    step(world, body, wish.forward, wish.strafe, wish.turn, wish.jump, dt, wish.sprint, wish.crouch, speed)
     look(body, wish.tilt)
+
+
+def speed_of(round_, player_id):
+    """How fast a player walks in a round (or a round's view, for a joiner's prediction): MOVE_SPEED unless the
+    round says otherwise (a downed player in zombies crawls)."""
+    speed = getattr(round_, "speed_of", None)
+    return MOVE_SPEED if speed is None else speed(player_id)
 
 
 def muzzle_event(effect, body, offset=None, shift=(0.0, 0.0, 0.0)):
@@ -176,20 +184,20 @@ class SpawnOrder:
 
     def choices(self, team):
         """The spawners a player of `team` may come in at: their team's and those for anyone, or all of them when
-        there are none of those (and for a player on no team)."""
-        spawners = self.level.spawners
+        there are none of those (and for a player on no team). Never the enemies' (ENEMY_SPAWN)."""
+        players = [i for i, s in enumerate(self.level.spawners) if s.team != ENEMY_SPAWN]
         if team:
-            mine = [i for i, s in enumerate(spawners) if s.team in (0, team)]
+            mine = [i for i in players if self.level.spawners[i].team in (0, team)]
             if mine:
                 return mine
-        return list(range(len(spawners)))
+        return players
 
     def next_index(self, team=0):
-        """The index of the spawner the next player (of `team`) comes in at (None: the map has none)."""
+        """The index of the spawner the next player (of `team`) comes in at (None: the map has none for players)."""
         spawners = self.level.spawners
-        if not spawners:
-            return None
         allowed = self.choices(team)
+        if not allowed:
+            return None
         used = self.used.setdefault(team, set())
         if all(i in used for i in allowed):
             used.clear()                    # every one has been used: a new round
@@ -232,13 +240,16 @@ class Events:
 
 
 def make_round(game):
-    """The rounds of the game's map mode: bomb defusal's Round, King of the Hill's HillRound, Respawns for the other
-    modes on a map with a respawn delay, or None (players come straight back)."""
+    """The rounds of the game's map mode: bomb defusal's Round, King of the Hill's HillRound, the zombies' rounds of
+    enemies (ZombieRound), Respawns for the other modes on a map with a respawn delay, or None (players come straight
+    back)."""
     mode = game.level.settings.mode
     if mode == "bomb":
         return Round(game)
     if mode == "koth":
         return HillRound(game)
+    if mode == "zombies":
+        return ZombieRound(game)
     if mode in RESPAWN_MODES and game.level.settings.respawn_delay > 0:
         return Respawns(game)
     return None
@@ -260,6 +271,7 @@ class Game:
         self.hurts = {}             # player id -> damage taken, until take_hurts()
         self.flashes = []           # lights to flash, (name, x, y, z), until take_flashes()
         self.notes = {}             # player id -> messages for them (what they bought), until advance_world()
+        self.using = set()          # the players holding the use key last step (an item is bought on the press)
         self.clock = 0.0            # seconds the world has run (the planted bomb blinks by it)
         self.round = make_round(self)       # bomb defusal's or King of the Hill's rounds (None in the other modes)
 
@@ -298,10 +310,10 @@ class Game:
         return state
 
     def team_for(self, player_id):
-        """The team a player joining now goes on: none in free for all, team 1 for everyone in co-op, and in two
-        teams the one with fewer players (team 1 when they are even)."""
+        """The team a player joining now goes on: none in free for all, team 1 for everyone in co-op and zombies, and
+        in two teams the one with fewer players (team 1 when they are even)."""
         mode = self.level.settings.mode
-        if mode == "coop":
+        if mode in ("coop", "zombies"):
             return 1
         if not self.level.settings.has_teams():
             return NO_TEAM
@@ -367,6 +379,7 @@ class Game:
         if self.round is not None and player_id in self.players:
             self.round.left(player_id)
         self.players.pop(player_id, None)
+        self.using.discard(player_id)
         if self.round is not None:
             self.round.after_leaving()
 
@@ -379,11 +392,17 @@ class Game:
         for index in wish.buy:
             self.notes.setdefault(player_id, []).append(self.buy(player_id, index))
         body, inventory = state.body, state.inventory
+        if wish.use and player_id not in self.using and state.alive:     # (pressed, not held: one buy a press)
+            bought = self.items.buy(body, state.stats, inventory)
+            if bought is not None:
+                self.notes.setdefault(player_id, []).append(bought)
+        (self.using.add if wish.use else self.using.discard)(player_id)
         for slot in wish.equip:
             inventory.equip(slot)
         if wish.cycle:
             inventory.cycle(wish.cycle)
-        move_body(self.world.for_team(state.team), body, wish, dt)     # (through their own team's barriers only)
+        move_body(self.world.for_team(state.team), body, wish, dt,     # (through their own team's barriers only)
+                  speed_of(self.round, player_id))
         fired = inventory.update(dt, wish.fire, wish.reload)
         for gun in fired:
             self.projectiles.fire(body, gun, self.level.ammo_for(gun), player_id, state.team)
@@ -425,8 +444,11 @@ class Game:
             self.fx.append((effect, hit.x, hit.y, hit.z, -hit.dx, -hit.dy, -hit.dz))
         for light in hit.blast.explosion_lights:
             self.flashes.append((light, hit.x, hit.y, hit.z))
-        bodies = [(pid, state.body) for pid, state in self.players.items() if state.alive]
+        bodies = [(pid, state.body) for pid, state in self.players.items() if state.alive] + self.other_targets()
         for pid, damage, (vx, vy, vz) in blast_results(self.world, hit.blast, hit.x, hit.y, hit.z, hit.owner, bodies):
+            if pid not in self.players:
+                self.round.hurt_target(pid, damage, hit.owner, (vx, vy, vz))
+                continue
             if not self.can_hurt(hit.owner, pid):
                 continue                                # a teammate's blast, without friendly fire
             state = self.players[pid]
@@ -437,6 +459,14 @@ class Game:
                 body.vy += vy
                 body.vz += vz
                 body.on_ground = False
+
+    def other_targets(self):
+        """[(id, body)] of what bullets and blasts can hurt besides the players: the round's (an enemy's), when it
+        has any. A body has x, y, z (the feet), height, radius and on_ground; an id is never a player's id. What
+        strikes one is handed to the round's hurt_target(id, damage, attacker, push), push (vx, vy, vz) being a
+        blast's throw (None for a bullet)."""
+        targets = getattr(self.round, "targets", None)
+        return targets() if targets is not None else []
 
     def take_fx(self):
         """The particle effects to play since the last call (a muzzle flash for each shot fired)."""
@@ -461,13 +491,17 @@ class Game:
             state.hit = max(0.0, state.hit - dt)
         targets = [(pid, state.body.x, state.body.y, state.body.z, state.body.height)
                    for pid, state in self.players.items() if state.alive]
+        targets += [(tid, body.x, body.y, body.z, body.height, body.radius) for tid, body in self.other_targets()]
         for hit in self.projectiles.update(self.world, dt, targets):
             for effect in hit.effects:                  # sprays back the way the bullet came
                 self.fx.append((effect, hit.x, hit.y, hit.z, -hit.dx, -hit.dy, -hit.dz))
             for light in hit.lights:
                 self.flashes.append((light, hit.x, hit.y, hit.z))
-            if hit.target in self.players and self.can_hurt(hit.owner, hit.target):
-                self.hurt(hit.target, hit.damage, hit.owner)
+            if hit.target in self.players:
+                if self.can_hurt(hit.owner, hit.target):
+                    self.hurt(hit.target, hit.damage, hit.owner)
+            elif hit.target is not None:
+                self.round.hurt_target(hit.target, hit.damage, hit.owner, None)
             if hit.blast is not None:
                 self.explode(hit)
         self.items.advance(dt)
@@ -493,8 +527,11 @@ class Game:
     def sprites(self, viewer=None, hide=None):
         """Items, bullets, the bomb (or the hill's marker) and the players other than `viewer` (and `hide`: the one
         being watched, whose eyes the picture is seen from) as the renderer wants them."""
+        looking = self.players[viewer].body.angle if viewer in self.players else None
+        enemies = getattr(self.round, "enemy_sprites", None)
         return (self.items.sprites() + self.projectiles.sprites() + self.player_sprites(viewer, hide)
-                + (self.round.sprites(self.clock) if self.round is not None else []))
+                + (self.round.sprites(self.clock) if self.round is not None else [])
+                + (enemies(self.character_tile, looking) if enemies is not None else []))
 
     def labels(self, viewer=None, hide=None):
         """(x, y, z of the top of the head, name, team) of each player other than `viewer`, for their names."""

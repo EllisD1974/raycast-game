@@ -143,6 +143,11 @@ editor use the Entity tool (N); each item has a mode and an effect:
 Effects are none, score or health, picked from a drop-down list. Score and health show in the corner
 of the game view.
 
+An item with a **Price** above 0 is for sale: touching it does nothing, and standing by it (within a cell) and
+pressing **E** buys it for that much money, once per press. "E: buy ... for $..." shows while you are close enough
+(dimmed while you cannot afford it). Its mode still applies: Pick up once is gone once bought, Respawns comes back,
+and Stays can be bought again and again (a wall gun).
+
 Items can also move. An item has a list of animations (none by default); add one from the
 Details pane's "+ Add animation" list and each one has its own settings:
 

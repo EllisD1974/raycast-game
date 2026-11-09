@@ -150,8 +150,9 @@ def push_out(world, p, dt):
         p.y += uy * m
 
 
-def step(world, p, forward, strafe, turn, jump, dt, sprint=False, crouch=False):
-    """Advance the player by dt seconds. forward/strafe/turn are in -1..1.
+def step(world, p, forward, strafe, turn, jump, dt, sprint=False, crouch=False, speed=MOVE_SPEED):
+    """Advance the player by dt seconds. forward/strafe/turn are in -1..1. `speed` is the walking speed in cells per
+    second (enemies have their own; players walk at MOVE_SPEED).
 
     On the ground the horizontal velocity follows the keys at once, SPRINT_MULTIPLIER times
     faster while `sprint` is held together with a movement key, CROUCH_MULTIPLIER times as fast
@@ -165,29 +166,29 @@ def step(world, p, forward, strafe, turn, jump, dt, sprint=False, crouch=False):
     wish_x = math.cos(p.angle) * forward - math.sin(p.angle) * strafe
     wish_y = math.sin(p.angle) * forward + math.cos(p.angle) * strafe
     if p.on_ground:
-        speed = MOVE_SPEED * (CROUCH_MULTIPLIER if p.crouched else
-                              SPRINT_MULTIPLIER if sprint and (forward or strafe) else 1.0)
-        p.vx, p.vy = wish_x * speed, wish_y * speed
+        ground_speed = speed * (CROUCH_MULTIPLIER if p.crouched else
+                                SPRINT_MULTIPLIER if sprint and (forward or strafe) else 1.0)
+        p.vx, p.vy = wish_x * ground_speed, wish_y * ground_speed
     elif forward or strafe:
         # Steer each axis whose key is held (forward/back, left/right) in the direction the player
         # faces, and leave the other axis's momentum alone: tapping A or D during a forward jump
         # strafes without losing the forward speed, like walking. Walking speed is the target on an
         # axis, but a player already faster along it (a sprinting jump) keeps that speed. The total speed
         # stays within the larger of walking speed and the speed the player had.
-        limit = max(MOVE_SPEED, math.hypot(p.vx, p.vy))
+        limit = max(speed, math.hypot(p.vx, p.vy))
         fx, fy = math.cos(p.angle), math.sin(p.angle)
         rx, ry = -math.sin(p.angle), math.cos(p.angle)
         for key, (ux, uy) in ((forward, (fx, fy)), (strafe, (rx, ry))):
             if not key:
                 continue
-            speed = p.vx * ux + p.vy * uy
-            target = key * max(MOVE_SPEED, abs(speed))
-            change = max(-AIR_ACCEL * dt, min(AIR_ACCEL * dt, target - speed))
+            along = p.vx * ux + p.vy * uy
+            target = key * max(speed, abs(along))
+            change = max(-AIR_ACCEL * dt, min(AIR_ACCEL * dt, target - along))
             p.vx += change * ux      # (a change in the world frame, so turning does not swing the momentum)
             p.vy += change * uy
-        speed = math.hypot(p.vx, p.vy)
-        if speed > limit:                           # steering bends the momentum, it never adds speed
-            p.vx, p.vy = p.vx * limit / speed, p.vy * limit / speed
+        moving = math.hypot(p.vx, p.vy)
+        if moving > limit:                          # steering bends the momentum, it never adds speed
+            p.vx, p.vy = p.vx * limit / moving, p.vy * limit / moving
 
     dx, dy = p.vx * dt, p.vy * dt
     if can_stand(world, p.x + dx, p.y, p.z, p.span, p.on_ground, height):   # axes separately: slide along walls

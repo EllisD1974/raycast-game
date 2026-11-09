@@ -39,7 +39,7 @@ class LightSystem:
     def __init__(self, level, world):
         self.defs = {light.name: light for light in level.lights}
         self.ambient = level.ambient
-        self.occluder = (world.solid_from == 0).astype(np.uint8)      # walls that fill every floor stop light
+        self.occluder = world.light_occluder       # walls that fill every floor stop light (shared: doors change it)
         self.static = self._glowing_walls(level, world)
         self.flashes = []               # [light name, x, y, z, age]
         self.attached = {}              # key -> [light name, x, y, z]

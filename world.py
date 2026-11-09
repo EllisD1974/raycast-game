@@ -18,7 +18,13 @@ class World:
     A barrier (the site layer's BARRIER_SITES on the ground floor; spawn protection) lets only one team through: its
     players walk through it and its bullets fly through it, while it stops everyone and everything else like glass.
     for_team(team) is the world as that team's players and bullets meet it; the World itself (team None) is how
-    everything else meets it (blasts, the bomb, particles), which no barrier lets through."""
+    everything else meets it (blasts, the bomb, particles), which no barrier lets through.
+
+    Some cells change during a game (see close_cells, open_cells and set_blocks): a door closes a cell for
+    everyone as a wall, and player_block / enemy_block stop only players or only enemies on one floor of a cell
+    (a boarded-up window stops enemies until they break it, and never lets players through). for_enemies() is the
+    world as enemies meet it. Every view shares the arrays, so a change shows in all of them, and `revision` counts
+    the changes (for whatever caches what it worked out from the cells, such as pathing)."""
 
     def __init__(self, level, tile_count, transparent_tiles=None):
         """`transparent_tiles` is a boolean per atlas tile (see atlas.transparent_tiles): walls
@@ -54,6 +60,7 @@ class World:
             self.wall_sides[y, x, i, 1:] = side_band(level, x, y, SIDES[i])
         self.pane_tex = np.full((h, w), -1, np.int32)           # see-through wall tile per cell, or -1
         self.pane_top = np.full((h, w), 1e9, np.float32)        # how high that pane reaches (a short wall)
+        self.pane_open = np.zeros((h, w), np.uint8)             # 1: that pane lets bullets through (set_pane)
         wall_floor = np.array(level.grids["wall_floor"], np.int32)
         self.blocked = (self.solid != 0) & (wall_floor == 0)    # what the player cannot enter on any floor
         transparent = np.zeros(tile_count, bool) if transparent_tiles is None else np.asarray(transparent_tiles, bool)
@@ -69,6 +76,15 @@ class World:
         self.barrier = np.zeros((h, w), np.int32)               # the team a ground floor barrier lets through, or 0
         self._add_barriers(level, tile_count)
         self.has_barriers = bool(self.barrier.any())
+        self.enemies = False                                    # True in the for_enemies view
+        self.player_block = np.zeros((floors, h, w), np.uint8)  # floors of cells players cannot enter (set_blocks)
+        self.enemy_block = np.zeros((floors, h, w), np.uint8)   # the same for enemies
+        self.light_occluder = (self.solid_from == 0).astype(np.uint8)   # walls that fill every floor stop light
+        self.enemy_cost = np.zeros((floors, h, w), np.int32)    # extra cost of pathing through (set_cost)
+        self.tile_count = tile_count
+        self.extras = {}                                        # what a game mode keeps with the world (shared)
+        self.revision = np.zeros(1, np.int64)                   # (an array so every view shares it)
+        self._opened = {}                                       # (x, y) -> what close_cells covered up there
 
     def _add_barriers(self, level, tile_count):
         """Barriers on the ground floor: open cells that only their team gets through, drawn as a see-through pane
@@ -91,6 +107,79 @@ class World:
             view.team = team
             self._teams[team] = view
         return view
+
+    def for_enemies(self):
+        """This world as enemies meet it: enemy_block stops them instead of player_block. Barriers stop them as they
+        stop everything that is not of the barrier's team."""
+        view = self._teams.get("enemies")
+        if view is None:
+            view = copy.copy(self)
+            view.team, view.enemies = None, True
+            self._teams["enemies"] = view
+        return view
+
+    def close_cells(self, cells, tile):
+        """Close each (x, y) of `cells` with a wall of atlas tile `tile` filling every floor, as a door: nothing
+        walks, shoots or sees through it until open_cells opens it again."""
+        for x, y in cells:
+            if (x, y) in self._opened or not (0 <= x < self.width and 0 <= y < self.height):
+                continue
+            self._opened[(x, y)] = (self.solid[y, x], self.wall_tex[y, x], self.blocked[y, x], self.solid_from[y, x],
+                                    self.wall_sides[y, x].copy(), self.pane_tex[y, x], self.light_occluder[y, x])
+            self.solid[y, x], self.wall_tex[y, x], self.blocked[y, x], self.solid_from[y, x] = 1, tile, 1, 0
+            self.wall_sides[y, x, :, 0] = -1
+            self.pane_tex[y, x] = -1
+            self.light_occluder[y, x] = 1
+        self.revision[0] += 1
+
+    def open_cells(self, cells):
+        """Open cells closed by close_cells: each is again what the level made it."""
+        for x, y in cells:
+            saved = self._opened.pop((x, y), None)
+            if saved is None:
+                continue
+            (self.solid[y, x], self.wall_tex[y, x], self.blocked[y, x], self.solid_from[y, x], self.wall_sides[y, x],
+             self.pane_tex[y, x], self.light_occluder[y, x]) = saved
+        self.revision[0] += 1
+
+    def is_closed(self, x, y):
+        """True if close_cells closed cell (x, y)."""
+        return (x, y) in self._opened
+
+    def set_blocks(self, cells, players=None, enemies=None, floor=0):
+        """Stop (True) or let through (False) players and/or enemies on `floor` of each (x, y) of `cells`; None
+        leaves that one as it is. Bullets, blasts and sight are not stopped."""
+        for x, y in cells:
+            if players is not None:
+                self.player_block[floor, y, x] = players
+            if enemies is not None:
+                self.enemy_block[floor, y, x] = enemies
+        self.revision[0] += 1
+
+    def set_cost(self, cells, cost, floor=0):
+        """Make finding the way for enemies through each (x, y) of `cells` on `floor` cost `cost` more (in
+        pathing.STRAIGHT steps), and let it through even while enemy_block stops them there: something they can
+        break (a boarded-up window), worth the detour only when the way round is longer."""
+        for x, y in cells:
+            self.enemy_cost[floor, y, x] = cost
+        self.revision[0] += 1
+
+    def path_cost(self, s, cx, cy):
+        """The extra cost of pathing through floor s of (cx, cy) for this world's movers (only enemies have any)."""
+        return int(self.enemy_cost[s, cy, cx]) if self.enemies else 0
+
+    def set_pane(self, x, y, tile, top, shoot_through=False):
+        """Show a see-through pane of atlas tile `tile` in open cell (x, y) of the ground floor up to height `top`,
+        or none (tile -1). It stops bullets (and sight, and blasts) below its top, like glass, unless shoot_through;
+        walking is up to set_blocks."""
+        self.pane_tex[y, x] = tile if 0 <= tile < self.tile_count else -1
+        self.pane_top[y, x] = top
+        self.pane_open[y, x] = shoot_through
+
+    def mover_blocked(self, s, cx, cy):
+        """True if set_blocks stops this world's movers (players, or enemies in the for_enemies view) on floor `s`
+        of cell (cx, cy)."""
+        return bool((self.enemy_block if self.enemies else self.player_block)[s, cy, cx])
 
     def barred(self, cx, cy):
         """True if a barrier in cell (cx, cy) stops this world's team."""
@@ -173,10 +262,10 @@ class World:
         if self.barrier[cy, cx]:
             if self.barred(cx, cy) and z < plane_z(self.ceil_plane, 0, cx, cy, x - cx, y - cy):
                 return False                    # (a barrier fills the ground floor's room, not the floors above)
-        elif self.pane_tex[cy, cx] >= 0 and z < self.pane_top[cy, cx]:
+        elif self.pane_tex[cy, cx] >= 0 and z < self.pane_top[cy, cx] and not self.pane_open[cy, cx]:
             return False
         fx, fy = x - cx, y - cy
-        for s in range(self.floors):
+        for s in range(min(self.floors, int(self.solid_from[cy, cx]))):     # (none in a wall, or a closed door)
             if self.span_on[s, cy, cx] and plane_z(self.floor_plane, s, cx, cy, fx, fy) <= z \
                     < plane_z(self.ceil_plane, s, cx, cy, fx, fy):
                 return True
@@ -220,6 +309,8 @@ class World:
         A barrier that does not let this world's team through blocks the ground floor of its cell (only)."""
         s = self._span_at(x, y, z, current, grounded)
         if s == 0 and self.has_barriers and self.barred(math.floor(x), math.floor(y)):
+            return -1
+        if s >= 0 and self.mover_blocked(s, math.floor(x), math.floor(y)):
             return -1
         return s
 

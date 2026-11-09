@@ -309,6 +309,31 @@ def test_nearer_glass_is_blended_over_farther_glass(renderer):
     assert np.abs(other[320, 180] - both[320, 180]).sum() > 10
 
 
+def test_the_sides_between_see_through_cells_next_to_each_other_are_not_drawn(renderer):
+    """Glass two cells thick looks like one pane: only the outside face is drawn, not the one inside
+    the wall between its cells."""
+    level = hall()
+    place(level, 5, 5, GLASS)
+    place(level, 6, 5, RED_GLASS)
+    world = build(level)
+    thick = frame(renderer, world, x=2.5)
+    front_only = frame(renderer, world, x=2.5, hide_panes=[(6, 5)])
+    for x, y in ((320, 180), (320, 140), (310, 220)):
+        assert np.all(np.abs(thick[x, y] - front_only[x, y]) <= 1), (x, y, thick[x, y], front_only[x, y])
+
+
+def test_a_taller_pane_behind_a_short_one_still_shows_above_it(renderer):
+    level = hall()
+    place(level, 5, 5, GLASS, height=1.0)
+    place(level, 6, 5, RED_GLASS)
+    world = build(level)
+    both = frame(renderer, world, x=2.5)
+    short_only = frame(renderer, world, x=2.5, hide_panes=[(6, 5)])
+    changed = np.abs(both - short_only).sum(axis=2) > 0
+    rows = np.where(changed[320])[0]
+    assert len(rows) and rows.max() < HEIGHT // 2               # only above the short pane's top (eye at 0.5)
+
+
 def test_a_pane_behind_a_nearer_opaque_wall_is_not_drawn(renderer):
     level = hall()
     place(level, 4, 5, RED)                                           # opaque, in front

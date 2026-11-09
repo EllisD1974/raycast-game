@@ -52,11 +52,13 @@ class Projectile:
 
 
 def struck_player(targets, owner, x, y, z):
-    """The id of the player (other than `owner`) whose body contains the point, or None. A target is (id, x, y, z of
-    the feet[, height]): PLAYER_HEIGHT tall unless it says (a crouching player is shorter)."""
-    for pid, tx, ty, tz, *height in targets:
-        if (pid != owner and tz <= z <= tz + (height[0] if height else PLAYER_HEIGHT)
-                and (x - tx) ** 2 + (y - ty) ** 2 <= PLAYER_RADIUS * PLAYER_RADIUS):
+    """The id of the target (other than `owner`) whose body contains the point, or None. A target is (id, x, y, z of
+    the feet[, height[, radius]]): PLAYER_HEIGHT tall unless it says (a crouching player is shorter, an enemy may be
+    any size), PLAYER_RADIUS wide unless it says."""
+    for pid, tx, ty, tz, *size in targets:
+        height = size[0] if size else PLAYER_HEIGHT
+        radius = size[1] if len(size) > 1 else PLAYER_RADIUS
+        if pid != owner and tz <= z <= tz + height and (x - tx) ** 2 + (y - ty) ** 2 <= radius * radius:
             return pid
     return None
 
@@ -113,7 +115,7 @@ class Projectiles:
 
     def update(self, world, dt, targets=()):
         """Move every bullet dt seconds. Returns the Hit of each bullet that struck something. `targets` are
-        the players a bullet can strike, (id, x, y, z of the feet)."""
+        what a bullet can strike: (id, x, y, z of the feet[, height[, radius]]), see struck_player."""
         hits, alive = [], []
         for b in self.bullets:
             space = world.for_team(b.team)          # (a barrier lets only its own team's bullets through)

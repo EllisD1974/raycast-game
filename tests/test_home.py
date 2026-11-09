@@ -60,9 +60,9 @@ def key(home, k):
 
 # ------------------------------------------------------------------ the pages
 
-def test_the_home_page_offers_host_join_settings_and_exit(folder):
+def test_the_home_page_offers_solo_host_join_settings_and_exit(folder):
     home = Home(GameSettings(), str(folder))
-    assert list(buttons(home)) == ["", "Host game", "Join game", "Settings", "Exit"]     # (the first: the name box)
+    assert list(buttons(home)) == ["", "Play solo", "Host game", "Join game", "Settings", "Exit"]  # (first: the name box)
     assert click(home, "Exit") == "exit"
     click(home, "Settings")
     assert home.page == "settings" and any(i.kind == "slider" for i in home.items(SIZE))
@@ -247,6 +247,33 @@ def test_the_home_screen_starts_hosting_the_map_picked(screen, folder, graphics,
         assert session.game.level.width == 18 and session.host.max_clients == 2 and session.host.password == "pw"
     finally:
         session.close()
+
+
+def test_playing_solo_picks_a_map_shared_with_hosting(folder):
+    settings = GameSettings()
+    home = Home(settings, str(folder))
+    click(home, "Play solo")
+    assert home.page == "solo" and buttons(home)["arena"].selected
+    click(home, "dunes")
+    assert click(home, "Play") == "solo" and settings.host_map == "dunes.json"
+    key(home, pygame.K_ESCAPE)
+    click(home, "Host game")
+    assert buttons(home)["dunes"].selected
+
+
+def test_playing_solo_with_no_maps_says_so(tmp_path):
+    home = Home(GameSettings(), str(tmp_path))
+    click(home, "Play solo")
+    assert click(home, "Play") is None and "no maps" in home.message
+
+
+def test_the_home_screen_starts_a_solo_game_of_the_map_picked(screen, folder, graphics):
+    from session import LocalSession
+    steps = [press_label("Play solo"), press_label("castle"), press_label("Play")]
+    session, map_path = main.home_screen(screen, pygame.time.Clock(), graphics, GameSettings(name="Solo"),
+                                         events=scripted(Home(GameSettings(), str(folder)), steps))
+    assert isinstance(session, LocalSession) and map_path == str(folder / "castle.json")
+    assert session.game.level.width == 14 and list(session.game.players) == [session.id]
 
 
 def test_the_home_screen_joins_a_host_and_reports_a_wrong_password(screen, folder, graphics, monkeypatch):

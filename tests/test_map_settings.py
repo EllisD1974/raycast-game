@@ -17,7 +17,7 @@ import net
 from buymenu import BuyMenu, entry_tile, price_text
 from entities import PlayerStats
 from game import NO_TEAM, Game, Inputs
-from mapfile import BUY_KINDS, BuyItem, Gun, Level, MapSettings, level_text, load_level, parse_level, save_level
+from mapfile import BUY_KINDS, BuyItem, Entity, Gun, Level, MapSettings, level_text, load_level, parse_level, save_level
 from session import ClientSession, HostSession
 from test_session import FIRST_CHARACTER, make_world, run
 from world import World
@@ -147,6 +147,59 @@ def test_full_health_is_not_bought_and_costs_nothing():
     game = game_for(shop_level(start_money=100))
     assert buy(game, 0, 2) == ["Health is already full"]
     assert game.players[0].stats.money == 100
+
+
+# ------------------------------------------------------------------ items for sale (bought with E)
+
+def sale_level(**entity):
+    level = shop_level(start_money=400)
+    fields = {"x": 2.3, "y": 1.5, "effect": "gun", "gun": "Shotgun", "price": 300, **entity}
+    level.entities = [Entity(**fields)]
+    return level
+
+
+def press_use(game, pid=0):
+    picked = game.tick({pid: Inputs(use=True)}, 1 / 60)[pid].picked
+    game.tick({pid: Inputs()}, 1 / 60)
+    return picked
+
+
+def test_an_item_for_sale_is_not_picked_up_by_touching_it():
+    game = game_for(sale_level())
+    me = game.players[0]
+    me.body.x = 2.3
+    assert game.tick({0: Inputs()}, 1 / 60)[0].picked == []
+    assert me.inventory.find_gun("Shotgun") is None and game.items.items[0].present
+
+
+def test_pressing_use_beside_an_item_for_sale_buys_it_once_a_press():
+    game = game_for(sale_level(mode="persistent"))
+    me = game.players[0]
+    assert press_use(game) == ["Bought Shotgun for $300"]
+    assert me.inventory.find_gun("Shotgun") is not None and me.stats.money == 100
+    game.tick({0: Inputs(use=True)}, 1 / 60)
+    assert game.tick({0: Inputs(use=True)}, 1 / 60)[0].picked == []      # (held: not bought again)
+    game.tick({0: Inputs()}, 1 / 60)
+    assert press_use(game)[0].startswith("Not enough money") and me.stats.money == 100
+
+
+def test_an_item_bought_once_is_gone_and_one_far_away_cannot_be_bought():
+    game = game_for(sale_level(effect="health", amount=30, price=50))
+    me = game.players[0]
+    me.stats.health = 50
+    assert press_use(game) == ["Bought 30 health for $50"] and me.stats.health == 80
+    assert not game.items.items[0].present and press_use(game) == []
+    far = game_for(sale_level(x=6.5))
+    assert press_use(far) == [] and far.players[0].stats.money == 400
+
+
+def test_a_price_is_saved_with_the_map_and_shows_money(tmp_path):
+    level = sale_level()
+    level.settings = MapSettings()
+    assert level.uses_money() and not level.settings.uses_money()
+    path = tmp_path / "m.json"
+    save_level(str(path), level)
+    assert load_level(str(path)).entities[0].price == 300
 
 
 def test_buys_survive_the_network_message():

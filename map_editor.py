@@ -66,7 +66,8 @@ T top, B bottom. Cells, the start and the 3D camera stay where they are on the m
 
 Tools: B paint, E erase, F fill, I pick from the map, S set the start (on the floor you are
 editing; click it again to rotate, drag it to move it), T stairs (drag a line on the FloorH layer: heights rise by
-the Step each cell, starting at the brush value), H shapes (drag a line, box or ellipse, outline
+the Step each cell, starting at the brush value; on the WallH layer it builds the steps from short walls
+instead, each keeping the ceiling of the room it stands in), H shapes (drag a line, box or ellipse, outline
 or filled, chosen on the second toolbar row; it paints what the brush paints on the layer you are
 on, right-drag erases the shape, Shift makes a square or circle, Esc cancels).
 Ctrl+Z / Ctrl+Y undo / redo, Ctrl+S save,
@@ -201,6 +202,7 @@ import numpy as np
 import pygame
 
 from atlas import ATLAS_PATH, atlas_array, transparent_tiles, unpack_atlas
+from character import sheet_names
 from constants import FOV_DEG, HEIGHT, MOUSE_SENSITIVITY, PLAYER_HEIGHT, TILE, WIDTH
 from mapfile import (ANIMATION_KINDS, ANIMATION_LABELS, DEFAULTS, EDIT_LAYERS, EFFECT_LABELS, ENTITY_EFFECTS,
                      ENTITY_MODES, GUN_MODE_LABELS, GUN_MODES, MAP_PATH, MAX_HIT_NAMES, MAX_NAME, MAX_NAME_LENGTH, MIN_WALL_GAP,
@@ -211,6 +213,12 @@ from mapfile import (ANIMATION_KINDS, ANIMATION_LABELS, DEFAULTS, EDIT_LAYERS, E
                      BUY_COST_LABELS, BUY_COSTS, BUY_KIND_LABELS, BUY_KINDS, GAME_MODE_LABELS, GAME_MODES, MAX_BUY_ITEMS,
                      DEATH_CAM_WHO, DEATH_CAM_WHO_LABELS,
                      BOMB_NUMBERS, SITE_NAMES, SPAWN_TEAMS, SPAWN_TEAM_LABELS, CT_TEAM, T_TEAM,
+                     ATTACK_KINDS, ATTACK_KIND_LABELS, ATTACK_NUMBERS, ENEMY_NUMBERS, ENEMY_PATHING,
+                     ENEMY_PATHING_LABELS, ENEMY_SPAWN, MAX_ATTACKS, MAX_ENEMIES, SPAWNER_TEAMS, ZOMBIE_NUMBERS,
+                     Attack, Barricade, BarricadeKind, BARRICADE_TILE, Enemy, unique_thing_name,
+                     CURVE_LIMITS, MAX_CURVE_POINTS, MAX_CURVE_X, curve_at, BARRICADE_NUMBERS, MAX_BARRICADE_BOARDS, MAX_BARRICADE_STAGES,
+                     REWARD_KINDS,
+                     REWARD_KIND_LABELS,
                      BARRIER_SITES, HILL_SITE, KOTH_NAMES, KOTH_NUMBERS,
                      MAX_MONEY, BuyItem)
 from buymenu import entry_tile, price_text
@@ -290,7 +298,8 @@ SITE_MARKS = {1: "A", 2: "B", HILL_SITE: "H", 4: "|1", 5: "|2"}  # ... and their
 SITE_BRUSHES = {1: "bomb site A", 2: "bomb site B", HILL_SITE: "the hill (King of the Hill's capture point)",
                 4: "a barrier only team 1 (T, RED) and its bullets get through (ground floor)",
                 5: "a barrier only team 2 (CT, BLU) and its bullets get through (ground floor)"}
-SPAWN_TEAM_FILLS = {0: (90, 170, 255), T_TEAM: (235, 160, 60), CT_TEAM: (80, 140, 255)}   # spawn points by team
+SPAWN_TEAM_FILLS = {0: (90, 170, 255), T_TEAM: (235, 160, 60), CT_TEAM: (80, 140, 255),
+                    ENEMY_SPAWN: (120, 210, 90)}                                          # spawn points by team
 # Bomb defusal settings in the Map settings section: (label, step) for each number, in the order shown.
 BOMB_FIELDS = (("freeze_time", "Freeze time (s)", 1.0), ("round_time", "Round time (s)", 5.0),
                ("buy_time", "Buy time (s)", 5.0), ("bomb_time", "Bomb timer (s)", 5.0),
@@ -307,6 +316,26 @@ KOTH_FIELDS = (("hill_time", "Time to hold (s)", 10.0), ("unlock_time", "Point u
                ("capture_time", "Capture time (s)", 1.0), ("capture_bonus", "Time added / capture (s)", 5.0),
                ("decay_time", "Capture decay (s)", 5.0), ("respawn_time", "Respawn time (s)", 1.0),
                ("win_limit", "Rounds to win", 1.0))
+# Zombies settings in the Map settings section, likewise.
+ZOMBIE_FIELDS = (("extra_per_player", "More per extra player", 0.1),
+                 ("intermission", "Between rounds (s)", 1.0), ("game_over_time", "Game over pause (s)", 1.0),
+                 ("bleed_out", "Downed bleed out (s)", 5.0), ("downed_speed", "Downed crawl (cells/s)", 0.1),
+                 ("revive_time", "Revive takes (s)", 0.5), ("revive_reward", "Money / revive", 10.0),
+                 ("revive_health", "Health after revive", 5.0), ("revive_grace", "Safe after revive (s)", 0.5))
+# An enemy kind's numbers in the Details pane, and its attacks'.
+ENEMY_FIELDS = (("health", "Health", 10.0), ("speed", "Speed (cells/s)", 0.1), ("height", "Height", 0.05),
+                ("radius", "Radius", 0.05), ("kill_reward", "Money / kill", 10.0), ("hit_reward", "Money / hit", 5.0),
+                ("break_rate", "Board pull time (s)", 0.1))
+ATTACK_FIELDS = (("damage", "Damage", 5.0), ("range", "Reach (cells)", 0.05), ("windup", "Wind-up (s)", 0.05),
+                 ("cooldown", "Cooldown (s)", 0.1))
+ENEMY_COLOR_NAMES = ("Tint red", "Tint green", "Tint blue")
+CURVE_TABS = (("zombie_count", "Zombies"), ("zombie_health", "Health x"), ("max_alive", "At once"),
+              ("spawn_interval", "Spawn gap (s)"), ("weight", "Enemy mix"))    # the Waves card's curves
+CURVE_STEPS = {"zombie_count": 1, "zombie_health": 0.05, "max_alive": 1, "spawn_interval": 0.05, "weight": 0.1}
+WAVES_CARD_W, WAVES_CARD_H = 480, 330
+CURVE_MIN_ROUNDS = 20                           # the graph shows at least this many rounds
+CURVE_HIT = 9                                   # how close (pixels) a click must be to grab a point
+BARRICADE_FILL, BARRICADE_PLANK = (120, 80, 40), (200, 150, 90)     # a barricade on the map
 EDITOR_LAYERS = tuple(name for name in EDIT_LAYERS if name != "site") + ("sides", "site")   # the stored layers, the
                                                             # sides of walls, and bomb sites last (keys 1-9)
 TILE_LAYERS = STAMP_LAYERS + ("sides",)                     # layers painted with atlas tiles
@@ -320,10 +349,10 @@ ELEVATION_STEP = 0.05                           # [ / ] and the Elevation row mo
 SPAWN_FILL, SPAWN_EDGE = (90, 170, 255), (15, 40, 90)   # a spawn point on the map
 MOUNT_ZONE = 0.3                                # an item clicked this close (in cells) to a walled side hangs on it
 TOOLS = {"paint": "B", "erase": "E", "fill": "F", "pick": "I", "start": "S", "spawn": "O", "stairs": "T",
-         "shape": "H", "select": "M", "camera": "C", "entity": "N"}
+         "shape": "H", "select": "M", "camera": "C", "entity": "N", "barricade": "U"}
 TOOL_KEYS = {pygame.K_b: "paint", pygame.K_e: "erase", pygame.K_f: "fill",
              pygame.K_i: "pick", pygame.K_s: "start", pygame.K_o: "spawn", pygame.K_t: "stairs", pygame.K_h: "shape",
-             pygame.K_m: "select", pygame.K_c: "camera", pygame.K_n: "entity"}
+             pygame.K_m: "select", pygame.K_c: "camera", pygame.K_n: "entity", pygame.K_u: "barricade"}
 SHAPES = {"line": "Line", "box": "Box", "filled_box": "Filled box", "ellipse": "Ellipse",
           "filled_ellipse": "Filled ellipse"}           # what the Shape tool draws, and its button
 ENTITY_MODE_COLORS = {"once": (255, 255, 255), "respawn": (90, 210, 255), "persistent": (110, 230, 120),
@@ -341,6 +370,7 @@ GIZMO_COLORS = {"bullet": (255, 170, 60), "effect": (80, 220, 255)}
 GIZMO_NAMES = {"bullet": "Bullets", "effect": "Effect"}
 AMBIENT_ROW = -1                                # light_selected value for the map's ambient light, listed first
 RULES_ROW, BUY_ROW = -1, -2                     # settings_selected values for the game rules and the buy menu's own
+ENEMY_ROW = -100                                # settings_selected for enemy kind i (zombies) is ENEMY_ROW - i
 BUY_AMOUNTS = {"gun": 1.0, "item": 1.0, "health": 50.0}   # what an entry gives when its kind is chosen
 
 
@@ -428,6 +458,16 @@ def heat(value, lo, hi):
 
 def fmt(value):
     return f"{value:g}"
+
+
+def barricade_icon(barricade):
+    """The atlas tile that pictures a barricade or saved type: its first (whole) stage, or its tile."""
+    return barricade.stages[0] if barricade.stages else barricade.tile
+
+
+def curve_text(points):
+    """A curve of rounds (mapfile.curve_at) in words: "6 in round 1, 18 in round 5, 40 in round 10"."""
+    return ", ".join(f"{value:g} in round {x}" for x, value in points)
 
 
 # The small marks drawn on the map. Both the map and the key panel draw them through these
@@ -573,6 +613,11 @@ class Editor:
         self.scroll_drag = None                 # (what, how far down its thumb it was grabbed) while a bar is dragged
         self.tips = []                          # [(rect, whole text)] of text drawn cut short, shown whole on hover
         self.effect_selected = None             # index in level.effects of the effect being edited
+        self.barricade_selected = None          # index in level.barricades of the one being edited (Barricade tool)
+        self.place_barricade_kind = ""          # the saved barricade type the Barricade tool places ("": plain)
+        self.curve_shown = "zombie_count"       # the curve the Waves card shows (CURVE_TABS)
+        self.curve_drag = None                  # the index of the point of it being dragged ...
+        self.curve_drag_scale = None            # ... and the graph's scale, held while it is
         self.fx_sim = None                      # [ParticleSystem, settings it was made from, time to next burst]
         self.fx_scaled = {}                     # (tile, pixels) -> a particle picture at that size
         self.place_prefab = ""                  # the prefab the Entity tool places ("" = a plain item)
@@ -757,10 +802,12 @@ class Editor:
     def details_width(self):
         chosen = (self.selected_entity() or self.selected_gun() or self.selected_ammo() or self.selected_prefab()
                   or self.selected_effect() or self.selected_light() or (self.ambient_chosen() or None)
-                  or self.selected_buy_item() or (self.settings_row() or None))
-        if chosen is None and not self.palette_active():
+                  or self.selected_buy_item() or self.selected_enemy() or self.selected_barricade()
+                  or (self.settings_row() or None))
+        if chosen is None and not self.palette_active() and not self.barricade_palette_active():
             return 0
-        key = (self.revision, id(self.level), id(chosen), self.section_name(), self.place_prefab, self._size())
+        key = (self.revision, id(self.level), id(chosen), self.section_name(), self.place_prefab,
+               self.place_barricade_kind, self.tool, self._size())
         if self._width_cache[0] != key:                 # (asked for all the time: worked out once per change)
             self._width_cache = (key, details.pane_width(self.details_fields(), (self.font, self.small),
                                                          max(PANE_WIDTH, self._size()[0] // 3)))
@@ -783,6 +830,12 @@ class Editor:
         entry = self.selected_buy_item()
         if entry is not None:
             return self.buy_item_fields(entry)
+        enemy = self.selected_enemy()
+        if enemy is not None:
+            return self.enemy_fields(enemy)
+        barricade = self.selected_barricade()
+        if barricade is not None:
+            return self.barricade_fields(barricade)
         light = self.selected_light()
         if light is not None:
             return self.light_fields(light)
@@ -800,6 +853,8 @@ class Editor:
         prefab = self.selected_prefab()
         if prefab is not None:
             return self.entity_fields(prefab, is_prefab=True)
+        if self.barricade_palette_active():
+            return self.barricade_palette_fields()
         e = self.selected_entity()
         if e is None:
             return self.palette_fields() if self.palette_active() else []
@@ -864,6 +919,8 @@ class Editor:
                   info("effect", "Effect", self.effect_text(e))]
         if e.mode == "respawn":
             fields.append(info("respawn", "Respawns after", f"{e.respawn:g} s"))
+        if e.price > 0 and e.mode != "scenery":
+            fields.append(info("price", "Price", f"${e.price:g}, bought with E"))
         fields += [info("size", "Size", f"{e.size:g}"), info("lift", "Lift", f"{e.lift:g}"),
                    info("emits", "Emits", (e.emits or "none") + (f"  from {e.emits_offset_x:g}, {e.emits_offset_y:g}, "
                                                                   f"{e.emits_offset_z:g}" if e.emits and e.emits_override else "")),
@@ -917,6 +974,8 @@ class Editor:
                                 low=0.0, high=1000.0))
         if e.mode == "respawn":
             fields.append(field("respawn", "Respawn", "num", step=1.0, low=0.0, high=600.0, unit="s"))
+        if e.mode != "scenery":
+            fields.append(field("price", "Price ($)", "num", step=50.0, low=0.0, high=MAX_MONEY))
         fields += [field("size", "Size", "num", step=0.1, low=0.1, high=3.0),
                    field("lift", "Lift", "num", step=0.1, low=-2.0, high=5.0),
                    field("shown", "Sprite", "enum", choices=(True, False), labels={True: "Shown", False: "Hidden"}),
@@ -1496,6 +1555,22 @@ class Editor:
             return self.settings_selected
         return None
 
+    def selected_barricade(self):
+        """The barricade being edited with the Barricade tool, or None."""
+        i = self.barricade_selected
+        if self.tool == "barricade" and not self.section_open() and i is not None and 0 <= i < len(self.level.barricades):
+            return self.level.barricades[i]
+        return None
+
+    def selected_enemy(self):
+        """The kind of enemy being edited in the Map settings section (zombies), or None."""
+        chosen = self.settings_selected
+        if self.settings_mode and isinstance(chosen, int) and chosen <= ENEMY_ROW:
+            i = ENEMY_ROW - chosen
+            if i < len(self.level.enemies):
+                return self.level.enemies[i]
+        return None
+
     def selected_buy_item(self):
         """The buy menu entry being edited in the Map settings section, or None."""
         items = self.level.settings.buy_items
@@ -1522,6 +1597,9 @@ class Editor:
         if rules.mode == "koth":
             fields.append(Field("koth_note", "Teams", "info", (lambda: "1 = RED, 2 = BLU; the hill: Sites layer (R)"),
                                 None))
+        if rules.mode == "zombies":
+            fields.append(Field("zombies_note", "Enemies", "info",
+                                (lambda: "come in at Enemies spawn points (Spawn tool, Team)"), None))
         if rules.mode in ("ffa", "teams", "coop"):
             fields.append(field("respawn_delay", "Respawn time (s)", "num", step=1.0, low=0.0, high=60.0))
         if rules.has_waiting():                             # (a knocked-out player is out for a while)
@@ -1552,6 +1630,16 @@ class Editor:
                 fields.append(field(name, label, "num", step=step, low=low, high=high))
             low, high = BOMB_NUMBERS["round_end_time"]
             fields.append(field("round_end_time", "Round end pause (s)", "num", step=1.0, low=low, high=high))
+        if rules.mode == "zombies":
+            for name, label, step in ZOMBIE_FIELDS:
+                low, high = ZOMBIE_NUMBERS[name]
+                fields.append(field(name, label, "num", step=step, low=low, high=high))
+            fields += [field("downed_can_shoot", "Downed can shoot", "enum", choices=(False, True),
+                             labels={False: "No", True: "Yes"}),
+                       field("keep_guns", "Back next round with", "enum", choices=(False, True),
+                             labels={False: "Only the start gun", True: "Their guns"})]
+            if self.curve_shown != "weight":                # (the Waves card's curve, typed exactly)
+                fields += self.curve_point_fields(self.curve_shown)
         return fields
 
     def buy_menu_fields(self):
@@ -1601,9 +1689,132 @@ class Editor:
 
     def spawn_team_label(self, team):
         """What a spawn point's team is called in this map's game mode."""
+        if team == ENEMY_SPAWN:
+            return "Enemies"
         if self.level.settings.mode == "koth" and team in KOTH_NAMES:
             return KOTH_NAMES[team]
         return SPAWN_TEAM_LABELS[team]
+
+    # ---------------------------------------------------------------- enemy kinds (zombies)
+
+    def enemy_fields(self, enemy):
+        """One kind of enemy, for the Details pane in the Map settings section: what it is called, who it chases,
+        its numbers and color, and its attacks."""
+        def field(name, label, kind, **options):
+            return Field(name, label, kind, (lambda n=name: getattr(enemy, n)),
+                         (lambda v, n=name: self.set_enemy(n, v)), **options)
+
+        sheets = ("",) + sheet_names()
+        if enemy.sheet not in sheets:                   # (a sheet this computer does not have: kept, and shown)
+            sheets += (enemy.sheet,)
+        fields = [field("name", "Name", "text"),
+                  field("sheet", "Sprite sheet", "enum", choices=sheets,
+                        labels={name: name or "Player (green shirt)" for name in sheets}),
+                  field("pathing", "Chases", "enum", choices=ENEMY_PATHING, labels=ENEMY_PATHING_LABELS)]
+        if enemy.pathing == "sticky":
+            low, high = ENEMY_NUMBERS["switch_margin"]
+            fields.append(field("switch_margin", "Switch if nearer by", "num", step=0.5, low=low, high=high,
+                                unit=" cells"))
+            low, high = ENEMY_NUMBERS["switch_delay"]
+            fields.append(field("switch_delay", "... for (s)", "num", step=0.25, low=low, high=high))
+        for name, label, step in ENEMY_FIELDS:
+            low, high = ENEMY_NUMBERS[name]
+            fields.append(field(name, label, "num", step=step, low=low, high=high))
+        for c, label in enumerate(ENEMY_COLOR_NAMES):
+            fields.append(Field(f"color{c}", label, "num", (lambda c=c: enemy.color[c]),
+                                (lambda v, c=c: self.set_enemy_color(c, v)), step=15, low=0, high=255))
+        for j, attack in enumerate(enemy.attacks):
+            def afield(name, label, kind, j=j, attack=attack, **options):
+                return Field(f"a{j}_{name}", label, kind, (lambda n=name: getattr(attack, n)),
+                             (lambda v, n=name: self.set_attack(j, n, v)), **options)
+
+            remove = (lambda j=j: self.remove_attack(j)) if len(enemy.attacks) > 1 else None
+            fields.append(Field(f"attack{j}", f"Attack {j + 1}", "header", None, None, action=remove))
+            fields.append(afield("kind", "Kind", "enum", choices=ATTACK_KINDS, labels=ATTACK_KIND_LABELS))
+            for name, label, step in ATTACK_FIELDS:
+                low, high = ATTACK_NUMBERS[name]
+                fields.append(afield(name, label, "num", step=step, low=low, high=high))
+        if len(enemy.attacks) < MAX_ATTACKS:
+            fields.append(Field("add_attack", "Add attack", "button", None, None, action=self.add_attack,
+                                text_override="+ Add an attack"))
+        low, high = ENEMY_NUMBERS["max_per_round"]
+        fields.append(field("max_per_round", "Most a round (0: any)", "num", step=1, low=low, high=high))
+        return fields + self.curve_point_fields("weight")
+
+    def new_enemy_name(self, base="Zombie", skip=None):
+        taken = {e.name for i, e in enumerate(self.level.enemies) if i != skip}
+        if base not in taken:
+            return base
+        n = 2
+        while f"{base} {n}"[:MAX_NAME] in taken:
+            n += 1
+        return f"{base} {n}"[:MAX_NAME]
+
+    def add_enemy(self):
+        """Add a kind of enemy (a plain zombie to start with) and select it."""
+        if len(self.level.enemies) >= MAX_ENEMIES:
+            self.say(f"A map has at most {MAX_ENEMIES} kinds of enemy")
+            return
+        self.begin_edit()
+        self.level.enemies.append(Enemy(name=self.new_enemy_name()))
+        self.settings_selected = ENEMY_ROW - (len(self.level.enemies) - 1)
+        self.field_edit = self.menu_open = None
+        self.say("Added an enemy: set its health, speed and attacks in the Details pane")
+
+    def delete_enemy(self):
+        enemy = self.selected_enemy()
+        if enemy is None:
+            return
+        self.begin_edit()
+        self.level.enemies.remove(enemy)
+        self.settings_selected = None
+
+    def set_enemy(self, name, value):
+        """Change one setting of the selected kind of enemy (one undo step). A name is kept unique."""
+        enemy = self.selected_enemy()
+        if enemy is None or getattr(enemy, name) == value:
+            return
+        if name == "name":
+            value = self.new_enemy_name(str(value).strip()[:MAX_NAME] or "Zombie",
+                                        skip=self.level.enemies.index(enemy))
+            if value == enemy.name:
+                return
+        self.begin_edit()
+        setattr(enemy, name, value)
+
+    def set_enemy_color(self, channel, value):
+        enemy = self.selected_enemy()
+        value = max(0, min(255, int(round(value))))
+        if enemy is None or enemy.color[channel] == value:
+            return
+        self.begin_edit()
+        enemy.color[channel] = value
+
+    def set_attack(self, j, name, value):
+        enemy = self.selected_enemy()
+        if enemy is None or not 0 <= j < len(enemy.attacks) or getattr(enemy.attacks[j], name) == value:
+            return
+        self.begin_edit()
+        setattr(enemy.attacks[j], name, value)
+
+    def add_attack(self):
+        enemy = self.selected_enemy()
+        if enemy is None or len(enemy.attacks) >= MAX_ATTACKS:
+            return
+        self.begin_edit()
+        enemy.attacks.append(Attack())
+
+    def remove_attack(self, j):
+        enemy = self.selected_enemy()
+        if enemy is None or len(enemy.attacks) <= 1 or not 0 <= j < len(enemy.attacks):
+            return
+        self.begin_edit()
+        del enemy.attacks[j]
+
+    def enemy_summary(self, enemy):
+        attacks = ", ".join(f"{a.damage:g} dmg / {a.windup + a.cooldown:g}s" for a in enemy.attacks)
+        return (f"health {enemy.health:g}   speed {enemy.speed:g}   {ENEMY_PATHING_LABELS[enemy.pathing].lower()}"
+                f"   attacks: {attacks}   ${enemy.kill_reward:g} a kill")
 
     def buy_team_labels(self):
         """Names of the teams a buy menu entry can be for, in this map's game mode."""
@@ -1621,6 +1832,10 @@ class Editor:
             return
         self.begin_edit()
         setattr(rules, name, value)
+        if name == "mode" and value == "zombies" and not self.level.enemies:
+            self.level.enemies.append(Enemy())
+            self.say("Zombies: a plain Zombie was added under Enemies; place spawn points with the Spawn tool "
+                     "(Team: Enemies)")
         if name == "buy_menu" and value and not rules.buy_items:
             self.say("Buy menu on: add entries with + Add to buy menu (players open it with B)")
 
@@ -1693,12 +1908,21 @@ class Editor:
 
     def deselect(self):
         self.selected, self.field_edit, self.menu_open = None, None, None
+        self.barricade_selected = None
         self.gun_selected = self.ammo_selected = self.prefab_selected = self.effect_selected = None
         self.light_selected = self.settings_selected = None
 
     def delete_selected(self):
         if self.selected_buy_item() is not None:
             self.delete_buy_item()
+            return
+        if self.selected_barricade() is not None:
+            self.begin_edit()
+            del self.level.barricades[self.barricade_selected]
+            self.barricade_selected = None
+            return
+        if self.selected_enemy() is not None:
+            self.delete_enemy()
             return
         if self.selected_light() is not None:
             self.delete_light()
@@ -1778,6 +2002,10 @@ class Editor:
         """Text of the Details pane's delete button for what is selected ('' for none: the palette)."""
         if self.selected_buy_item() is not None:
             return "Remove from the buy menu"
+        if self.selected_enemy() is not None:
+            return "Delete enemy"
+        if self.selected_barricade() is not None:
+            return "Delete barricade"
         if self.settings_row() is not None:
             return ""
         if self.selected_light() is not None:
@@ -1920,6 +2148,9 @@ class Editor:
                      ("btn", f"Team: {self.spawn_team_label(self.spawn_team)}", "spawn_team"),
                      ("txt", f"{len(self.level.spawners)} spawn point{'s' if len(self.level.spawners) != 1 else ''}"
                              " (0 is used first)", DIM)]
+        if self.tool == "barricade":
+            row2 += [None, ("txt", "Click an open ground floor cell (a gap in a wall) to board it up, or a barricade "
+                                   "to edit it; right-click removes one", DIM)]
         if self.tool == "entity":
             row2 += [None, ("txt", "Pick what to place in the list on the right, click a cell to place it, or click an item to edit it", DIM)]
         row3 = [("btn", f"{name.capitalize()}({key})", f"tool:{name}") for name, key in TOOLS.items()]
@@ -2236,19 +2467,20 @@ class Editor:
         else:
             level.set(self.gname(), cx, cy, self.brush_value())
 
-    def put_tile(self, x, y, tile_id):
-        """Set one cell of a tile layer (walls, floor or ceiling texture) to `tile_id`."""
-        level = self.level
-        if self.layer == "walls" and level.in_bounds(x, y) and not level.walls[y][x]:
+    def put_tile(self, x, y, tile_id, layer=None):
+        """Set one cell of a tile layer (walls, floor or ceiling texture; the active one unless given)
+        to `tile_id`."""
+        level, layer = self.level, layer or self.layer
+        if layer == "walls" and level.in_bounds(x, y) and not level.walls[y][x]:
             for side in SIDES:                                  # a new wall shows its own tile on every side
                 for name in (f"side_{side}", f"side_{side}_from", f"side_{side}_to"):
                     level.set(name, x, y, DEFAULTS[name])
-        if self.layer == "walls" and level.in_bounds(x, y) and not level.is_solid(x, y, self.floor):
+        if layer == "walls" and level.in_bounds(x, y) and not level.is_solid(x, y, self.floor):
             level.set("wall_h", x, y, DEFAULTS["wall_h"])      # a new wall starts full height
             level.set("wall_floor", x, y, self.floor)          # ... and on this floor, not the ones below
             if self.floor > 0:                                  # its base: this floor's brush height
                 level.set(self.gname("floor_h"), x, y, self.brush(self.gname("floor_h")))
-        level.set(self.gname(), x, y, tile_id)
+        level.set(self.gname(layer), x, y, tile_id)
 
     def edits_upper_wall(self, cx, cy):
         """True when the FloorH / CeilH layers here set the base / top of a wall that starts on the
@@ -2295,14 +2527,16 @@ class Editor:
     def open_like_neighbors(self, x, y):
         """Before a ground wall is erased, give its cell the room around it: the floor and ceiling
         stored under a wall are never seen, so left as they are they could leave a sunken pocket
-        (say floor 0, ceiling 1 beside a floor at 2) that still looks and blocks like a wall."""
+        (say floor 0, ceiling 1 beside a floor at 2) that still looks and blocks like a wall. A wall
+        with its own ceiling (a short wall's, say a step's) leaves that ceiling, which is the one
+        you could see over it, not the lower one of a room beside it."""
         level = self.level
         if not level.in_bounds(x, y) or not level.walls[y][x] or level.wall_floor(x, y):
             return
         if not level._beside(x, y, "floor_h"):          # boxed in by walls: nothing to match
             return
         level.set("floor_h", x, y, level.wall_base(x, y))
-        level.set("ceil_h", x, y, level.auto_wall_ceiling(x, y))
+        level.set("ceil_h", x, y, level.wall_ceiling(x, y))
         for name in ("floor_tex", "ceil_tex"):          # the most common texture beside it
             values = level._beside(x, y, name)
             level.set(name, x, y, max(set(values), key=values.count))
@@ -2356,6 +2590,9 @@ class Editor:
         if self.tool == "spawn":
             (self.remove_spawners if button == 3 else self.place_spawner)(cell)
             return
+        if self.tool == "barricade":
+            (self.remove_barricade if button == 3 else self.place_barricade)(cell)
+            return
         if self.tool == "select":
             if button == 3:                             # right-click: stop pasting, or let go of the selection
                 if self.pasting:
@@ -2397,9 +2634,9 @@ class Editor:
         elif tool == "entity":
             self.place_entity(cell)
         elif tool == "stairs":
-            if self.layer != "floor_h":
+            if self.layer not in ("floor_h", "wall_h"):
                 self.layer = "floor_h"
-                self.say("Stairs paint floor heights: switched to the FloorH layer")
+                self.say("Stairs paint floor heights (or wall steps on WallH): switched to the FloorH layer")
             self.stairs_drag = (cell, cell)
 
     def entities_in(self, cell):
@@ -2593,6 +2830,217 @@ class Editor:
             found[0].angle = (found[0].angle + math.pi / 2) % math.tau
             self.say(f"Spawn point faces {math.degrees(found[0].angle):.0f} deg")
 
+    def place_barricade(self, cell):
+        """Barricade tool: board up an open ground floor cell with what is picked to place (a plain barricade, or one
+        of the saved types) and select it, or select the one there."""
+        level = self.level
+        if not level.in_bounds(*cell):
+            return
+        found = level.barricade_at(*cell)
+        if found is not None:
+            self.barricade_selected = found
+            self.field_edit = self.menu_open = None
+            return
+        if self.floor != 0:
+            self.say("Barricades go on the ground floor")
+            return
+        if level.is_solid(*cell) or not level.span_present(0, *cell):
+            self.say("A barricade goes in an open cell: the gap in a wall that enemies come through")
+            return
+        self.begin_edit()
+        kind = self.place_barricade_kind if level.barricade_kind_named(self.place_barricade_kind) else ""
+        level.barricades.append(Barricade(*cell, kind=kind))
+        level.apply_barricade_kinds()
+        self.barricade_selected = len(level.barricades) - 1
+        self.field_edit = self.menu_open = None
+        self.tile_target = "tile"
+        note = "" if level.settings.mode == "zombies" else " (barricades are only used in Zombies)"
+        what = f"A {kind}" if kind else f"Barricade {len(level.barricades)}"
+        self.say(f"{what}: set it up in the Details pane, or save it as a type to place more{note}")
+
+    def remove_barricade(self, cell):
+        found = self.level.barricade_at(*cell)
+        if found is not None and self.floor == 0:
+            self.begin_edit()
+            del self.level.barricades[found]
+            self.barricade_selected = None
+            self.say(f"Removed a barricade ({len(self.level.barricades)} left)")
+
+    def barricade_palette_active(self):
+        """The Barricade tool with no barricade selected shows the list of what to place."""
+        return self.tool == "barricade" and not self.section_open() and self.selected_barricade() is None
+
+    def barricade_palette_fields(self):
+        """The Barricade tool's list of what to place: a plain barricade, or one of the map's saved types."""
+        def pick(name):
+            return lambda: setattr(self, "place_barricade_kind", name)
+
+        fields = [Field("palette", "Place", "header", None, None),
+                  Field("pick_plain", "Plain barricade", "button", (lambda: self.place_barricade_kind == ""), None,
+                        action=pick(""), icon=BARRICADE_TILE)]
+        for i, kind in enumerate(self.level.barricade_kinds):
+            fields.append(Field(f"pick_{i}", kind.name, "button", (lambda n=kind.name: self.place_barricade_kind == n),
+                                None, action=pick(kind.name), icon=barricade_icon(kind)))
+        if not self.level.barricade_kinds:
+            fields.append(Field("no_types", "Types", "info",
+                                (lambda: "none yet: select a barricade, Save as a type"), None))
+        return fields
+
+    def barricade_target(self):
+        """What the Details pane's barricade settings change: the selected barricade's saved type (and so every
+        barricade of it) when it has one, else the barricade itself."""
+        barricade = self.selected_barricade()
+        if barricade is None:
+            return None
+        return self.level.barricade_kind_named(barricade.kind) if barricade.kind else barricade
+
+    def barricade_fields(self, barricade):
+        """One barricade, for the Details pane (Barricade tool): its type, then its settings (those of its type, when
+        it has one, which change every barricade of that type)."""
+        target = self.barricade_target() or barricade
+
+        def field(name, label, kind, **options):
+            return Field(name, label, kind, (lambda n=name: getattr(target, n)),
+                         (lambda v, n=name: self.set_barricade(n, v)), **options)
+
+        names = ("",) + tuple(k.name for k in self.level.barricade_kinds)
+        fields = [Field("where", "Cell", "info", (lambda: f"{barricade.x}, {barricade.y} (ground floor)"), None)]
+        group = next(g for g in self.level.barricade_groups() if self.barricade_selected in g)
+        if len(group) > 1:
+            first = self.level.barricades[group[0]]
+            note = ("its boards, rebuild and reward count for all" if group[0] == self.barricade_selected
+                    else f"the one at {first.x}, {first.y} sets boards, rebuild, reward")
+            fields.append(Field("group", f"Acts as one with {len(group) - 1} touching", "info", (lambda: note), None))
+        fields.append(Field("kind", "Type", "enum", (lambda: barricade.kind), self.set_barricade_kind, choices=names,
+                            labels={"": "(its own settings)", **{n: n for n in names if n}}))
+        if barricade.kind:
+            fields += [Field("type_header", f"Type {barricade.kind}: changes all of them", "header", None, None),
+                       Field("type_name", "Type name", "text", (lambda: barricade.kind), self.rename_barricade_kind)]
+        low, high = BARRICADE_NUMBERS["repair_time"]
+        fields += [field("boards", "Boards", "num", step=1, low=1, high=MAX_BARRICADE_BOARDS),
+                   field("repair_time", "Rebuild a board (s)", "num", step=0.1, low=low, high=high),
+                   field("reward_kind", "Rebuilding earns", "enum", choices=REWARD_KINDS, labels=REWARD_KIND_LABELS)]
+        low, high = BARRICADE_NUMBERS["reward"]
+        fields.append(field("reward", "Per board", "num", step=5.0, low=low, high=high))
+        low, high = BARRICADE_NUMBERS["reward_cap"]
+        fields.append(field("reward_cap", "Most per round", "num", step=10.0, low=low, high=high))
+        last = len(self.tiles) - 1
+        if not target.stages:
+            fields.append(field("tile", "Boards look like", "tile", low=0, high=last))
+        fields.append(Field("stages_header", "Damage stages", "header", None, None))
+        for i in range(len(target.stages)):
+            label = "Whole" if i == 0 else ("Last board" if i == len(target.stages) - 1 else f"Stage {i + 1}")
+            fields.append(Field(f"stage{i}", label, "tile", (lambda i=i: target.stages[i]),
+                                (lambda v, i=i: self.set_barricade_stage(i, v)), low=0, high=last))
+        if len(target.stages) < MAX_BARRICADE_STAGES:
+            fields.append(Field("add_stage", "Add stage", "button", None, None, action=self.add_barricade_stage,
+                                text_override="+ Add a stage (more torn down)"))
+        if target.stages:
+            fields.append(Field("remove_stage", "Remove stage", "button", None, None,
+                                action=self.remove_barricade_stage, text_override="Remove the last stage"))
+        if barricade.kind:
+            fields += [Field("detach", "Detach", "button", None, None, action=lambda: self.set_barricade_kind(""),
+                             text_override="Detach (its own settings from now on)"),
+                       Field("delete_type", "Delete type", "button", None, None, action=self.delete_barricade_kind,
+                             text_override=f"Delete the type {barricade.kind}")]
+        else:
+            fields.append(Field("save_type", "Save as a type", "button", None, None, action=self.save_barricade_kind,
+                                text_override="Save as a type (to place more of it)"))
+        return fields
+
+    def new_barricade_kind_name(self, base="Barricade", skip=None):
+        taken = {k.name for k in self.level.barricade_kinds if k is not skip}
+        return base if base not in taken else unique_thing_name(base, taken)
+
+    def save_barricade_kind(self):
+        """Save the selected barricade's settings as a new type, link it to it, and pick that type to place."""
+        barricade = self.selected_barricade()
+        if barricade is None or barricade.kind:
+            return
+        self.begin_edit()
+        kind = BarricadeKind.from_barricade(self.new_barricade_kind_name(), barricade)
+        self.level.barricade_kinds.append(kind)
+        barricade.kind = self.place_barricade_kind = kind.name
+        self.say(f"Saved as the type {kind.name}: it is picked to place (and can be imported into other maps)")
+
+    def set_barricade_kind(self, name):
+        """Link the selected barricade to a saved type (taking its settings), or detach it ("": it keeps them)."""
+        barricade = self.selected_barricade()
+        if barricade is None or barricade.kind == name:
+            return
+        self.begin_edit()
+        barricade.kind = name
+        self.level.apply_barricade_kinds()
+
+    def rename_barricade_kind(self, name):
+        barricade = self.selected_barricade()
+        kind = self.barricade_target()
+        if barricade is None or not barricade.kind or kind is None:
+            return
+        name = self.new_barricade_kind_name(str(name).strip()[:MAX_NAME] or "Barricade", skip=kind)
+        if name == kind.name:
+            return
+        self.begin_edit()
+        for b in self.level.barricades:
+            if b.kind == kind.name:
+                b.kind = name
+        if self.place_barricade_kind == kind.name:
+            self.place_barricade_kind = name
+        kind.name = name
+
+    def delete_barricade_kind(self):
+        """Delete the selected barricade's type: the barricades of it keep its settings as their own."""
+        kind = self.barricade_target()
+        barricade = self.selected_barricade()
+        if barricade is None or not barricade.kind or kind is None:
+            return
+        self.begin_edit()
+        self.level.barricade_kinds.remove(kind)
+        self.level.apply_barricade_kinds()              # (its barricades are detached)
+        if self.place_barricade_kind == kind.name:
+            self.place_barricade_kind = ""
+        self.say(f"Deleted the type {kind.name}: its barricades keep its settings")
+
+    def set_barricade(self, name, value):
+        target = self.barricade_target()
+        if name == "boards":
+            value = int(round(value))
+        if target is None or getattr(target, name) == value:
+            return
+        self.begin_edit()
+        setattr(self.barricade_target(), name, value)
+        self.level.apply_barricade_kinds()
+
+    def set_barricade_stage(self, i, tile):
+        target = self.barricade_target()
+        if target is None or not 0 <= i < len(target.stages) or target.stages[i] == tile:
+            return
+        self.begin_edit()
+        self.barricade_target().stages[i] = tile
+        self.level.apply_barricade_kinds()
+
+    def add_barricade_stage(self):
+        """Add a stage after the others (starting from the last one's tile, or the plain tile) and make the next atlas
+        click set it."""
+        target = self.barricade_target()
+        if target is None or len(target.stages) >= MAX_BARRICADE_STAGES:
+            return
+        self.begin_edit()
+        target = self.barricade_target()
+        target.stages.append(target.stages[-1] if target.stages else target.tile)
+        self.level.apply_barricade_kinds()
+        self.tile_target = f"stage{len(target.stages) - 1}"
+        self.say(f"Stage {len(target.stages)}: click an atlas tile for it (transparent pixels show as gaps)")
+
+    def remove_barricade_stage(self):
+        target = self.barricade_target()
+        if target is None or not target.stages:
+            return
+        self.begin_edit()
+        self.barricade_target().stages.pop()
+        self.level.apply_barricade_kinds()
+        self.tile_target = "tile"
+
     def remove_spawners(self, cell):
         found = self.spawners_in(cell)
         if found:
@@ -2646,19 +3094,40 @@ class Editor:
         self.say(f"Picked {fmt(value)}")
 
     def stairs_heights(self):
-        """[(cell, height)] along the current stairs drag."""
+        """[(cell, height)] along the current stairs drag: floor heights, or on the WallH layer the
+        heights of the walls that make the steps (never 0, which would be a full-height wall)."""
         start, end = self.stairs_drag
-        base = self.brush(self.gname("floor_h"))
-        return [(cell, round(base + i * self.stair_step, 4))
+        layer = "wall_h" if self.layer == "wall_h" else "floor_h"
+        base = self.brush(self.gname(layer))
+        low = VALUE_LIMITS["wall_h"][0] if layer == "wall_h" else -math.inf
+        return [(cell, max(low, round(base + i * self.stair_step, 4)))
                 for i, cell in enumerate(line_cells(start, end))]
 
     def finish_stairs(self):
-        steps = self.stairs_heights()
+        steps = [((x, y), height) for (x, y), height in self.stairs_heights() if self.level.in_bounds(x, y)]
         self.stairs_drag = None
+        if not steps:
+            return
         self.begin_edit()
         for (x, y), height in steps:
-            self.set_height(x, y, "floor_h", height)
+            if self.layer == "wall_h":
+                self.put_wall_step(x, y, height)
+            else:
+                self.set_height(x, y, "floor_h", height)
         self.say(f"Stairs: {len(steps)} cells, {fmt(steps[0][1])} to {fmt(steps[-1][1])}")
+
+    def put_wall_step(self, x, y, height):
+        """One step of wall stairs: a short wall (a new one with the selected tile where there is
+        none) `height` tall. A ground-floor step keeps the ceiling over it fixed at the room's ceiling
+        there, so building next to the stairs later (a higher floor beside them, with a lower ceiling
+        under it) does not bring the automatic ceiling down onto the steps."""
+        level = self.level
+        ceiling = level.grids["ceil_h"][y][x]              # the room this step goes (or went) in
+        if not level.is_solid(x, y, self.floor):
+            self.put_tile(x, y, self.primary_id(), "walls")
+        level.set("wall_h", x, y, height)
+        if not level.wall_floor(x, y) and not level.has_explicit_wall_ceiling(x, y):
+            level.set("wall_ceil", x, y, max(ceiling, level.auto_wall_ceiling(x, y)))
 
     def shape_drag_cells(self):
         """The cells the shape being dragged covers now (Shift: a square box or a circle)."""
@@ -2743,6 +3212,18 @@ class Editor:
                 self.say(f"Bullet sprite: tile {min(picked) + 1}")
             else:
                 self.say("Select a gun or an ammo type first (or add one), then click a tile")
+            return
+        barricade = self.barricade_target()
+        if barricade is not None:                       # what the selected barricade (or one of its stages) looks like
+            target = self.tile_target
+            if target.startswith("stage") and target[5:].isdigit() and int(target[5:]) < len(barricade.stages):
+                self.set_barricade_stage(int(target[5:]), min(picked))
+                self.say(f"Barricade stage {int(target[5:]) + 1}: tile {min(picked) + 1}")
+            elif barricade.stages:
+                self.say("Click a stage's picture in the Details pane first, then a tile")
+            else:
+                self.set_barricade("tile", min(picked))
+                self.say(f"Barricade boards: tile {min(picked) + 1}")
             return
         if self.tool == "entity":                       # the tile chosen here is the item's sprite
             chosen = self.selected_entity()
@@ -2914,7 +3395,7 @@ class Editor:
         elif action == "dir":
             self.ramp_dir = self.ramp_dir % 4 + 1
         elif action == "spawn_team":
-            self.spawn_team = SPAWN_TEAMS[(SPAWN_TEAMS.index(self.spawn_team) + 1) % len(SPAWN_TEAMS)]
+            self.spawn_team = SPAWNER_TEAMS[(SPAWNER_TEAMS.index(self.spawn_team) + 1) % len(SPAWNER_TEAMS)]
             self.say(f"New spawn points are for {self.spawn_team_label(self.spawn_team)} (click one to give it this team)")
         elif action == "side_full":
             self.side_from = self.side_to = 0.0
@@ -3489,7 +3970,9 @@ class Editor:
                 if e.button == 1:
                     self.lights_click(e.pos)
             elif self.settings_mode:
-                if e.button == 1:
+                if e.button in (1, 3) and self.curve_press(e.pos, e.button):
+                    pass
+                elif e.button == 1:
                     self.settings_click(e.pos)
             elif e.button in (1, 3) and not self.over_ruler(e.pos):
                 self.confirm = None
@@ -3520,6 +4003,7 @@ class Editor:
             self.look_drag = self.camera_drag = False
             if self.gizmo_drag:
                 self.gizmo_release()
+            self.curve_drag = None
         if e.button in (1, 2):
             self.pan_drag = self.atlas_pan = False
 
@@ -3531,6 +4015,8 @@ class Editor:
             self.scroll_drag_to(e.pos[1])
         elif self.gizmo_drag:
             self.gizmo_move(e.pos)
+        elif self.curve_drag is not None:
+            self.curve_move(e.pos)
         elif self.look_drag and self.preview is not None:
             self.preview.look(e.rel[0] * MOUSE_SENSITIVITY, -e.rel[1] * MOUSE_SENSITIVITY)
         elif self.camera_drag and self.preview is not None:
@@ -3777,6 +4263,7 @@ class Editor:
                 draw_problem_outline(screen, self.cell_rect(cx, cy))
         self.draw_entities(screen)
         self.draw_spawners(screen)
+        self.draw_barricades(screen)
         self.draw_start(screen)
         self.draw_camera(screen)
         self.draw_cursor(screen, area)
@@ -4877,7 +5364,9 @@ class Editor:
         width = self.settings_list_width()
         x, top = area.x + 20, area.y + 74 - self.settings_scroll
         rules = pygame.Rect(x, top, width, self.settings_row_height(self.rules_summary(), width))
-        buy = pygame.Rect(x, rules.bottom + 4, width, self.settings_row_height(self.buy_summary(), width))
+        _enemies, enemy_add = self.enemy_rows(rules)
+        below = enemy_add.bottom + 16 if enemy_add is not None else rules.bottom + 4
+        buy = pygame.Rect(x, below, width, self.settings_row_height(self.buy_summary(), width))
         y = buy.bottom + 4 + 30
         rows = []
         for i, entry in enumerate(self.level.settings.buy_items):
@@ -4886,6 +5375,267 @@ class Editor:
             y = rows[-1][0].bottom + 4
         add = pygame.Rect(x, y, 220, 34)
         return rules, buy, rows, add
+
+    def enemy_rows(self, rules=None):
+        """([(rect, enemy index)], Add button rect) of the enemy kinds listed under the game rules in the Map settings
+        section, in zombies mode (([], None) in the others)."""
+        if self.level.settings.mode != "zombies":
+            return [], None
+        if rules is None:
+            rules = self.settings_rows()[0]
+        width = self.settings_list_width()
+        y = rules.bottom + 4 + 30
+        rows = []
+        for i, enemy in enumerate(self.level.enemies):
+            rows.append((pygame.Rect(rules.x, y, width,
+                                     self.settings_row_height(self.enemy_summary(enemy), width)), i))
+            y = rows[-1][0].bottom + 4
+        return rows, pygame.Rect(rules.x, y, 220, 34)
+
+    # ---------------------------------------------------------------- the waves card (zombies' curves)
+
+    def waves_card_rect(self):
+        """The Waves card in the Map settings section (zombies mode): beside the list, above the buy menu preview, or
+        under the list when there is no room. None in the other modes."""
+        if self.level.settings.mode != "zombies":
+            return None
+        area = self.map_area()
+        right = area.x + 20 + self.settings_list_width() + 24
+        width = min(WAVES_CARD_W, area.right - right - 20)
+        if width >= 300:
+            return pygame.Rect(right, area.y + 74 - self.settings_scroll, width, WAVES_CARD_H)
+        _rules, _buy, _rows, add = self.settings_rows()
+        return pygame.Rect(add.x, add.bottom + 24, min(WAVES_CARD_W, max(260, area.w - 40)), WAVES_CARD_H)
+
+    def curve_enemy(self):
+        """The index of the kind of enemy whose weight the Enemy mix tab edits: the one selected, else the first
+        (None when the map has none)."""
+        enemy = self.selected_enemy()
+        if enemy is not None:
+            return self.level.enemies.index(enemy)
+        return 0 if self.level.enemies else None
+
+    def curve_points(self, name=None):
+        """The points of a curve: one of the map's zombies curves, or ("weight") the edited enemy's weight; None if
+        there is no such curve (no enemies)."""
+        name = name or self.curve_shown
+        if name == "weight":
+            i = self.curve_enemy()
+            return None if i is None else self.level.enemies[i].weight
+        return getattr(self.level.settings, name)
+
+    def curve_layout(self, card):
+        """(tab rects {name: rect}, graph rect, legend rects [(rect, enemy index)]) of the Waves card."""
+        tabs, x = {}, card.x + 12
+        for name, label in CURVE_TABS:
+            width = self.small.size(label)[0] + 14
+            tabs[name] = pygame.Rect(x, card.y + 32, width, 22)
+            x += width + 4
+        graph = pygame.Rect(card.x + 46, card.y + 66, card.w - 60, card.h - 66 - 72)   # (rounds, legend, hint)
+        legend, x = [], graph.x
+        if self.curve_shown == "weight":
+            for i, enemy in enumerate(self.level.enemies):
+                width = self.small.size(enemy.name)[0] + 18
+                if x + width > card.right - 8:
+                    break
+                legend.append((pygame.Rect(x, graph.bottom + 26, width, 18), i))
+                x += width + 6
+        return tabs, graph, legend
+
+    def curve_scale(self, graph):
+        """(last round, top value) the graph shows: past the last point of every curve drawn by a few rounds, and
+        above the highest value they reach there. It holds still while a point is dragged (the point follows the
+        mouse, even above the top), and fits again when it is let go."""
+        if self.curve_drag is not None and self.curve_drag_scale is not None:
+            return self.curve_drag_scale
+        curves = ([e.weight for e in self.level.enemies] if self.curve_shown == "weight"
+                  else [self.curve_points()])
+        curves = [c for c in curves if c]
+        last = max([CURVE_MIN_ROUNDS] + [c[-1][0] + 5 for c in curves])
+        top = max([1.0] + [curve_at(c, x) for c in curves for x in [p[0] for p in c] + [last]])
+        step = 10 ** math.floor(math.log10(top * 1.15))
+        return last, math.ceil(top * 1.15 / step) * step
+
+    def curve_to_screen(self, graph, scale, x, value):
+        last, top = scale
+        return (graph.x + (x - 1) / max(1, last - 1) * graph.w, graph.bottom - value / top * graph.h)
+
+    def curve_from_screen(self, graph, scale, pos):
+        """(round, value) under a point of the graph, the round a whole number, the value rounded to the curve's step
+        and held in its limits."""
+        last, top = scale
+        x = round(1 + (pos[0] - graph.x) / max(1, graph.w) * (last - 1))
+        value = (graph.bottom - pos[1]) / max(1, graph.h) * top
+        return max(1, min(MAX_CURVE_X, x)), self.curve_value(value)
+
+    def curve_value(self, value, name=None):
+        name = name or self.curve_shown
+        low, high = CURVE_LIMITS[name]
+        step = CURVE_STEPS[name]
+        return max(low, min(high, round(round(value / step) * step, 4)))
+
+    def curve_press(self, pos, button):
+        """A click in the Waves card: a tab, an enemy in the legend, or the graph (grab a point, add one, or remove
+        one with the right button). True if the card took it."""
+        card = self.waves_card_rect()
+        if card is None or not card.collidepoint(pos):
+            return False
+        tabs, graph, legend = self.curve_layout(card)
+        for name, rect in tabs.items():
+            if rect.collidepoint(pos) and button == 1:
+                self.curve_shown = name
+                if name == "weight" and not self.level.enemies:
+                    self.say("Add an enemy first: Enemy mix is how likely each kind is, round by round")
+                return True
+        for rect, i in legend:
+            if rect.collidepoint(pos) and button == 1:
+                self.settings_selected = ENEMY_ROW - i
+                self.field_edit = self.menu_open = None
+                return True
+        points = self.curve_points()
+        if points is None or not graph.inflate(12, 12).collidepoint(pos):
+            return True
+        scale = self.curve_scale(graph)
+        near = [(math.dist(pos, self.curve_to_screen(graph, scale, *p)), i) for i, p in enumerate(points)]
+        hit = min(near)[1] if near and min(near)[0] <= CURVE_HIT else None
+        if button == 3:
+            if hit is not None and len(points) > 1:
+                self.begin_edit()
+                del self.curve_points()[hit]
+            return True
+        if button != 1:
+            return True
+        self.begin_edit()
+        points = self.curve_points()
+        if hit is None:
+            x, value = self.curve_from_screen(graph, scale, pos)
+            same = next((i for i, p in enumerate(points) if p[0] == x), None)
+            if same is not None:
+                points[same][1] = value
+                hit = same
+            elif len(points) < MAX_CURVE_POINTS:
+                points.append([x, value])
+                points.sort(key=lambda p: p[0])
+                hit = next(i for i, p in enumerate(points) if p[0] == x)
+            else:
+                self.say(f"A curve has at most {MAX_CURVE_POINTS} points")
+                return True
+        self.curve_drag_scale = scale
+        self.curve_drag = hit
+        return True
+
+    def curve_move(self, pos):
+        """Drag the grabbed point: its round stays between its neighbors'."""
+        card = self.waves_card_rect()
+        points = self.curve_points()
+        if card is None or points is None or not 0 <= self.curve_drag < len(points):
+            self.curve_drag = None
+            return
+        _tabs, graph, _legend = self.curve_layout(card)
+        x, value = self.curve_from_screen(graph, self.curve_scale(graph), pos)
+        i = self.curve_drag
+        low = points[i - 1][0] + 1 if i > 0 else 1
+        high = points[i + 1][0] - 1 if i + 1 < len(points) else MAX_CURVE_X
+        points[i] = [max(low, min(high, x)), value]
+
+    def set_curve_point(self, name, i, x=None, value=None):
+        """Type a point's round or value in the Details pane (one undo step); the round stays between its
+        neighbors'."""
+        points = self.curve_points(name)
+        if points is None or not 0 <= i < len(points):
+            return
+        new = list(points[i])
+        if x is not None:
+            low = points[i - 1][0] + 1 if i > 0 else 1
+            high = points[i + 1][0] - 1 if i + 1 < len(points) else MAX_CURVE_X
+            new[0] = max(low, min(high, int(round(x))))
+        if value is not None:
+            new[1] = self.curve_value(value, name)
+        if new == points[i]:
+            return
+        self.begin_edit()
+        self.curve_points(name)[i] = new
+
+    def curve_point_fields(self, name):
+        """The Details pane's rows for each point of a curve: its round and its value, typed exactly."""
+        points = self.curve_points(name)
+        if points is None:
+            return []
+        label = dict(CURVE_TABS)[name]
+        low, high = CURVE_LIMITS[name]
+        fields = [Field(f"curve_{name}", f"{label}: round -> value", "header", None, None)]
+        for i in range(len(points)):
+            fields += [Field(f"{name}{i}x", f"Point {i + 1}: round", "num",
+                             (lambda i=i: self.curve_points(name)[i][0]),
+                             (lambda v, i=i: self.set_curve_point(name, i, x=v)), step=1, low=1, high=MAX_CURVE_X),
+                       Field(f"{name}{i}y", "   value", "num", (lambda i=i: self.curve_points(name)[i][1]),
+                             (lambda v, i=i: self.set_curve_point(name, i, value=v)), step=CURVE_STEPS[name],
+                             low=low, high=high)]
+        return fields
+
+    def draw_waves_card(self, screen, card):
+        """The Waves card: tabs for each curve, the chosen one as a graph of round -> value (Enemy mix: every kind's
+        weight in its color, the selected one's points to drag), and the value under the mouse."""
+        pygame.draw.rect(screen, PANEL_BG, card, border_radius=6)
+        pygame.draw.rect(screen, GRID, card, 1, border_radius=6)
+        screen.blit(self.font.render("Waves", True, ACCENT), (card.x + 12, card.y + 8))
+        tabs, graph, legend = self.curve_layout(card)
+        for name, rect in tabs.items():
+            on = name == self.curve_shown
+            pygame.draw.rect(screen, BUTTON_ON if on else (BUTTON_HOT if rect.collidepoint(self.mouse) else BUTTON),
+                             rect, border_radius=4)
+            label = self.small.render(dict(CURVE_TABS)[name], True, TEXT)
+            screen.blit(label, label.get_rect(center=rect.center))
+        pygame.draw.rect(screen, BG, graph)
+        points = self.curve_points()
+        if points is None:
+            self.blit_fitted(screen, self.small, "No enemies yet: add one under Enemies", DIM,
+                             (graph.x + 8, graph.y + 8), graph.right - 8)
+            return
+        scale = self.curve_scale(graph)
+        last, top = scale
+        for k in range(5):                                  # value lines
+            value = top * k / 4
+            y = round(graph.bottom - graph.h * k / 4)
+            pygame.draw.line(screen, GRID, (graph.x, y), (graph.right, y))
+            text = self.small.render(f"{value:g}", True, DIM)
+            screen.blit(text, (graph.x - 6 - text.get_width(), y - 7))
+        step = max(1, round((last - 1) / 6))
+        for x in range(1, last + 1, step):                  # round marks
+            sx = round(self.curve_to_screen(graph, scale, x, 0)[0])
+            pygame.draw.line(screen, GRID, (sx, graph.bottom), (sx, graph.bottom + 4))
+            text = self.small.render(str(x), True, DIM)
+            screen.blit(text, (sx - text.get_width() // 2, graph.bottom + 5))
+        if self.curve_shown == "weight":
+            edited = self.curve_enemy()
+            drawn = [(i, e.weight, tuple(e.color)) for i, e in enumerate(self.level.enemies) if i != edited]
+            drawn.append((edited, points, tuple(self.level.enemies[edited].color)))
+        else:
+            drawn = [(None, points, ACCENT)]
+        clip = screen.get_clip()
+        screen.set_clip(graph.inflate(2, 2).clip(clip) if clip else graph.inflate(2, 2))
+        for owner, curve, color in drawn:
+            mine = curve is points
+            line = [self.curve_to_screen(graph, scale, x, curve_at(curve, x)) for x in range(1, last + 1)]
+            pygame.draw.lines(screen, color, False, line, 3 if mine else 1)
+        for i, (x, value) in enumerate(points):
+            spot = self.curve_to_screen(graph, scale, x, value)
+            pygame.draw.circle(screen, TEXT if i == self.curve_drag else ACCENT, spot, 6)
+            pygame.draw.circle(screen, BG, spot, 6, 2)
+        screen.set_clip(clip)
+        for rect, i in legend:
+            enemy = self.level.enemies[i]
+            pygame.draw.rect(screen, tuple(enemy.color), (rect.x, rect.y + 4, 10, 10))
+            screen.blit(self.small.render(enemy.name, True, TEXT if i == self.curve_enemy() else DIM),
+                        (rect.x + 14, rect.y))
+        hint = "Drag a point, click to add one, right-click removes; type exact values in the Details pane"
+        if self.curve_shown == "weight":
+            hint = "How likely each kind is (0: none); click a name to edit its curve"
+        self.blit_fitted(screen, self.small, hint, DIM, (card.x + 12, card.bottom - 20), card.right - 10)
+        if graph.collidepoint(self.mouse):
+            x, _value = self.curve_from_screen(graph, scale, self.mouse)
+            here = pygame.Rect(self.mouse[0] - 1, self.mouse[1] - 1, 3, 3)
+            self.tips.append((here, f"Round {x}: {curve_at(points, x):g}"))
 
     def settings_card_rect(self):
         """The buy menu preview's card: beside the list, or below it when there is no room."""
@@ -4896,6 +5646,9 @@ class Editor:
         card = pygame.Rect(right, area.y + 74 - self.settings_scroll, width, self.buy_preview_height())
         if width < 240:
             card = pygame.Rect(add.x, add.bottom + 24, min(380, max(200, area.w - 40)), self.buy_preview_height())
+        waves = self.waves_card_rect()
+        if waves is not None and (waves.x == card.x or waves.colliderect(card)):
+            card.y = waves.bottom + 20                      # (under the Waves card)
         return card
 
     def settings_content_bottom(self):
@@ -4911,7 +5664,11 @@ class Editor:
         if add.collidepoint(pos):
             self.add_buy_item()
             return
-        for rect, choice in [(rules, RULES_ROW), (buy, BUY_ROW)] + rows:
+        enemies, enemy_add = self.enemy_rows(rules)
+        if enemy_add is not None and enemy_add.collidepoint(pos):
+            self.add_enemy()
+            return
+        for rect, choice in [(rules, RULES_ROW), (buy, BUY_ROW)] + rows + [(r, ENEMY_ROW - i) for r, i in enemies]:
             if rect.collidepoint(pos):
                 self.settings_selected = choice
                 self.tile_target = "tile"
@@ -4932,6 +5689,8 @@ class Editor:
         if rules.mode == "koth":
             text += (f"   hold {rules.hill_time:g}s, capture {rules.capture_time:g}s (+{rules.capture_bonus:g}s),"
                      f" {rules.win_limit:g} rounds to win")
+        if rules.mode == "zombies":
+            text += (f"   enemies: {curve_text(rules.zombie_count)}, {rules.intermission:g}s between rounds")
         if rules.mode in ("ffa", "teams", "coop") and rules.respawn_delay > 0:
             text += f"   respawn {rules.respawn_delay:g}s"
         if rules.has_waiting():
@@ -4977,6 +5736,14 @@ class Editor:
                          (area.x + 20, top + 52), area.right - 14)
         rules_rect, buy_rect, rows, add = self.settings_rows()
         self.draw_settings_row(screen, rules_rect, "Game rules", self.rules_summary(), self.settings_selected == RULES_ROW)
+        enemies, enemy_add = self.enemy_rows(rules_rect)
+        if enemy_add is not None:
+            screen.blit(self.font.render("Enemies", True, ACCENT), (rules_rect.x, rules_rect.bottom + 12))
+            for rect, i in enemies:
+                enemy = self.level.enemies[i]
+                self.draw_settings_row(screen, rect, enemy.name, self.enemy_summary(enemy),
+                                       self.settings_selected == ENEMY_ROW - i)
+            self._draw_add_button(screen, enemy_add, "+ Add enemy")
         self.draw_settings_row(screen, buy_rect, "Buy menu", self.buy_summary(), self.settings_selected == BUY_ROW)
         screen.blit(self.font.render("In the buy menu", True, ACCENT if rules.buy_menu else DIM),
                     (buy_rect.x, buy_rect.bottom + 12))
@@ -4986,6 +5753,9 @@ class Editor:
                                    self.buy_entry_summary(i), i == self.settings_selected,
                                    entry_tile(entry, self.level.guns))
         self._draw_add_button(screen, add, "+ Add to buy menu")
+        waves = self.waves_card_rect()
+        if waves is not None:
+            self.draw_waves_card(screen, waves)
         self.draw_buy_preview(screen, self.settings_card_rect())
         self.draw_scrollbar(screen, "settings")
         screen.set_clip(None)
@@ -5044,6 +5814,17 @@ class Editor:
                      "Co-op: everyone is on one team.", "Friendly fire off: teammates' bullets",
                      "and blasts do not hurt (your own do).", "Knocking out an opponent earns the",
                      "Score / Money per kill. Score and money", "stay when a player is knocked out.")
+        elif self.selected_barricade() is not None:
+            notes = ("Zombies: players can never walk", "through a barricade; enemies tear its",
+                     "boards off, then climb through.", "Players hold E beside it to put boards",
+                     "back, earning the reward up to the", "most per round. Damage stages: one",
+                     "tile each, whole first; transparent", "pixels show as gaps. Click a stage,",
+                     "then an atlas tile. Enemies only get", "through once every board is gone.")
+        elif self.selected_enemy() is not None:
+            notes = ("Enemies come in at spawn points of the", "Enemies team (Spawn tool: Team).",
+                     "Sticky: keeps chasing one player until", "another is nearer by the margin for",
+                     "that long. Reach is from its body's edge.", "A player who gets out of reach during",
+                     "the wind-up is missed. Health grows", "with the rounds (Game rules).")
         elif rules_row == BUY_ROW:
             notes = ("Players open the buy menu with B.", "Free: every entry is free. Money or",
                      "Score: an entry is only given to a", "player who has its price, which is",
@@ -5097,6 +5878,14 @@ class Editor:
             notes = (f"Cell ({math.floor(e.x)}, {math.floor(e.y)}) on {self.level.names[e.span]}",
                      "Wheel over a value steps it.", "Click a number to type one.",
                      "Click an atlas tile: sets the sprite.", "Esc closes this; Del removes the item.")
+        if self.selected_enemy() is not None:
+            return "Enemy", notes
+        if self.selected_barricade() is not None:
+            return "Barricade", notes
+        if self.barricade_palette_active():
+            return "Barricade to place", ("Click an open ground floor cell (a gap", "in a wall) to board it up with what is",
+                                          "picked here. Select a barricade and", "Save as a type to place more like it;",
+                                          "Import brings types in from other", "maps. Right-click removes one.")
         title = ("Game rules" if rules_row == RULES_ROW else "Buy menu" if rules_row == BUY_ROW
                  else "Buy menu entry" if entry is not None else "Ambient light" if ambient else "Light" if light is not None else "Effect" if effect is not None else "Gun" if gun is not None else "Ammo type" if ammo is not None
                  else "Prefab" if prefab is not None else "Prefab to place" if e is None else "Item")
@@ -5148,6 +5937,25 @@ class Editor:
             if e.elevation and z >= 24:                  # raised or lowered: by how much
                 label = self.small.render(f"{e.elevation:+g}", True, ACCENT)
                 screen.blit(label, (cx + size // 2 + 2, cy - size // 2 - label.get_height() // 2))
+
+    def draw_barricades(self, screen):
+        """Barricades (ground floor only): a brown cell crossed by planks, with its number of boards."""
+        if self.floor != 0:
+            return
+        z = self.zoom
+        leaders = {g[0] for g in self.level.barricade_groups()}       # (one count of boards per group)
+        for i, b in enumerate(self.level.barricades):
+            rect = self.cell_rect(b.x, b.y)
+            inset = rect.inflate(-max(2, z // 8), -max(2, z // 8))
+            pygame.draw.rect(screen, BARRICADE_FILL, inset)
+            for k in (1, 2, 3):
+                y = inset.y + inset.h * k // 4
+                pygame.draw.line(screen, BARRICADE_PLANK, (inset.x, y), (inset.right - 1, y), max(1, z // 10))
+            if i == self.barricade_selected and self.tool == "barricade":
+                pygame.draw.rect(screen, ACCENT, rect, 2)
+            if z >= 16 and i in leaders:
+                label = self.small.render(str(b.boards), True, (255, 255, 255))
+                screen.blit(label, label.get_rect(center=rect.center))
 
     def draw_spawners(self, screen):
         """Spawn points: a blue disc with a facing line and its order, or a hollow ring on another floor."""
@@ -5831,7 +6639,8 @@ class ImportDialog:
                 picture.fill(tuple(round(c * 255 / bright) for c in (thing.r, thing.g, thing.b)))
                 pygame.draw.rect(picture, GRID, picture.get_rect(), 1)
             elif self.tiles:
-                tile = self.tiles[max(0, min(thing.tile, len(self.tiles) - 1))]
+                icon = barricade_icon(thing) if kind == "barricade_kinds" else thing.tile
+                tile = self.tiles[max(0, min(icon, len(self.tiles) - 1))]
                 box = tile.get_bounding_rect()                  # just what is drawn in the tile, made to fit
                 if box.w and box.h:
                     scale = IMPORT_ICON / max(box.w, box.h)

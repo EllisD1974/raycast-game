@@ -233,9 +233,12 @@ def _render_line(cb, db, n, px, py, eye_z, eye_span, rdx, rdy, line,
                 if hi - cur > EPS:
                     if k == 0 and pane_tex[ny, nx] >= 0 and n_panes < MAX_PANES:
                         face_top = min(hi, pane_top[ny, nx])
-                        if face_top - cur > EPS:
+                        face_low = cur          # (from another see-through cell: only above its top, as raykernel)
+                        if s == 0 and pane_tex[cy, cx] >= 0:
+                            face_low = max(cur, pane_top[cy, cx])
+                        if face_top - face_low > EPS:
                             pane_f[0, n_panes], pane_f[1, n_panes] = t1, side_shade
-                            pane_f[2, n_panes], pane_f[3, n_panes] = cur, face_top
+                            pane_f[2, n_panes], pane_f[3, n_panes] = face_low, face_top
                             pane_i[0, n_panes], pane_i[1, n_panes] = wtx, pane_tex[ny, nx]
                             pane_i[2, n_panes], pane_i[3, n_panes] = top, bot
                             n_panes += 1
