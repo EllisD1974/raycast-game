@@ -18,7 +18,13 @@ class World:
     A barrier (the site layer's BARRIER_SITES on the ground floor; spawn protection) lets only one team through: its
     players walk through it and its bullets fly through it, while it stops everyone and everything else like glass.
     for_team(team) is the world as that team's players and bullets meet it; the World itself (team None) is how
-    everything else meets it (blasts, the bomb, particles), which no barrier lets through."""
+    everything else meets it (blasts, the bomb, particles), which no barrier lets through.
+
+    Some cells change during a game (see close_cells, open_cells and set_blocks): a door closes a cell for
+    everyone as a wall, and player_block / enemy_block stop only players or only enemies on one floor of a cell
+    (a boarded-up window stops enemies until they break it, and never lets players through). for_enemies() is the
+    world as enemies meet it. Every view shares the arrays, so a change shows in all of them, and `revision` counts
+    the changes (for whatever caches what it worked out from the cells, such as pathing)."""
 
     def __init__(self, level, tile_count, transparent_tiles=None):
         """`transparent_tiles` is a boolean per atlas tile (see atlas.transparent_tiles): walls
@@ -69,6 +75,12 @@ class World:
         self.barrier = np.zeros((h, w), np.int32)               # the team a ground floor barrier lets through, or 0
         self._add_barriers(level, tile_count)
         self.has_barriers = bool(self.barrier.any())
+        self.enemies = False                                    # True in the for_enemies view
+        self.player_block = np.zeros((floors, h, w), np.uint8)  # floors of cells players cannot enter (set_blocks)
+        self.enemy_block = np.zeros((floors, h, w), np.uint8)   # the same for enemies
+        self.light_occluder = (self.solid_from == 0).astype(np.uint8)   # walls that fill every floor stop light
+        self.revision = np.zeros(1, np.int64)                   # (an array so every view shares it)
+        self._opened = {}                                       # (x, y) -> what close_cells covered up there
 
     def _add_barriers(self, level, tile_count):
         """Barriers on the ground floor: open cells that only their team gets through, drawn as a see-through pane
@@ -91,6 +103,59 @@ class World:
             view.team = team
             self._teams[team] = view
         return view
+
+    def for_enemies(self):
+        """This world as enemies meet it: enemy_block stops them instead of player_block. Barriers stop them as they
+        stop everything that is not of the barrier's team."""
+        view = self._teams.get("enemies")
+        if view is None:
+            view = copy.copy(self)
+            view.team, view.enemies = None, True
+            self._teams["enemies"] = view
+        return view
+
+    def close_cells(self, cells, tile):
+        """Close each (x, y) of `cells` with a wall of atlas tile `tile` filling every floor, as a door: nothing
+        walks, shoots or sees through it until open_cells opens it again."""
+        for x, y in cells:
+            if (x, y) in self._opened or not (0 <= x < self.width and 0 <= y < self.height):
+                continue
+            self._opened[(x, y)] = (self.solid[y, x], self.wall_tex[y, x], self.blocked[y, x], self.solid_from[y, x],
+                                    self.wall_sides[y, x].copy(), self.pane_tex[y, x], self.light_occluder[y, x])
+            self.solid[y, x], self.wall_tex[y, x], self.blocked[y, x], self.solid_from[y, x] = 1, tile, 1, 0
+            self.wall_sides[y, x, :, 0] = -1
+            self.pane_tex[y, x] = -1
+            self.light_occluder[y, x] = 1
+        self.revision[0] += 1
+
+    def open_cells(self, cells):
+        """Open cells closed by close_cells: each is again what the level made it."""
+        for x, y in cells:
+            saved = self._opened.pop((x, y), None)
+            if saved is None:
+                continue
+            (self.solid[y, x], self.wall_tex[y, x], self.blocked[y, x], self.solid_from[y, x], self.wall_sides[y, x],
+             self.pane_tex[y, x], self.light_occluder[y, x]) = saved
+        self.revision[0] += 1
+
+    def is_closed(self, x, y):
+        """True if close_cells closed cell (x, y)."""
+        return (x, y) in self._opened
+
+    def set_blocks(self, cells, players=None, enemies=None, floor=0):
+        """Stop (True) or let through (False) players and/or enemies on `floor` of each (x, y) of `cells`; None
+        leaves that one as it is. Bullets, blasts and sight are not stopped."""
+        for x, y in cells:
+            if players is not None:
+                self.player_block[floor, y, x] = players
+            if enemies is not None:
+                self.enemy_block[floor, y, x] = enemies
+        self.revision[0] += 1
+
+    def mover_blocked(self, s, cx, cy):
+        """True if set_blocks stops this world's movers (players, or enemies in the for_enemies view) on floor `s`
+        of cell (cx, cy)."""
+        return bool((self.enemy_block if self.enemies else self.player_block)[s, cy, cx])
 
     def barred(self, cx, cy):
         """True if a barrier in cell (cx, cy) stops this world's team."""
@@ -176,7 +241,7 @@ class World:
         elif self.pane_tex[cy, cx] >= 0 and z < self.pane_top[cy, cx]:
             return False
         fx, fy = x - cx, y - cy
-        for s in range(self.floors):
+        for s in range(min(self.floors, int(self.solid_from[cy, cx]))):     # (none in a wall, or a closed door)
             if self.span_on[s, cy, cx] and plane_z(self.floor_plane, s, cx, cy, fx, fy) <= z \
                     < plane_z(self.ceil_plane, s, cx, cy, fx, fy):
                 return True
@@ -220,6 +285,8 @@ class World:
         A barrier that does not let this world's team through blocks the ground floor of its cell (only)."""
         s = self._span_at(x, y, z, current, grounded)
         if s == 0 and self.has_barriers and self.barred(math.floor(x), math.floor(y)):
+            return -1
+        if s >= 0 and self.mover_blocked(s, math.floor(x), math.floor(y)):
             return -1
         return s
 

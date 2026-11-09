@@ -19,8 +19,9 @@ def height_of(body):
 
 
 def body_distance(x, y, z, body):
-    """How far (x, y, z) is from the nearest point of the player's upright cylinder."""
-    flat = max(0.0, math.hypot(x - body.x, y - body.y) - PLAYER_RADIUS)
+    """How far (x, y, z) is from the nearest point of the body's upright cylinder (PLAYER_RADIUS wide unless the body
+    has a `radius` of its own, as an enemy can)."""
+    flat = max(0.0, math.hypot(x - body.x, y - body.y) - getattr(body, "radius", PLAYER_RADIUS))
     up = max(body.z - z, z - (body.z + height_of(body)), 0.0)
     return math.hypot(flat, up)
 

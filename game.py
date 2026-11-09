@@ -425,8 +425,11 @@ class Game:
             self.fx.append((effect, hit.x, hit.y, hit.z, -hit.dx, -hit.dy, -hit.dz))
         for light in hit.blast.explosion_lights:
             self.flashes.append((light, hit.x, hit.y, hit.z))
-        bodies = [(pid, state.body) for pid, state in self.players.items() if state.alive]
+        bodies = [(pid, state.body) for pid, state in self.players.items() if state.alive] + self.other_targets()
         for pid, damage, (vx, vy, vz) in blast_results(self.world, hit.blast, hit.x, hit.y, hit.z, hit.owner, bodies):
+            if pid not in self.players:
+                self.round.hurt_target(pid, damage, hit.owner, (vx, vy, vz))
+                continue
             if not self.can_hurt(hit.owner, pid):
                 continue                                # a teammate's blast, without friendly fire
             state = self.players[pid]
@@ -437,6 +440,14 @@ class Game:
                 body.vy += vy
                 body.vz += vz
                 body.on_ground = False
+
+    def other_targets(self):
+        """[(id, body)] of what bullets and blasts can hurt besides the players: the round's (an enemy's), when it
+        has any. A body has x, y, z (the feet), height, radius and on_ground; an id is never a player's id. What
+        strikes one is handed to the round's hurt_target(id, damage, attacker, push), push (vx, vy, vz) being a
+        blast's throw (None for a bullet)."""
+        targets = getattr(self.round, "targets", None)
+        return targets() if targets is not None else []
 
     def take_fx(self):
         """The particle effects to play since the last call (a muzzle flash for each shot fired)."""
@@ -461,13 +472,17 @@ class Game:
             state.hit = max(0.0, state.hit - dt)
         targets = [(pid, state.body.x, state.body.y, state.body.z, state.body.height)
                    for pid, state in self.players.items() if state.alive]
+        targets += [(tid, body.x, body.y, body.z, body.height, body.radius) for tid, body in self.other_targets()]
         for hit in self.projectiles.update(self.world, dt, targets):
             for effect in hit.effects:                  # sprays back the way the bullet came
                 self.fx.append((effect, hit.x, hit.y, hit.z, -hit.dx, -hit.dy, -hit.dz))
             for light in hit.lights:
                 self.flashes.append((light, hit.x, hit.y, hit.z))
-            if hit.target in self.players and self.can_hurt(hit.owner, hit.target):
-                self.hurt(hit.target, hit.damage, hit.owner)
+            if hit.target in self.players:
+                if self.can_hurt(hit.owner, hit.target):
+                    self.hurt(hit.target, hit.damage, hit.owner)
+            elif hit.target is not None:
+                self.round.hurt_target(hit.target, hit.damage, hit.owner, None)
             if hit.blast is not None:
                 self.explode(hit)
         self.items.advance(dt)
