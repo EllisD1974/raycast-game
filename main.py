@@ -355,6 +355,15 @@ def home_screen(screen, clock, graphics, settings, note="", events=None):
                 return None
             if action == "settings":
                 apply_settings(settings, screen)
+            elif action == "solo":
+                settings.save()
+                try:
+                    level = load_or_default(home.map_path())
+                except (OSError, ValueError, KeyError, TypeError) as e:
+                    home.say(f"Could not open the map: {e}"[:60], warn=True)
+                else:
+                    game = Game(level, graphics.make_world(level), character_tile=graphics.character_tile)
+                    return LocalSession(game, settings.name), home.map_path()
             elif action == "host":
                 settings.save()
                 steam = home.network == "steam"

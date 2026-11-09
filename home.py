@@ -1,9 +1,9 @@
 """The home screen, shown when the game is started on its own (not from the map editor's Play, nor with --map,
---host or --join): the player's name, Host game, Join game, Settings and Exit.
+--host or --join): the player's name, Play solo, Host game, Join game, Settings and Exit.
 
-Host game picks a map from the maps folder, a password (needed) and the most players to let in, and Join game takes
+Play solo picks a map (the same pick as Host game's) and plays it alone, in the program, without a network. Host game picks a map from the maps folder, a password (needed) and the most players to let in, and Join game takes
 the host's IP address (empty to start with), its port (7777 to start with) and its password. Like the in-game menu (menu.Pages), Home only lays itself
-out and says what was asked for: handle() returns "host", "join", "cancel" (stop joining), "settings" or "exit", and
+out and says what was asked for: handle() returns "solo", "host", "join", "cancel" (stop joining), "settings" or "exit", and
 main.py does it, reading what was chosen from the Home and its GameSettings.
 
 Both pages can connect by IP address or over Steam (the choice is kept in the settings). Over Steam a joiner picks the
@@ -22,14 +22,16 @@ from net import DEFAULT_PORT
 ADDRESS_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-")   # an IP address or host name
 LABEL_W = 130                                   # the label in front of a text box
 HOST_LIST_ROWS = 4                              # maps shown at once on the Host page (one fewer with Steam's row)
+SOLO_LIST_ROWS = 6                              # ... and on the Play solo page
 FRIEND_ROWS = 4                                 # Steam friends listed on the Join page
 NETWORKS = (("ip", "IP address"), ("steam", "Steam"))
 
 
 class Home(Pages):
     TITLES = {"home": "Raycaster", "settings": "Settings", "host": "Host a game", "join": "Join a game",
+              "solo": "Play solo",
               "connecting": "Joining"}
-    BACK = {"settings": "home", "host": "home", "join": "home", "connecting": "join"}
+    BACK = {"settings": "home", "host": "home", "join": "home", "connecting": "join", "solo": "home"}
     FIRST = "home"
 
     def __init__(self, settings, maps_folder, steam=None):
@@ -131,7 +133,8 @@ class Home(Pages):
     def lines(self):
         if self.page == "home":
             return [[cell("Your name", width=LABEL_W), cell(self.shown("name", self.settings.name), "input:name")],
-                    [cell("Host game", "page:host")], [cell("Join game", "page:join")],
+                    [cell("Play solo", "page:solo")], [cell("Host game", "page:host")],
+                    [cell("Join game", "page:join")],
                     [cell("Settings", "page:settings")], [cell("Exit", "exit")]]
         if self.page == "settings":
             return self.settings_lines()
@@ -148,6 +151,9 @@ class Home(Pages):
                        self.network_line()]
                     + steam_lines
                     + [[cell("Start hosting", "host")], [cell("Back", "back")]])
+        if self.page == "solo":
+            return ([[cell("Map")]] + self.map_list_lines(self.maps(), picked=self.host_map(), rows=SOLO_LIST_ROWS)
+                    + [[cell("Play", "solo")], [cell("Back", "back")]])
         if self.page == "join":
             if self.network == "steam":
                 where = self.steam_join_lines()
@@ -206,6 +212,12 @@ class Home(Pages):
                 return None
             self.settings.host_map = self.host_map()
             return "host"
+        if action == "solo":
+            if not self.host_map():
+                self.say("There are no maps to play", warn=True)
+                return None
+            self.settings.host_map = self.host_map()
+            return "solo"
         if action == "join" and self.network == "steam":
             if not self.use_steam():
                 self.say(self.steam_problem[:60], warn=True)
