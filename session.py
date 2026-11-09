@@ -30,6 +30,7 @@ from bomb import BOMB_TILE, RoundView, bomb_sprite
 from entities import Entities, PlayerStats
 from koth import HillView, hill_sprite
 from respawn import RespawnView
+from zombies import ZombieView, enemy_sprites
 from constants import CROUCH_HEIGHT, PLAYER_HEIGHT
 from game import (MAX_STEP_DT, NO_TEAM, Events, Inputs, PlayerState, character_sprite, character_tile_for, clean_name,
                   move_body, shown_name, watchable_ids)
@@ -508,7 +509,7 @@ class ClientSession:
         if "round" in message:
             teams = {pid: team for pid, (_, team) in self.names.items()}
             data = message["round"]
-            kinds = {HillView.mode: HillView, RespawnView.mode: RespawnView}
+            kinds = {HillView.mode: HillView, RespawnView.mode: RespawnView, ZombieView.mode: ZombieView}
             kind = kinds.get(data.get("mode"), RoundView) if isinstance(data, dict) else RoundView
             self.round = kind.from_dict(data, teams)
             self.me.alive = self.round is None or self.id in self.round.alive
@@ -547,6 +548,8 @@ class ClientSession:
             marker = hill_sprite(self.round, self.game_time or 0.0)
             if marker:
                 sprites.append(marker)
+        elif isinstance(self.round, ZombieView):
+            sprites += enemy_sprites(self.level, self.round.enemies, self.character_tile, self.me.body.angle)
         if self.character_tile is not None and self.game_time is not None:
             for pid, samples in self.history.items():
                 if self.out_of_round(pid) or pid == hide:

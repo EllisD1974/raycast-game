@@ -107,6 +107,8 @@ TEAM_NAMES = {T_TEAM: "T", CT_TEAM: "CT"}
 TEAM_TITLES = {T_TEAM: "Terrorists", CT_TEAM: "Counter-Terrorists"}
 SPAWN_TEAMS = (0, T_TEAM, CT_TEAM)
 SPAWN_TEAM_LABELS = {0: "Any team", T_TEAM: "T", CT_TEAM: "CT"}
+ENEMY_SPAWN = 3                                 # a spawner's team for where enemies come in (zombies), never players
+SPAWNER_TEAMS = SPAWN_TEAMS + (ENEMY_SPAWN,)
 KOTH_NAMES = {T_TEAM: "RED", CT_TEAM: "BLU"}    # King of the Hill: team 1 is RED, team 2 BLU (as in Team Fortress 2)
 
 
@@ -120,7 +122,8 @@ class Spawner:
              one not yet used in this round, picked at random among those; when all have been used the round
              starts over (see game.SpawnOrder). A map without spawners uses its start instead.
     team     0: anyone comes in here; T_TEAM / CT_TEAM: in a mode with teams, only that team's players (and a
-             team with no spawn points of its own uses the others)"""
+             team with no spawn points of its own uses the others); ENEMY_SPAWN: enemies come in here (zombies),
+             players never do"""
     x: float
     y: float
     span: int = 0
@@ -133,7 +136,134 @@ class Spawner:
         team = data.get("team", 0)
         return cls(float(data["x"]), float(data["y"]), max(0, int(data.get("span", 0))),
                    float(data.get("angle", 0.0)), max(0, min(MAX_SPAWN_ORDER, int(data.get("order", 0)))),
-                   team if team in SPAWN_TEAMS else 0)
+                   team if team in SPAWNER_TEAMS else 0)
+
+
+ATTACK_KINDS = ("melee",)
+ATTACK_KIND_LABELS = {"melee": "Melee (swing / bite)"}
+ENEMY_PATHING = ("sticky", "nearest")
+ENEMY_PATHING_LABELS = {"sticky": "Nearest player, sticky", "nearest": "Nearest player"}
+MAX_ATTACKS = 4                                 # attacks an enemy kind may have
+MAX_ENEMIES = 32                                # enemy kinds a map may define
+# Enemy and attack numbers: (lowest, highest).
+ENEMY_NUMBERS = {"health": (1.0, 100000.0), "speed": (0.1, 12.0), "height": (0.2, 3.0), "radius": (0.1, 1.0),
+                 "switch_margin": (0.0, 50.0), "switch_delay": (0.0, 30.0), "kill_reward": (0.0, 1000000.0),
+                 "hit_reward": (0.0, 1000000.0), "break_rate": (0.1, 60.0)}
+ATTACK_NUMBERS = {"damage": (0.0, 100000.0), "range": (0.05, 10.0), "windup": (0.0, 10.0), "cooldown": (0.0, 60.0)}
+
+
+def clamped_numbers(cls, data, ranges):
+    """{field: value} of `ranges`' fields read from `data`, each held between its (lowest, highest), and the class's
+    default where it is missing or not a number."""
+    base = cls()
+    out = {}
+    for key, (low, high) in ranges.items():
+        try:
+            out[key] = max(low, min(high, float(data.get(key, getattr(base, key)))))
+        except (TypeError, ValueError):
+            out[key] = getattr(base, key)
+    return out
+
+
+@dataclass
+class Attack:
+    """One of an enemy's attacks (Enemy.attacks).
+
+    kind      melee: a swing of the arms or a bite at whoever it chases, once they are within `range`
+    damage    health it takes off the player it lands on
+    range     cells between the enemy's body and the player's (edge to edge) it reaches across
+    windup    seconds from starting the attack to it landing: a player who gets out of range by then is missed
+    cooldown  seconds after an attack lands (or misses) before the next can start"""
+    kind: str = "melee"
+    damage: float = 25.0
+    range: float = 0.5
+    windup: float = 0.4
+    cooldown: float = 1.0
+
+    @classmethod
+    def from_dict(cls, data):
+        return cls(kind=data.get("kind") if data.get("kind") in ATTACK_KINDS else "melee",
+                   **clamped_numbers(cls, data, ATTACK_NUMBERS))
+
+
+DEFAULT_ENEMY_COLOR = (150, 210, 140)           # a sickly green
+
+
+@dataclass
+class Enemy:
+    """A kind of enemy a map defines (zombies mode). They come in at Spawners of team ENEMY_SPAWN.
+
+    name           what it is called
+    health         health in the first round (later rounds multiply it: MapSettings.zombie_health)
+    speed          walking speed, cells per second (a player walks at 3)
+    height, radius the size of its body: what bullets strike and what has to fit under a ceiling
+    attacks        what it does to a player it reaches (Attack); the first that is ready is used
+    pathing        who it chases: nearest: whichever standing player is nearest along the way, at every moment;
+                   sticky: the same, but it keeps chasing the one it has unless another is nearer by more than
+                   switch_margin cells for switch_delay seconds (two players walking past each other do not
+                   make it turn back and forth)
+    kill_reward, hit_reward   money for the player who kills it, and for each bullet or blast of theirs that hurts it
+    break_rate     seconds it takes to tear one board off a barricade
+    color          [red, green, blue] 0-255 its picture is tinted with (white: as drawn)"""
+    name: str = "Zombie"
+    health: float = 100.0
+    speed: float = 1.8
+    height: float = 0.8
+    radius: float = 0.25
+    attacks: list = field(default_factory=lambda: [Attack()])
+    pathing: str = "sticky"
+    switch_margin: float = 3.0
+    switch_delay: float = 1.5
+    kill_reward: float = 60.0
+    hit_reward: float = 10.0
+    break_rate: float = 1.0
+    color: list = field(default_factory=lambda: list(DEFAULT_ENEMY_COLOR))
+
+    def clone(self):
+        return replace(self, attacks=[replace(a) for a in self.attacks], color=list(self.color))
+
+    @classmethod
+    def from_dict(cls, data):
+        attacks, color = data.get("attacks"), data.get("color")
+        good_color = (isinstance(color, list) and len(color) == 3
+                      and all(isinstance(c, (int, float)) and not isinstance(c, bool) for c in color))
+        return cls(name=str(data.get("name", ""))[:MAX_NAME] or "Zombie",
+                   attacks=[Attack.from_dict(a) for a in attacks if isinstance(a, dict)][:MAX_ATTACKS]
+                   if isinstance(attacks, list) else [Attack()],
+                   pathing=data.get("pathing") if data.get("pathing") in ENEMY_PATHING else "sticky",
+                   color=[max(0, min(255, int(c))) for c in color] if good_color else list(DEFAULT_ENEMY_COLOR),
+                   **clamped_numbers(cls, data, ENEMY_NUMBERS))
+
+
+MAX_CURVE_POINTS = 24
+
+
+def curve_at(points, x):
+    """The value of a curve at `x`: points are [x, value] pairs in rising order of x, joined by straight lines;
+    before the first point it is the first value, after the last it carries on along the last line (or stays level
+    with only one point). Never below 0."""
+    if not points:
+        return 0.0
+    if x <= points[0][0] or len(points) == 1:
+        return max(0.0, float(points[0][1] if x <= points[0][0] else points[-1][1]))
+    for (x0, y0), (x1, y1) in zip(points, points[1:]):
+        if x <= x1:
+            return max(0.0, y0 + (y1 - y0) * (x - x0) / (x1 - x0))
+    (x0, y0), (x1, y1) = points[-2], points[-1]
+    return max(0.0, y1 + (y1 - y0) * (x - x1) / (x1 - x0))
+
+
+def read_curve(data, default, low, high, max_x=999):
+    """A curve (see curve_at) from a file: [x, value] pairs, x whole numbers 1 to max_x in rising order (a point
+    not past the one before is dropped), values held between low and high; `default` when no point is usable."""
+    out = []
+    for point in data if isinstance(data, list) else []:
+        if (isinstance(point, list) and len(point) == 2
+                and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in point)):
+            x = max(1, min(max_x, int(point[0])))
+            if not out or x > out[-1][0]:
+                out.append([x, max(low, min(high, float(point[1])))])
+    return out[:MAX_CURVE_POINTS] or [list(p) for p in default]
 
 
 @dataclass
@@ -589,9 +719,9 @@ class Entity:
                        elevation=max(-MAX_ELEVATION, min(MAX_ELEVATION, float(data.get("elevation", 0.0)))))
 
 
-GAME_MODES = ("ffa", "teams", "coop", "bomb", "koth")
+GAME_MODES = ("ffa", "teams", "coop", "bomb", "koth", "zombies")
 GAME_MODE_LABELS = {"ffa": "Free for all", "teams": "Two teams", "coop": "Co-op", "bomb": "Bomb defusal",
-                    "koth": "King of the Hill"}
+                    "koth": "King of the Hill", "zombies": "Zombies"}
 BUY_COSTS = ("free", "money", "score")
 BUY_COST_LABELS = {"free": "Free", "money": "Money", "score": "Score"}
 DEATH_CAM_WHO = ("team", "all")                 # who a knocked-out player may watch (MapSettings.death_cam_who)
@@ -613,6 +743,11 @@ BOMB_NUMBERS = {"freeze_time": (0.0, 120.0), "round_time": (10.0, 1800.0), "buy_
 KOTH_NUMBERS = {"hill_time": (10.0, 3600.0), "unlock_time": (0.0, 600.0), "capture_time": (0.5, 300.0),
                 "capture_bonus": (0.0, 600.0), "decay_time": (1.0, 600.0), "respawn_time": (0.0, 60.0),
                 "win_limit": (1.0, 99.0)}
+# Zombies settings that are numbers: (lowest, highest).
+ZOMBIE_NUMBERS = {"max_alive": (1.0, 500.0), "spawn_interval": (0.0, 60.0), "intermission": (0.0, 300.0),
+                  "game_over_time": (1.0, 60.0)}
+ZOMBIE_COUNT = [[1, 6], [5, 18], [10, 40], [20, 110]]      # round -> enemies in it
+ZOMBIE_HEALTH = [[1, 1.0], [10, 2.0], [20, 4.0]]            # round -> what their health is multiplied by
 
 
 @dataclass
@@ -721,7 +856,16 @@ class MapSettings:
     decay_time       how long capture progress takes to drain away when nobody stands on the point
     respawn_time     how long a knocked out player waits before coming back at their team's spawn points
     win_limit        rounds a team has to win to win the match (a new match then starts)
-    round_end_time   (shared with bomb defusal) the pause after a round is won, before the next one"""
+    round_end_time   (shared with bomb defusal) the pause after a round is won, before the next one
+
+    Zombies (mode "zombies", see zombies.py): everyone on one team against rounds of enemies (Level.enemies) coming
+    in at the ENEMY_SPAWN spawners. A round is over when all its enemies are dead; the game when every player is.
+    zombie_count     a curve (see curve_at) of round -> how many enemies come in that round
+    zombie_health    a curve of round -> what each enemy's health is multiplied by
+    max_alive        at most this many enemies are in the map at once (the rest wait their turn)
+    spawn_interval   seconds between one enemy coming in and the next
+    intermission     seconds between rounds (and before the first)
+    game_over_time   seconds the game over message shows before a new game starts"""
     mode: str = "ffa"
     friendly_fire: bool = False
     max_health: float = 100.0
@@ -763,9 +907,17 @@ class MapSettings:
     decay_time: float = 90.0
     respawn_time: float = 5.0
     win_limit: float = 2.0
+    zombie_count: list = field(default_factory=lambda: [list(p) for p in ZOMBIE_COUNT])
+    zombie_health: list = field(default_factory=lambda: [list(p) for p in ZOMBIE_HEALTH])
+    max_alive: float = 24.0
+    spawn_interval: float = 1.5
+    intermission: float = 10.0
+    game_over_time: float = 8.0
 
     def copy(self):
-        return replace(self, buy_items=[replace(b) for b in self.buy_items])
+        return replace(self, buy_items=[replace(b) for b in self.buy_items],
+                       zombie_count=[list(p) for p in self.zombie_count],
+                       zombie_health=[list(p) for p in self.zombie_health])
 
     def uses_money(self):
         """True if money means anything on this map (so the HUD shows it)."""
@@ -774,7 +926,8 @@ class MapSettings:
     def has_waiting(self):
         """True if knocked-out players are out for a while (bomb defusal, King of the Hill, or a respawn delay), so
         the death camera means something."""
-        return self.mode in ("bomb", "koth") or (self.mode in ("ffa", "teams", "coop") and self.respawn_delay > 0)
+        return self.mode in ("bomb", "koth", "zombies") or (self.mode in ("ffa", "teams", "coop")
+                                                            and self.respawn_delay > 0)
 
     def has_teams(self):
         """True if players are split into two teams (two teams, bomb defusal and King of the Hill)."""
@@ -813,7 +966,10 @@ class MapSettings:
                    bomb_effect=str(data.get("bomb_effect", ""))[:MAX_NAME],
                    bomb_light=str(data.get("bomb_light", ""))[:MAX_NAME],
                    **{key: number(key, low, high) for key, (low, high) in BOMB_NUMBERS.items()},
-                   **{key: number(key, low, high) for key, (low, high) in KOTH_NUMBERS.items()})
+                   **{key: number(key, low, high) for key, (low, high) in KOTH_NUMBERS.items()},
+                   zombie_count=read_curve(data.get("zombie_count"), ZOMBIE_COUNT, 0.0, 10000.0),
+                   zombie_health=read_curve(data.get("zombie_health"), ZOMBIE_HEALTH, 0.01, 1000.0),
+                   **{key: number(key, low, high) for key, (low, high) in ZOMBIE_NUMBERS.items()})
 
 
 def mounted_position(cx, cy, wall):
@@ -872,8 +1028,9 @@ def default_floor_name(index):
 class Level:
     def __init__(self, grids, start_x=1.5, start_y=1.5, start_angle=0.0, start_span=0, names=None,
                  entities=None, guns=None, ammo_types=None, prefabs=None, effects=None, lights=None, ambient=1.0,
-                 spawners=None, settings=None):
+                 spawners=None, settings=None, enemies=None):
         self.grids = grids
+        self.enemies = list(enemies or [])          # kinds of enemy defined for this map (see Enemy; zombies mode)
         self.settings = settings or MapSettings()   # how the map is played (see MapSettings)
         self.spawners = list(spawners or [])        # where players come into the game (see Spawner)
         self.lights = list(lights or [])            # lights defined for this map (see Light)
@@ -910,7 +1067,10 @@ class Level:
                      [e.clone() for e in self.entities], [replace(g) for g in self.guns],
                      [replace(a) for a in self.ammo_types], [p.clone() for p in self.prefabs],
                      [replace(f) for f in self.effects], [replace(light) for light in self.lights], self.ambient,
-                     [replace(s) for s in self.spawners], self.settings.copy())
+                     [replace(s) for s in self.spawners], self.settings.copy(), [e.clone() for e in self.enemies])
+
+    def enemy_named(self, name):
+        return next((e for e in self.enemies if e.name == name), None)
 
     def prefab_named(self, name):
         for prefab in self.prefabs:
@@ -1476,6 +1636,11 @@ def parse_level(data, label="level"):
     for entity in level.entities:                   # ammo pickups used to name a gun, not an ammo type
         if entity.effect == "ammo" and not entity.ammo and entity.gun:
             entity.ammo = next((g.ammo for g in level.guns if g.name == entity.gun), "")
+    for item in data.get("enemies", []):
+        if isinstance(item, dict) and len(level.enemies) < MAX_ENEMIES:
+            enemy = Enemy.from_dict(item)
+            if level.enemy_named(enemy.name) is None:
+                level.enemies.append(enemy)
     level.settings = MapSettings.from_dict(data.get("settings", {}))
     level.apply_prefabs()
     return level
@@ -1517,7 +1682,9 @@ def level_text(level):
         + ('  "effects": [\n' + ",\n".join("    " + json.dumps(asdict(f)) for f in level.effects) + "\n  ],\n"
            if level.effects else "")
         + ('  "prefabs": [\n' + ",\n".join("    " + json.dumps(asdict(p)) for p in level.prefabs) + "\n  ],\n"
-           if level.prefabs else "") +
+           if level.prefabs else "")
+        + ('  "enemies": [\n' + ",\n".join("    " + json.dumps(asdict(e)) for e in level.enemies) + "\n  ],\n"
+           if level.enemies else "") +
         '  "grids": {\n' + ",\n".join(blocks) + "\n  }\n}\n"
     )
     return text

@@ -16,7 +16,8 @@ from explosions import blast_results
 from inventory import Inventory
 from koth import HillRound
 from respawn import RESPAWN_MODES, Respawns
-from mapfile import MAX_BUY_ITEMS, MAX_MONEY
+from zombies import ZombieRound
+from mapfile import ENEMY_SPAWN, MAX_BUY_ITEMS, MAX_MONEY
 from physics import look, spawn, spawn_at, step
 from projectiles import MUZZLE, Projectiles, muzzle_shift
 
@@ -176,20 +177,20 @@ class SpawnOrder:
 
     def choices(self, team):
         """The spawners a player of `team` may come in at: their team's and those for anyone, or all of them when
-        there are none of those (and for a player on no team)."""
-        spawners = self.level.spawners
+        there are none of those (and for a player on no team). Never the enemies' (ENEMY_SPAWN)."""
+        players = [i for i, s in enumerate(self.level.spawners) if s.team != ENEMY_SPAWN]
         if team:
-            mine = [i for i, s in enumerate(spawners) if s.team in (0, team)]
+            mine = [i for i in players if self.level.spawners[i].team in (0, team)]
             if mine:
                 return mine
-        return list(range(len(spawners)))
+        return players
 
     def next_index(self, team=0):
-        """The index of the spawner the next player (of `team`) comes in at (None: the map has none)."""
+        """The index of the spawner the next player (of `team`) comes in at (None: the map has none for players)."""
         spawners = self.level.spawners
-        if not spawners:
-            return None
         allowed = self.choices(team)
+        if not allowed:
+            return None
         used = self.used.setdefault(team, set())
         if all(i in used for i in allowed):
             used.clear()                    # every one has been used: a new round
@@ -232,13 +233,16 @@ class Events:
 
 
 def make_round(game):
-    """The rounds of the game's map mode: bomb defusal's Round, King of the Hill's HillRound, Respawns for the other
-    modes on a map with a respawn delay, or None (players come straight back)."""
+    """The rounds of the game's map mode: bomb defusal's Round, King of the Hill's HillRound, the zombies' rounds of
+    enemies (ZombieRound), Respawns for the other modes on a map with a respawn delay, or None (players come straight
+    back)."""
     mode = game.level.settings.mode
     if mode == "bomb":
         return Round(game)
     if mode == "koth":
         return HillRound(game)
+    if mode == "zombies":
+        return ZombieRound(game)
     if mode in RESPAWN_MODES and game.level.settings.respawn_delay > 0:
         return Respawns(game)
     return None
@@ -298,10 +302,10 @@ class Game:
         return state
 
     def team_for(self, player_id):
-        """The team a player joining now goes on: none in free for all, team 1 for everyone in co-op, and in two
-        teams the one with fewer players (team 1 when they are even)."""
+        """The team a player joining now goes on: none in free for all, team 1 for everyone in co-op and zombies, and
+        in two teams the one with fewer players (team 1 when they are even)."""
         mode = self.level.settings.mode
-        if mode == "coop":
+        if mode in ("coop", "zombies"):
             return 1
         if not self.level.settings.has_teams():
             return NO_TEAM
@@ -508,8 +512,11 @@ class Game:
     def sprites(self, viewer=None, hide=None):
         """Items, bullets, the bomb (or the hill's marker) and the players other than `viewer` (and `hide`: the one
         being watched, whose eyes the picture is seen from) as the renderer wants them."""
+        looking = self.players[viewer].body.angle if viewer in self.players else None
+        enemies = getattr(self.round, "enemy_sprites", None)
         return (self.items.sprites() + self.projectiles.sprites() + self.player_sprites(viewer, hide)
-                + (self.round.sprites(self.clock) if self.round is not None else []))
+                + (self.round.sprites(self.clock) if self.round is not None else [])
+                + (enemies(self.character_tile, looking) if enemies is not None else []))
 
     def labels(self, viewer=None, hide=None):
         """(x, y, z of the top of the head, name, team) of each player other than `viewer`, for their names."""

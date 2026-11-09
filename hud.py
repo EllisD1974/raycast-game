@@ -9,6 +9,7 @@ from bomb import can_defuse, can_plant, clock_text, site_under
 from constants import HEIGHT, WIDTH
 from koth import HillView, on_hill
 from respawn import RespawnView
+from zombies import ZombieView
 from mapfile import CT_TEAM, DEFUSE_KIT, KOTH_NAMES, SITE_NAMES, T_TEAM, TEAM_NAMES
 
 TEXT = (255, 255, 255)
@@ -163,6 +164,9 @@ def draw_round(picture, font, big, view, me_id, me, level, watching=None):
     if isinstance(view, RespawnView):
         draw_respawn(picture, font, view, me_id, watching)
         return
+    if isinstance(view, ZombieView):
+        draw_zombies(picture, font, big, view, me_id, watching)
+        return
     settings = level.settings
     middle = WIDTH // 2
     # the score either side of the timer
@@ -209,6 +213,28 @@ def draw_round(picture, font, big, view, me_id, me, level, watching=None):
     if view.bomb.state == "carried" and view.bomb.carrier == me_id:
         shadowed(picture, font, "You have the bomb: plant it in a site (G throws it)", (middle, HEIGHT - 70),
                  TEAM_COLORS[T_TEAM], center=True)
+
+
+def draw_zombies(picture, font, big, view, me_id, watching=None):
+    """Zombies: the round at the top (in red) with how many enemies are left, or the countdown to the next round;
+    the round's news in the middle; and, for a player who is out, that they are back next round."""
+    middle = WIDTH // 2
+    if view.number:
+        shadowed(picture, big, f"Round {view.number}", (middle, 6), DANGER, center=True)
+    if view.phase == "live":
+        under = f"{view.left} zombie{'' if view.left == 1 else 's'} left"
+    elif view.phase == "intermission":
+        under = f"{'Next round' if view.number else 'First round'} in {max(1, math.ceil(view.clock))}"
+    else:
+        under = f"New game in {max(1, math.ceil(view.clock))}"
+    shadowed(picture, font, under, (middle, 32 if view.number else 10), DIM, center=True)
+    if view.message and view.message_left > 0:
+        shadowed(picture, big, view.message, (middle, HEIGHT // 2 - 70), HIGHLIGHT, center=True)
+    if me_id not in view.alive and view.phase != "over":
+        text = "You are out until the next round"
+        if watching:
+            text += f" - watching {watching} (left / right click: next / previous)"
+        shadowed(picture, font, text, (middle, HEIGHT - 70), DIM, center=True)
 
 
 def draw_respawn(picture, font, view, me_id, watching=None):

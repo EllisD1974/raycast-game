@@ -211,6 +211,9 @@ from mapfile import (ANIMATION_KINDS, ANIMATION_LABELS, DEFAULTS, EDIT_LAYERS, E
                      BUY_COST_LABELS, BUY_COSTS, BUY_KIND_LABELS, BUY_KINDS, GAME_MODE_LABELS, GAME_MODES, MAX_BUY_ITEMS,
                      DEATH_CAM_WHO, DEATH_CAM_WHO_LABELS,
                      BOMB_NUMBERS, SITE_NAMES, SPAWN_TEAMS, SPAWN_TEAM_LABELS, CT_TEAM, T_TEAM,
+                     ATTACK_KINDS, ATTACK_KIND_LABELS, ATTACK_NUMBERS, ENEMY_NUMBERS, ENEMY_PATHING,
+                     ENEMY_PATHING_LABELS, ENEMY_SPAWN, MAX_ATTACKS, MAX_ENEMIES, SPAWNER_TEAMS, ZOMBIE_NUMBERS,
+                     Attack, Enemy,
                      BARRIER_SITES, HILL_SITE, KOTH_NAMES, KOTH_NUMBERS,
                      MAX_MONEY, BuyItem)
 from buymenu import entry_tile, price_text
@@ -290,7 +293,8 @@ SITE_MARKS = {1: "A", 2: "B", HILL_SITE: "H", 4: "|1", 5: "|2"}  # ... and their
 SITE_BRUSHES = {1: "bomb site A", 2: "bomb site B", HILL_SITE: "the hill (King of the Hill's capture point)",
                 4: "a barrier only team 1 (T, RED) and its bullets get through (ground floor)",
                 5: "a barrier only team 2 (CT, BLU) and its bullets get through (ground floor)"}
-SPAWN_TEAM_FILLS = {0: (90, 170, 255), T_TEAM: (235, 160, 60), CT_TEAM: (80, 140, 255)}   # spawn points by team
+SPAWN_TEAM_FILLS = {0: (90, 170, 255), T_TEAM: (235, 160, 60), CT_TEAM: (80, 140, 255),
+                    ENEMY_SPAWN: (120, 210, 90)}                                          # spawn points by team
 # Bomb defusal settings in the Map settings section: (label, step) for each number, in the order shown.
 BOMB_FIELDS = (("freeze_time", "Freeze time (s)", 1.0), ("round_time", "Round time (s)", 5.0),
                ("buy_time", "Buy time (s)", 5.0), ("bomb_time", "Bomb timer (s)", 5.0),
@@ -307,6 +311,16 @@ KOTH_FIELDS = (("hill_time", "Time to hold (s)", 10.0), ("unlock_time", "Point u
                ("capture_time", "Capture time (s)", 1.0), ("capture_bonus", "Time added / capture (s)", 5.0),
                ("decay_time", "Capture decay (s)", 5.0), ("respawn_time", "Respawn time (s)", 1.0),
                ("win_limit", "Rounds to win", 1.0))
+# Zombies settings in the Map settings section, likewise.
+ZOMBIE_FIELDS = (("max_alive", "Most enemies at once", 1.0), ("spawn_interval", "Between spawns (s)", 0.25),
+                 ("intermission", "Between rounds (s)", 1.0), ("game_over_time", "Game over pause (s)", 1.0))
+# An enemy kind's numbers in the Details pane, and its attacks'.
+ENEMY_FIELDS = (("health", "Health", 10.0), ("speed", "Speed (cells/s)", 0.1), ("height", "Height", 0.05),
+                ("radius", "Radius", 0.05), ("kill_reward", "Money / kill", 10.0), ("hit_reward", "Money / hit", 5.0),
+                ("break_rate", "Board pull time (s)", 0.1))
+ATTACK_FIELDS = (("damage", "Damage", 5.0), ("range", "Reach (cells)", 0.05), ("windup", "Wind-up (s)", 0.05),
+                 ("cooldown", "Cooldown (s)", 0.1))
+ENEMY_COLOR_NAMES = ("Tint red", "Tint green", "Tint blue")
 EDITOR_LAYERS = tuple(name for name in EDIT_LAYERS if name != "site") + ("sides", "site")   # the stored layers, the
                                                             # sides of walls, and bomb sites last (keys 1-9)
 TILE_LAYERS = STAMP_LAYERS + ("sides",)                     # layers painted with atlas tiles
@@ -341,6 +355,7 @@ GIZMO_COLORS = {"bullet": (255, 170, 60), "effect": (80, 220, 255)}
 GIZMO_NAMES = {"bullet": "Bullets", "effect": "Effect"}
 AMBIENT_ROW = -1                                # light_selected value for the map's ambient light, listed first
 RULES_ROW, BUY_ROW = -1, -2                     # settings_selected values for the game rules and the buy menu's own
+ENEMY_ROW = -100                                # settings_selected for enemy kind i (zombies) is ENEMY_ROW - i
 BUY_AMOUNTS = {"gun": 1.0, "item": 1.0, "health": 50.0}   # what an entry gives when its kind is chosen
 
 
@@ -428,6 +443,11 @@ def heat(value, lo, hi):
 
 def fmt(value):
     return f"{value:g}"
+
+
+def curve_text(points):
+    """A curve of rounds (mapfile.curve_at) in words: "6 in round 1, 18 in round 5, 40 in round 10"."""
+    return ", ".join(f"{value:g} in round {x}" for x, value in points)
 
 
 # The small marks drawn on the map. Both the map and the key panel draw them through these
@@ -757,7 +777,7 @@ class Editor:
     def details_width(self):
         chosen = (self.selected_entity() or self.selected_gun() or self.selected_ammo() or self.selected_prefab()
                   or self.selected_effect() or self.selected_light() or (self.ambient_chosen() or None)
-                  or self.selected_buy_item() or (self.settings_row() or None))
+                  or self.selected_buy_item() or self.selected_enemy() or (self.settings_row() or None))
         if chosen is None and not self.palette_active():
             return 0
         key = (self.revision, id(self.level), id(chosen), self.section_name(), self.place_prefab, self._size())
@@ -783,6 +803,9 @@ class Editor:
         entry = self.selected_buy_item()
         if entry is not None:
             return self.buy_item_fields(entry)
+        enemy = self.selected_enemy()
+        if enemy is not None:
+            return self.enemy_fields(enemy)
         light = self.selected_light()
         if light is not None:
             return self.light_fields(light)
@@ -1496,6 +1519,15 @@ class Editor:
             return self.settings_selected
         return None
 
+    def selected_enemy(self):
+        """The kind of enemy being edited in the Map settings section (zombies), or None."""
+        chosen = self.settings_selected
+        if self.settings_mode and isinstance(chosen, int) and chosen <= ENEMY_ROW:
+            i = ENEMY_ROW - chosen
+            if i < len(self.level.enemies):
+                return self.level.enemies[i]
+        return None
+
     def selected_buy_item(self):
         """The buy menu entry being edited in the Map settings section, or None."""
         items = self.level.settings.buy_items
@@ -1522,6 +1554,9 @@ class Editor:
         if rules.mode == "koth":
             fields.append(Field("koth_note", "Teams", "info", (lambda: "1 = RED, 2 = BLU; the hill: Sites layer (R)"),
                                 None))
+        if rules.mode == "zombies":
+            fields.append(Field("zombies_note", "Enemies", "info",
+                                (lambda: "come in at Enemies spawn points (Spawn tool, Team)"), None))
         if rules.mode in ("ffa", "teams", "coop"):
             fields.append(field("respawn_delay", "Respawn time (s)", "num", step=1.0, low=0.0, high=60.0))
         if rules.has_waiting():                             # (a knocked-out player is out for a while)
@@ -1552,6 +1587,14 @@ class Editor:
                 fields.append(field(name, label, "num", step=step, low=low, high=high))
             low, high = BOMB_NUMBERS["round_end_time"]
             fields.append(field("round_end_time", "Round end pause (s)", "num", step=1.0, low=low, high=high))
+        if rules.mode == "zombies":
+            for name, label, step in ZOMBIE_FIELDS:
+                low, high = ZOMBIE_NUMBERS[name]
+                fields.append(field(name, label, "num", step=step, low=low, high=high))
+            fields += [Field("zombie_count_note", "Enemies a round", "info",
+                             (lambda: curve_text(rules.zombie_count)), None),
+                       Field("zombie_health_note", "Health times", "info",
+                             (lambda: curve_text(rules.zombie_health)), None)]
         return fields
 
     def buy_menu_fields(self):
@@ -1601,9 +1644,125 @@ class Editor:
 
     def spawn_team_label(self, team):
         """What a spawn point's team is called in this map's game mode."""
+        if team == ENEMY_SPAWN:
+            return "Enemies"
         if self.level.settings.mode == "koth" and team in KOTH_NAMES:
             return KOTH_NAMES[team]
         return SPAWN_TEAM_LABELS[team]
+
+    # ---------------------------------------------------------------- enemy kinds (zombies)
+
+    def enemy_fields(self, enemy):
+        """One kind of enemy, for the Details pane in the Map settings section: what it is called, who it chases,
+        its numbers and color, and its attacks."""
+        def field(name, label, kind, **options):
+            return Field(name, label, kind, (lambda n=name: getattr(enemy, n)),
+                         (lambda v, n=name: self.set_enemy(n, v)), **options)
+
+        fields = [field("name", "Name", "text"),
+                  field("pathing", "Chases", "enum", choices=ENEMY_PATHING, labels=ENEMY_PATHING_LABELS)]
+        if enemy.pathing == "sticky":
+            low, high = ENEMY_NUMBERS["switch_margin"]
+            fields.append(field("switch_margin", "Switch if nearer by", "num", step=0.5, low=low, high=high,
+                                unit="cells"))
+            low, high = ENEMY_NUMBERS["switch_delay"]
+            fields.append(field("switch_delay", "... for (s)", "num", step=0.25, low=low, high=high))
+        for name, label, step in ENEMY_FIELDS:
+            low, high = ENEMY_NUMBERS[name]
+            fields.append(field(name, label, "num", step=step, low=low, high=high))
+        for c, label in enumerate(ENEMY_COLOR_NAMES):
+            fields.append(Field(f"color{c}", label, "num", (lambda c=c: enemy.color[c]),
+                                (lambda v, c=c: self.set_enemy_color(c, v)), step=15, low=0, high=255))
+        for j, attack in enumerate(enemy.attacks):
+            def afield(name, label, kind, j=j, attack=attack, **options):
+                return Field(f"a{j}_{name}", label, kind, (lambda n=name: getattr(attack, n)),
+                             (lambda v, n=name: self.set_attack(j, n, v)), **options)
+
+            remove = (lambda j=j: self.remove_attack(j)) if len(enemy.attacks) > 1 else None
+            fields.append(Field(f"attack{j}", f"Attack {j + 1}", "header", None, None, action=remove))
+            fields.append(afield("kind", "Kind", "enum", choices=ATTACK_KINDS, labels=ATTACK_KIND_LABELS))
+            for name, label, step in ATTACK_FIELDS:
+                low, high = ATTACK_NUMBERS[name]
+                fields.append(afield(name, label, "num", step=step, low=low, high=high))
+        if len(enemy.attacks) < MAX_ATTACKS:
+            fields.append(Field("add_attack", "Add attack", "button", None, None, action=self.add_attack,
+                                text_override="+ Add an attack"))
+        return fields
+
+    def new_enemy_name(self, base="Zombie", skip=None):
+        taken = {e.name for i, e in enumerate(self.level.enemies) if i != skip}
+        if base not in taken:
+            return base
+        n = 2
+        while f"{base} {n}"[:MAX_NAME] in taken:
+            n += 1
+        return f"{base} {n}"[:MAX_NAME]
+
+    def add_enemy(self):
+        """Add a kind of enemy (a plain zombie to start with) and select it."""
+        if len(self.level.enemies) >= MAX_ENEMIES:
+            self.say(f"A map has at most {MAX_ENEMIES} kinds of enemy")
+            return
+        self.begin_edit()
+        self.level.enemies.append(Enemy(name=self.new_enemy_name()))
+        self.settings_selected = ENEMY_ROW - (len(self.level.enemies) - 1)
+        self.field_edit = self.menu_open = None
+        self.say("Added an enemy: set its health, speed and attacks in the Details pane")
+
+    def delete_enemy(self):
+        enemy = self.selected_enemy()
+        if enemy is None:
+            return
+        self.begin_edit()
+        self.level.enemies.remove(enemy)
+        self.settings_selected = None
+
+    def set_enemy(self, name, value):
+        """Change one setting of the selected kind of enemy (one undo step). A name is kept unique."""
+        enemy = self.selected_enemy()
+        if enemy is None or getattr(enemy, name) == value:
+            return
+        if name == "name":
+            value = self.new_enemy_name(str(value).strip()[:MAX_NAME] or "Zombie",
+                                        skip=self.level.enemies.index(enemy))
+            if value == enemy.name:
+                return
+        self.begin_edit()
+        setattr(enemy, name, value)
+
+    def set_enemy_color(self, channel, value):
+        enemy = self.selected_enemy()
+        value = max(0, min(255, int(round(value))))
+        if enemy is None or enemy.color[channel] == value:
+            return
+        self.begin_edit()
+        enemy.color[channel] = value
+
+    def set_attack(self, j, name, value):
+        enemy = self.selected_enemy()
+        if enemy is None or not 0 <= j < len(enemy.attacks) or getattr(enemy.attacks[j], name) == value:
+            return
+        self.begin_edit()
+        setattr(enemy.attacks[j], name, value)
+
+    def add_attack(self):
+        enemy = self.selected_enemy()
+        if enemy is None or len(enemy.attacks) >= MAX_ATTACKS:
+            return
+        self.begin_edit()
+        enemy.attacks.append(Attack())
+
+    def remove_attack(self, j):
+        enemy = self.selected_enemy()
+        if enemy is None or len(enemy.attacks) <= 1 or not 0 <= j < len(enemy.attacks):
+            return
+        self.begin_edit()
+        del enemy.attacks[j]
+
+    def enemy_summary(self, enemy):
+        attacks = ", ".join(f"{a.damage:g} dmg / {a.windup + a.cooldown:g}s" for a in enemy.attacks)
+        return (f"health {enemy.health:g}   speed {enemy.speed:g}   {ENEMY_PATHING_LABELS[enemy.pathing].lower()}"
+                f"   attacks: {attacks}   ${enemy.kill_reward:g} a kill")
 
     def buy_team_labels(self):
         """Names of the teams a buy menu entry can be for, in this map's game mode."""
@@ -1621,6 +1780,10 @@ class Editor:
             return
         self.begin_edit()
         setattr(rules, name, value)
+        if name == "mode" and value == "zombies" and not self.level.enemies:
+            self.level.enemies.append(Enemy())
+            self.say("Zombies: a plain Zombie was added under Enemies; place spawn points with the Spawn tool "
+                     "(Team: Enemies)")
         if name == "buy_menu" and value and not rules.buy_items:
             self.say("Buy menu on: add entries with + Add to buy menu (players open it with B)")
 
@@ -1700,6 +1863,9 @@ class Editor:
         if self.selected_buy_item() is not None:
             self.delete_buy_item()
             return
+        if self.selected_enemy() is not None:
+            self.delete_enemy()
+            return
         if self.selected_light() is not None:
             self.delete_light()
             return
@@ -1778,6 +1944,8 @@ class Editor:
         """Text of the Details pane's delete button for what is selected ('' for none: the palette)."""
         if self.selected_buy_item() is not None:
             return "Remove from the buy menu"
+        if self.selected_enemy() is not None:
+            return "Delete enemy"
         if self.settings_row() is not None:
             return ""
         if self.selected_light() is not None:
@@ -2914,7 +3082,7 @@ class Editor:
         elif action == "dir":
             self.ramp_dir = self.ramp_dir % 4 + 1
         elif action == "spawn_team":
-            self.spawn_team = SPAWN_TEAMS[(SPAWN_TEAMS.index(self.spawn_team) + 1) % len(SPAWN_TEAMS)]
+            self.spawn_team = SPAWNER_TEAMS[(SPAWNER_TEAMS.index(self.spawn_team) + 1) % len(SPAWNER_TEAMS)]
             self.say(f"New spawn points are for {self.spawn_team_label(self.spawn_team)} (click one to give it this team)")
         elif action == "side_full":
             self.side_from = self.side_to = 0.0
@@ -4877,7 +5045,9 @@ class Editor:
         width = self.settings_list_width()
         x, top = area.x + 20, area.y + 74 - self.settings_scroll
         rules = pygame.Rect(x, top, width, self.settings_row_height(self.rules_summary(), width))
-        buy = pygame.Rect(x, rules.bottom + 4, width, self.settings_row_height(self.buy_summary(), width))
+        _enemies, enemy_add = self.enemy_rows(rules)
+        below = enemy_add.bottom + 16 if enemy_add is not None else rules.bottom + 4
+        buy = pygame.Rect(x, below, width, self.settings_row_height(self.buy_summary(), width))
         y = buy.bottom + 4 + 30
         rows = []
         for i, entry in enumerate(self.level.settings.buy_items):
@@ -4886,6 +5056,22 @@ class Editor:
             y = rows[-1][0].bottom + 4
         add = pygame.Rect(x, y, 220, 34)
         return rules, buy, rows, add
+
+    def enemy_rows(self, rules=None):
+        """([(rect, enemy index)], Add button rect) of the enemy kinds listed under the game rules in the Map settings
+        section, in zombies mode (([], None) in the others)."""
+        if self.level.settings.mode != "zombies":
+            return [], None
+        if rules is None:
+            rules = self.settings_rows()[0]
+        width = self.settings_list_width()
+        y = rules.bottom + 4 + 30
+        rows = []
+        for i, enemy in enumerate(self.level.enemies):
+            rows.append((pygame.Rect(rules.x, y, width,
+                                     self.settings_row_height(self.enemy_summary(enemy), width)), i))
+            y = rows[-1][0].bottom + 4
+        return rows, pygame.Rect(rules.x, y, 220, 34)
 
     def settings_card_rect(self):
         """The buy menu preview's card: beside the list, or below it when there is no room."""
@@ -4911,7 +5097,11 @@ class Editor:
         if add.collidepoint(pos):
             self.add_buy_item()
             return
-        for rect, choice in [(rules, RULES_ROW), (buy, BUY_ROW)] + rows:
+        enemies, enemy_add = self.enemy_rows(rules)
+        if enemy_add is not None and enemy_add.collidepoint(pos):
+            self.add_enemy()
+            return
+        for rect, choice in [(rules, RULES_ROW), (buy, BUY_ROW)] + rows + [(r, ENEMY_ROW - i) for r, i in enemies]:
             if rect.collidepoint(pos):
                 self.settings_selected = choice
                 self.tile_target = "tile"
@@ -4932,6 +5122,9 @@ class Editor:
         if rules.mode == "koth":
             text += (f"   hold {rules.hill_time:g}s, capture {rules.capture_time:g}s (+{rules.capture_bonus:g}s),"
                      f" {rules.win_limit:g} rounds to win")
+        if rules.mode == "zombies":
+            text += (f"   {curve_text(rules.zombie_count)} enemies, at most {rules.max_alive:g} at once,"
+                     f" {rules.intermission:g}s between rounds")
         if rules.mode in ("ffa", "teams", "coop") and rules.respawn_delay > 0:
             text += f"   respawn {rules.respawn_delay:g}s"
         if rules.has_waiting():
@@ -4977,6 +5170,14 @@ class Editor:
                          (area.x + 20, top + 52), area.right - 14)
         rules_rect, buy_rect, rows, add = self.settings_rows()
         self.draw_settings_row(screen, rules_rect, "Game rules", self.rules_summary(), self.settings_selected == RULES_ROW)
+        enemies, enemy_add = self.enemy_rows(rules_rect)
+        if enemy_add is not None:
+            screen.blit(self.font.render("Enemies", True, ACCENT), (rules_rect.x, rules_rect.bottom + 12))
+            for rect, i in enemies:
+                enemy = self.level.enemies[i]
+                self.draw_settings_row(screen, rect, enemy.name, self.enemy_summary(enemy),
+                                       self.settings_selected == ENEMY_ROW - i)
+            self._draw_add_button(screen, enemy_add, "+ Add enemy")
         self.draw_settings_row(screen, buy_rect, "Buy menu", self.buy_summary(), self.settings_selected == BUY_ROW)
         screen.blit(self.font.render("In the buy menu", True, ACCENT if rules.buy_menu else DIM),
                     (buy_rect.x, buy_rect.bottom + 12))
@@ -5044,6 +5245,11 @@ class Editor:
                      "Co-op: everyone is on one team.", "Friendly fire off: teammates' bullets",
                      "and blasts do not hurt (your own do).", "Knocking out an opponent earns the",
                      "Score / Money per kill. Score and money", "stay when a player is knocked out.")
+        elif self.selected_enemy() is not None:
+            notes = ("Enemies come in at spawn points of the", "Enemies team (Spawn tool: Team).",
+                     "Sticky: keeps chasing one player until", "another is nearer by the margin for",
+                     "that long. Reach is from its body's edge.", "A player who gets out of reach during",
+                     "the wind-up is missed. Health grows", "with the rounds (Game rules).")
         elif rules_row == BUY_ROW:
             notes = ("Players open the buy menu with B.", "Free: every entry is free. Money or",
                      "Score: an entry is only given to a", "player who has its price, which is",
