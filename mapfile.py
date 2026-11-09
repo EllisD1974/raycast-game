@@ -148,7 +148,7 @@ MAX_ENEMIES = 32                                # enemy kinds a map may define
 # Enemy and attack numbers: (lowest, highest).
 ENEMY_NUMBERS = {"health": (1.0, 100000.0), "speed": (0.1, 12.0), "height": (0.2, 3.0), "radius": (0.1, 1.0),
                  "switch_margin": (0.0, 50.0), "switch_delay": (0.0, 30.0), "kill_reward": (0.0, 1000000.0),
-                 "hit_reward": (0.0, 1000000.0), "break_rate": (0.1, 60.0)}
+                 "hit_reward": (0.0, 1000000.0), "break_rate": (0.1, 60.0), "max_per_round": (0.0, 10000.0)}
 ATTACK_NUMBERS = {"damage": (0.0, 100000.0), "range": (0.05, 10.0), "windup": (0.0, 10.0), "cooldown": (0.0, 60.0)}
 
 
@@ -204,7 +204,10 @@ class Enemy:
                    make it turn back and forth)
     kill_reward, hit_reward   money for the player who kills it, and for each bullet or blast of theirs that hurts it
     break_rate     seconds it takes to tear one board off a barricade
-    color          [red, green, blue] 0-255 its picture is tinted with (white: as drawn)"""
+    color          [red, green, blue] 0-255 its picture is tinted with (white: as drawn)
+    weight         a curve (see curve_at) of round -> how likely each enemy coming in is to be this kind, against the
+                   other kinds' weights that round: 0 for none (a tough kind can start at 0 and only rise later)
+    max_per_round  at most this many of it in one round (0: no limit)"""
     name: str = "Zombie"
     health: float = 100.0
     speed: float = 1.8
@@ -218,9 +221,12 @@ class Enemy:
     hit_reward: float = 10.0
     break_rate: float = 1.0
     color: list = field(default_factory=lambda: list(DEFAULT_ENEMY_COLOR))
+    weight: list = field(default_factory=lambda: [[1, 1.0]])
+    max_per_round: float = 0.0
 
     def clone(self):
-        return replace(self, attacks=[replace(a) for a in self.attacks], color=list(self.color))
+        return replace(self, attacks=[replace(a) for a in self.attacks], color=list(self.color),
+                       weight=[list(p) for p in self.weight])
 
     @classmethod
     def from_dict(cls, data):
@@ -232,6 +238,7 @@ class Enemy:
                    if isinstance(attacks, list) else [Attack()],
                    pathing=data.get("pathing") if data.get("pathing") in ENEMY_PATHING else "sticky",
                    color=[max(0, min(255, int(c))) for c in color] if good_color else list(DEFAULT_ENEMY_COLOR),
+                   weight=read_curve(data.get("weight"), [[1, 1.0]], *CURVE_LIMITS["weight"]),
                    **clamped_numbers(cls, data, ENEMY_NUMBERS))
 
 
@@ -333,6 +340,7 @@ class BarricadeKind:
 
 
 MAX_CURVE_POINTS = 24
+MAX_CURVE_X = 999                               # the last round a curve's point can be at
 
 
 def curve_at(points, x):
@@ -350,9 +358,12 @@ def curve_at(points, x):
     return max(0.0, y1 + (y1 - y0) * (x - x1) / (x1 - x0))
 
 
-def read_curve(data, default, low, high, max_x=999):
+def read_curve(data, default, low, high, max_x=MAX_CURVE_X):
     """A curve (see curve_at) from a file: [x, value] pairs, x whole numbers 1 to max_x in rising order (a point
-    not past the one before is dropped), values held between low and high; `default` when no point is usable."""
+    not past the one before is dropped), values held between low and high; `default` when no point is usable. A
+    lone number (what a setting that became a curve was) is that value for every round."""
+    if isinstance(data, (int, float)) and not isinstance(data, bool):
+        data = [[1, data]]
     out = []
     for point in data if isinstance(data, list) else []:
         if (isinstance(point, list) and len(point) == 2
@@ -841,12 +852,19 @@ KOTH_NUMBERS = {"hill_time": (10.0, 3600.0), "unlock_time": (0.0, 600.0), "captu
                 "capture_bonus": (0.0, 600.0), "decay_time": (1.0, 600.0), "respawn_time": (0.0, 60.0),
                 "win_limit": (1.0, 99.0)}
 # Zombies settings that are numbers: (lowest, highest).
-ZOMBIE_NUMBERS = {"max_alive": (1.0, 500.0), "spawn_interval": (0.0, 60.0), "intermission": (0.0, 300.0),
+ZOMBIE_NUMBERS = {"extra_per_player": (0.0, 5.0), "intermission": (0.0, 300.0),
                   "game_over_time": (1.0, 60.0), "bleed_out": (1.0, 600.0), "revive_time": (0.1, 60.0),
                   "revive_reward": (0.0, MAX_MONEY), "revive_health": (1.0, 10000.0), "downed_speed": (0.0, 3.0),
                   "revive_grace": (0.0, 30.0)}
 ZOMBIE_COUNT = [[1, 6], [5, 18], [10, 40], [20, 110]]      # round -> enemies in it
 ZOMBIE_HEALTH = [[1, 1.0], [10, 2.0], [20, 4.0]]            # round -> what their health is multiplied by
+ZOMBIE_ALIVE = [[1, 12], [10, 30], [20, 60]]                # round -> the most in the map at once
+ZOMBIE_INTERVAL = [[1, 2.0], [10, 1.0], [20, 0.5]]          # round -> seconds between one coming in and the next
+ZOMBIE_CURVES = {"zombie_count": ZOMBIE_COUNT, "zombie_health": ZOMBIE_HEALTH, "max_alive": ZOMBIE_ALIVE,
+                 "spawn_interval": ZOMBIE_INTERVAL}              # MapSettings' curves and their defaults
+# Each zombies curve (and an enemy's weight): (lowest, highest) value.
+CURVE_LIMITS = {"zombie_count": (0.0, 10000.0), "zombie_health": (0.01, 1000.0), "max_alive": (1.0, 500.0),
+                "spawn_interval": (0.0, 60.0), "weight": (0.0, 1000.0)}
 
 
 @dataclass
@@ -961,8 +979,11 @@ class MapSettings:
     in at the ENEMY_SPAWN spawners. A round is over when all its enemies are dead; the game when every player is.
     zombie_count     a curve (see curve_at) of round -> how many enemies come in that round
     zombie_health    a curve of round -> what each enemy's health is multiplied by
-    max_alive        at most this many enemies are in the map at once (the rest wait their turn)
-    spawn_interval   seconds between one enemy coming in and the next
+    max_alive        a curve of round -> at most this many enemies are in the map at once (the rest wait their turn)
+    spawn_interval   a curve of round -> seconds between one enemy coming in and the next
+    extra_per_player each player beyond the first adds this share to a round's enemies and to the most at once
+                     (0.5: two players face half as many again)
+    Which kind each enemy coming in is, is picked by the kinds' weights for the round (Enemy.weight).
     intermission     seconds between rounds (and before the first)
     game_over_time   seconds the game over message shows before a new game starts
     A player at 0 health goes down instead of out while someone else is still standing: they crawl at
@@ -1014,8 +1035,9 @@ class MapSettings:
     win_limit: float = 2.0
     zombie_count: list = field(default_factory=lambda: [list(p) for p in ZOMBIE_COUNT])
     zombie_health: list = field(default_factory=lambda: [list(p) for p in ZOMBIE_HEALTH])
-    max_alive: float = 24.0
-    spawn_interval: float = 1.5
+    max_alive: list = field(default_factory=lambda: [list(p) for p in ZOMBIE_ALIVE])
+    spawn_interval: list = field(default_factory=lambda: [list(p) for p in ZOMBIE_INTERVAL])
+    extra_per_player: float = 0.5
     intermission: float = 10.0
     game_over_time: float = 8.0
     bleed_out: float = 30.0
@@ -1029,8 +1051,7 @@ class MapSettings:
 
     def copy(self):
         return replace(self, buy_items=[replace(b) for b in self.buy_items],
-                       zombie_count=[list(p) for p in self.zombie_count],
-                       zombie_health=[list(p) for p in self.zombie_health])
+                       **{name: [list(p) for p in getattr(self, name)] for name in ZOMBIE_CURVES})
 
     def uses_money(self):
         """True if money means anything on this map (so the HUD shows it)."""
@@ -1082,8 +1103,8 @@ class MapSettings:
                    **{key: number(key, low, high) for key, (low, high) in KOTH_NUMBERS.items()},
                    downed_can_shoot=bool(data.get("downed_can_shoot", base.downed_can_shoot)),
                    keep_guns=bool(data.get("keep_guns", base.keep_guns)),
-                   zombie_count=read_curve(data.get("zombie_count"), ZOMBIE_COUNT, 0.0, 10000.0),
-                   zombie_health=read_curve(data.get("zombie_health"), ZOMBIE_HEALTH, 0.01, 1000.0),
+                   **{name: read_curve(data.get(name), default, *CURVE_LIMITS[name])
+                      for name, default in ZOMBIE_CURVES.items()},
                    **{key: number(key, low, high) for key, (low, high) in ZOMBIE_NUMBERS.items()})
 
 

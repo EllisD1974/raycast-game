@@ -214,7 +214,8 @@ from mapfile import (ANIMATION_KINDS, ANIMATION_LABELS, DEFAULTS, EDIT_LAYERS, E
                      BOMB_NUMBERS, SITE_NAMES, SPAWN_TEAMS, SPAWN_TEAM_LABELS, CT_TEAM, T_TEAM,
                      ATTACK_KINDS, ATTACK_KIND_LABELS, ATTACK_NUMBERS, ENEMY_NUMBERS, ENEMY_PATHING,
                      ENEMY_PATHING_LABELS, ENEMY_SPAWN, MAX_ATTACKS, MAX_ENEMIES, SPAWNER_TEAMS, ZOMBIE_NUMBERS,
-                     Attack, Barricade, BarricadeKind, BARRICADE_TILE, Enemy, unique_thing_name, BARRICADE_NUMBERS, MAX_BARRICADE_BOARDS, MAX_BARRICADE_STAGES,
+                     Attack, Barricade, BarricadeKind, BARRICADE_TILE, Enemy, unique_thing_name,
+                     CURVE_LIMITS, MAX_CURVE_POINTS, MAX_CURVE_X, curve_at, BARRICADE_NUMBERS, MAX_BARRICADE_BOARDS, MAX_BARRICADE_STAGES,
                      REWARD_KINDS,
                      REWARD_KIND_LABELS,
                      BARRIER_SITES, HILL_SITE, KOTH_NAMES, KOTH_NUMBERS,
@@ -315,7 +316,7 @@ KOTH_FIELDS = (("hill_time", "Time to hold (s)", 10.0), ("unlock_time", "Point u
                ("decay_time", "Capture decay (s)", 5.0), ("respawn_time", "Respawn time (s)", 1.0),
                ("win_limit", "Rounds to win", 1.0))
 # Zombies settings in the Map settings section, likewise.
-ZOMBIE_FIELDS = (("max_alive", "Most enemies at once", 1.0), ("spawn_interval", "Between spawns (s)", 0.25),
+ZOMBIE_FIELDS = (("extra_per_player", "More per extra player", 0.1),
                  ("intermission", "Between rounds (s)", 1.0), ("game_over_time", "Game over pause (s)", 1.0),
                  ("bleed_out", "Downed bleed out (s)", 5.0), ("downed_speed", "Downed crawl (cells/s)", 0.1),
                  ("revive_time", "Revive takes (s)", 0.5), ("revive_reward", "Money / revive", 10.0),
@@ -327,6 +328,12 @@ ENEMY_FIELDS = (("health", "Health", 10.0), ("speed", "Speed (cells/s)", 0.1), (
 ATTACK_FIELDS = (("damage", "Damage", 5.0), ("range", "Reach (cells)", 0.05), ("windup", "Wind-up (s)", 0.05),
                  ("cooldown", "Cooldown (s)", 0.1))
 ENEMY_COLOR_NAMES = ("Tint red", "Tint green", "Tint blue")
+CURVE_TABS = (("zombie_count", "Zombies"), ("zombie_health", "Health x"), ("max_alive", "At once"),
+              ("spawn_interval", "Spawn gap (s)"), ("weight", "Enemy mix"))    # the Waves card's curves
+CURVE_STEPS = {"zombie_count": 1, "zombie_health": 0.05, "max_alive": 1, "spawn_interval": 0.05, "weight": 0.1}
+WAVES_CARD_W, WAVES_CARD_H = 480, 330
+CURVE_MIN_ROUNDS = 20                           # the graph shows at least this many rounds
+CURVE_HIT = 9                                   # how close (pixels) a click must be to grab a point
 BARRICADE_FILL, BARRICADE_PLANK = (120, 80, 40), (200, 150, 90)     # a barricade on the map
 EDITOR_LAYERS = tuple(name for name in EDIT_LAYERS if name != "site") + ("sides", "site")   # the stored layers, the
                                                             # sides of walls, and bomb sites last (keys 1-9)
@@ -607,6 +614,9 @@ class Editor:
         self.effect_selected = None             # index in level.effects of the effect being edited
         self.barricade_selected = None          # index in level.barricades of the one being edited (Barricade tool)
         self.place_barricade_kind = ""          # the saved barricade type the Barricade tool places ("": plain)
+        self.curve_shown = "zombie_count"       # the curve the Waves card shows (CURVE_TABS)
+        self.curve_drag = None                  # the index of the point of it being dragged ...
+        self.curve_drag_scale = None            # ... and the graph's scale, held while it is
         self.fx_sim = None                      # [ParticleSystem, settings it was made from, time to next burst]
         self.fx_scaled = {}                     # (tile, pixels) -> a particle picture at that size
         self.place_prefab = ""                  # the prefab the Entity tool places ("" = a plain item)
@@ -1622,11 +1632,9 @@ class Editor:
             fields += [field("downed_can_shoot", "Downed can shoot", "enum", choices=(False, True),
                              labels={False: "No", True: "Yes"}),
                        field("keep_guns", "Back next round with", "enum", choices=(False, True),
-                             labels={False: "Only the start gun", True: "Their guns"}),
-                       Field("zombie_count_note", "Enemies a round", "info",
-                             (lambda: curve_text(rules.zombie_count)), None),
-                       Field("zombie_health_note", "Health times", "info",
-                             (lambda: curve_text(rules.zombie_health)), None)]
+                             labels={False: "Only the start gun", True: "Their guns"})]
+            if self.curve_shown != "weight":                # (the Waves card's curve, typed exactly)
+                fields += self.curve_point_fields(self.curve_shown)
         return fields
 
     def buy_menu_fields(self):
@@ -1696,7 +1704,7 @@ class Editor:
         if enemy.pathing == "sticky":
             low, high = ENEMY_NUMBERS["switch_margin"]
             fields.append(field("switch_margin", "Switch if nearer by", "num", step=0.5, low=low, high=high,
-                                unit="cells"))
+                                unit=" cells"))
             low, high = ENEMY_NUMBERS["switch_delay"]
             fields.append(field("switch_delay", "... for (s)", "num", step=0.25, low=low, high=high))
         for name, label, step in ENEMY_FIELDS:
@@ -1719,7 +1727,9 @@ class Editor:
         if len(enemy.attacks) < MAX_ATTACKS:
             fields.append(Field("add_attack", "Add attack", "button", None, None, action=self.add_attack,
                                 text_override="+ Add an attack"))
-        return fields
+        low, high = ENEMY_NUMBERS["max_per_round"]
+        fields.append(field("max_per_round", "Most a round (0: any)", "num", step=1, low=low, high=high))
+        return fields + self.curve_point_fields("weight")
 
     def new_enemy_name(self, base="Zombie", skip=None):
         taken = {e.name for i, e in enumerate(self.level.enemies) if i != skip}
@@ -3950,7 +3960,9 @@ class Editor:
                 if e.button == 1:
                     self.lights_click(e.pos)
             elif self.settings_mode:
-                if e.button == 1:
+                if e.button in (1, 3) and self.curve_press(e.pos, e.button):
+                    pass
+                elif e.button == 1:
                     self.settings_click(e.pos)
             elif e.button in (1, 3) and not self.over_ruler(e.pos):
                 self.confirm = None
@@ -3981,6 +3993,7 @@ class Editor:
             self.look_drag = self.camera_drag = False
             if self.gizmo_drag:
                 self.gizmo_release()
+            self.curve_drag = None
         if e.button in (1, 2):
             self.pan_drag = self.atlas_pan = False
 
@@ -3992,6 +4005,8 @@ class Editor:
             self.scroll_drag_to(e.pos[1])
         elif self.gizmo_drag:
             self.gizmo_move(e.pos)
+        elif self.curve_drag is not None:
+            self.curve_move(e.pos)
         elif self.look_drag and self.preview is not None:
             self.preview.look(e.rel[0] * MOUSE_SENSITIVITY, -e.rel[1] * MOUSE_SENSITIVITY)
         elif self.camera_drag and self.preview is not None:
@@ -5367,6 +5382,251 @@ class Editor:
             y = rows[-1][0].bottom + 4
         return rows, pygame.Rect(rules.x, y, 220, 34)
 
+    # ---------------------------------------------------------------- the waves card (zombies' curves)
+
+    def waves_card_rect(self):
+        """The Waves card in the Map settings section (zombies mode): beside the list, above the buy menu preview, or
+        under the list when there is no room. None in the other modes."""
+        if self.level.settings.mode != "zombies":
+            return None
+        area = self.map_area()
+        right = area.x + 20 + self.settings_list_width() + 24
+        width = min(WAVES_CARD_W, area.right - right - 20)
+        if width >= 300:
+            return pygame.Rect(right, area.y + 74 - self.settings_scroll, width, WAVES_CARD_H)
+        _rules, _buy, _rows, add = self.settings_rows()
+        return pygame.Rect(add.x, add.bottom + 24, min(WAVES_CARD_W, max(260, area.w - 40)), WAVES_CARD_H)
+
+    def curve_enemy(self):
+        """The index of the kind of enemy whose weight the Enemy mix tab edits: the one selected, else the first
+        (None when the map has none)."""
+        enemy = self.selected_enemy()
+        if enemy is not None:
+            return self.level.enemies.index(enemy)
+        return 0 if self.level.enemies else None
+
+    def curve_points(self, name=None):
+        """The points of a curve: one of the map's zombies curves, or ("weight") the edited enemy's weight; None if
+        there is no such curve (no enemies)."""
+        name = name or self.curve_shown
+        if name == "weight":
+            i = self.curve_enemy()
+            return None if i is None else self.level.enemies[i].weight
+        return getattr(self.level.settings, name)
+
+    def curve_layout(self, card):
+        """(tab rects {name: rect}, graph rect, legend rects [(rect, enemy index)]) of the Waves card."""
+        tabs, x = {}, card.x + 12
+        for name, label in CURVE_TABS:
+            width = self.small.size(label)[0] + 14
+            tabs[name] = pygame.Rect(x, card.y + 32, width, 22)
+            x += width + 4
+        graph = pygame.Rect(card.x + 46, card.y + 66, card.w - 60, card.h - 66 - 72)   # (rounds, legend, hint)
+        legend, x = [], graph.x
+        if self.curve_shown == "weight":
+            for i, enemy in enumerate(self.level.enemies):
+                width = self.small.size(enemy.name)[0] + 18
+                if x + width > card.right - 8:
+                    break
+                legend.append((pygame.Rect(x, graph.bottom + 26, width, 18), i))
+                x += width + 6
+        return tabs, graph, legend
+
+    def curve_scale(self, graph):
+        """(last round, top value) the graph shows: past the last point of every curve drawn by a few rounds, and
+        above the highest value they reach there. It holds still while a point is dragged (the point follows the
+        mouse, even above the top), and fits again when it is let go."""
+        if self.curve_drag is not None and self.curve_drag_scale is not None:
+            return self.curve_drag_scale
+        curves = ([e.weight for e in self.level.enemies] if self.curve_shown == "weight"
+                  else [self.curve_points()])
+        curves = [c for c in curves if c]
+        last = max([CURVE_MIN_ROUNDS] + [c[-1][0] + 5 for c in curves])
+        top = max([1.0] + [curve_at(c, x) for c in curves for x in [p[0] for p in c] + [last]])
+        step = 10 ** math.floor(math.log10(top * 1.15))
+        return last, math.ceil(top * 1.15 / step) * step
+
+    def curve_to_screen(self, graph, scale, x, value):
+        last, top = scale
+        return (graph.x + (x - 1) / max(1, last - 1) * graph.w, graph.bottom - value / top * graph.h)
+
+    def curve_from_screen(self, graph, scale, pos):
+        """(round, value) under a point of the graph, the round a whole number, the value rounded to the curve's step
+        and held in its limits."""
+        last, top = scale
+        x = round(1 + (pos[0] - graph.x) / max(1, graph.w) * (last - 1))
+        value = (graph.bottom - pos[1]) / max(1, graph.h) * top
+        return max(1, min(MAX_CURVE_X, x)), self.curve_value(value)
+
+    def curve_value(self, value, name=None):
+        name = name or self.curve_shown
+        low, high = CURVE_LIMITS[name]
+        step = CURVE_STEPS[name]
+        return max(low, min(high, round(round(value / step) * step, 4)))
+
+    def curve_press(self, pos, button):
+        """A click in the Waves card: a tab, an enemy in the legend, or the graph (grab a point, add one, or remove
+        one with the right button). True if the card took it."""
+        card = self.waves_card_rect()
+        if card is None or not card.collidepoint(pos):
+            return False
+        tabs, graph, legend = self.curve_layout(card)
+        for name, rect in tabs.items():
+            if rect.collidepoint(pos) and button == 1:
+                self.curve_shown = name
+                if name == "weight" and not self.level.enemies:
+                    self.say("Add an enemy first: Enemy mix is how likely each kind is, round by round")
+                return True
+        for rect, i in legend:
+            if rect.collidepoint(pos) and button == 1:
+                self.settings_selected = ENEMY_ROW - i
+                self.field_edit = self.menu_open = None
+                return True
+        points = self.curve_points()
+        if points is None or not graph.inflate(12, 12).collidepoint(pos):
+            return True
+        scale = self.curve_scale(graph)
+        near = [(math.dist(pos, self.curve_to_screen(graph, scale, *p)), i) for i, p in enumerate(points)]
+        hit = min(near)[1] if near and min(near)[0] <= CURVE_HIT else None
+        if button == 3:
+            if hit is not None and len(points) > 1:
+                self.begin_edit()
+                del self.curve_points()[hit]
+            return True
+        if button != 1:
+            return True
+        self.begin_edit()
+        points = self.curve_points()
+        if hit is None:
+            x, value = self.curve_from_screen(graph, scale, pos)
+            same = next((i for i, p in enumerate(points) if p[0] == x), None)
+            if same is not None:
+                points[same][1] = value
+                hit = same
+            elif len(points) < MAX_CURVE_POINTS:
+                points.append([x, value])
+                points.sort(key=lambda p: p[0])
+                hit = next(i for i, p in enumerate(points) if p[0] == x)
+            else:
+                self.say(f"A curve has at most {MAX_CURVE_POINTS} points")
+                return True
+        self.curve_drag_scale = scale
+        self.curve_drag = hit
+        return True
+
+    def curve_move(self, pos):
+        """Drag the grabbed point: its round stays between its neighbors'."""
+        card = self.waves_card_rect()
+        points = self.curve_points()
+        if card is None or points is None or not 0 <= self.curve_drag < len(points):
+            self.curve_drag = None
+            return
+        _tabs, graph, _legend = self.curve_layout(card)
+        x, value = self.curve_from_screen(graph, self.curve_scale(graph), pos)
+        i = self.curve_drag
+        low = points[i - 1][0] + 1 if i > 0 else 1
+        high = points[i + 1][0] - 1 if i + 1 < len(points) else MAX_CURVE_X
+        points[i] = [max(low, min(high, x)), value]
+
+    def set_curve_point(self, name, i, x=None, value=None):
+        """Type a point's round or value in the Details pane (one undo step); the round stays between its
+        neighbors'."""
+        points = self.curve_points(name)
+        if points is None or not 0 <= i < len(points):
+            return
+        new = list(points[i])
+        if x is not None:
+            low = points[i - 1][0] + 1 if i > 0 else 1
+            high = points[i + 1][0] - 1 if i + 1 < len(points) else MAX_CURVE_X
+            new[0] = max(low, min(high, int(round(x))))
+        if value is not None:
+            new[1] = self.curve_value(value, name)
+        if new == points[i]:
+            return
+        self.begin_edit()
+        self.curve_points(name)[i] = new
+
+    def curve_point_fields(self, name):
+        """The Details pane's rows for each point of a curve: its round and its value, typed exactly."""
+        points = self.curve_points(name)
+        if points is None:
+            return []
+        label = dict(CURVE_TABS)[name]
+        low, high = CURVE_LIMITS[name]
+        fields = [Field(f"curve_{name}", f"{label}: round -> value", "header", None, None)]
+        for i in range(len(points)):
+            fields += [Field(f"{name}{i}x", f"Point {i + 1}: round", "num",
+                             (lambda i=i: self.curve_points(name)[i][0]),
+                             (lambda v, i=i: self.set_curve_point(name, i, x=v)), step=1, low=1, high=MAX_CURVE_X),
+                       Field(f"{name}{i}y", "   value", "num", (lambda i=i: self.curve_points(name)[i][1]),
+                             (lambda v, i=i: self.set_curve_point(name, i, value=v)), step=CURVE_STEPS[name],
+                             low=low, high=high)]
+        return fields
+
+    def draw_waves_card(self, screen, card):
+        """The Waves card: tabs for each curve, the chosen one as a graph of round -> value (Enemy mix: every kind's
+        weight in its color, the selected one's points to drag), and the value under the mouse."""
+        pygame.draw.rect(screen, PANEL_BG, card, border_radius=6)
+        pygame.draw.rect(screen, GRID, card, 1, border_radius=6)
+        screen.blit(self.font.render("Waves", True, ACCENT), (card.x + 12, card.y + 8))
+        tabs, graph, legend = self.curve_layout(card)
+        for name, rect in tabs.items():
+            on = name == self.curve_shown
+            pygame.draw.rect(screen, BUTTON_ON if on else (BUTTON_HOT if rect.collidepoint(self.mouse) else BUTTON),
+                             rect, border_radius=4)
+            label = self.small.render(dict(CURVE_TABS)[name], True, TEXT)
+            screen.blit(label, label.get_rect(center=rect.center))
+        pygame.draw.rect(screen, BG, graph)
+        points = self.curve_points()
+        if points is None:
+            self.blit_fitted(screen, self.small, "No enemies yet: add one under Enemies", DIM,
+                             (graph.x + 8, graph.y + 8), graph.right - 8)
+            return
+        scale = self.curve_scale(graph)
+        last, top = scale
+        for k in range(5):                                  # value lines
+            value = top * k / 4
+            y = round(graph.bottom - graph.h * k / 4)
+            pygame.draw.line(screen, GRID, (graph.x, y), (graph.right, y))
+            text = self.small.render(f"{value:g}", True, DIM)
+            screen.blit(text, (graph.x - 6 - text.get_width(), y - 7))
+        step = max(1, round((last - 1) / 6))
+        for x in range(1, last + 1, step):                  # round marks
+            sx = round(self.curve_to_screen(graph, scale, x, 0)[0])
+            pygame.draw.line(screen, GRID, (sx, graph.bottom), (sx, graph.bottom + 4))
+            text = self.small.render(str(x), True, DIM)
+            screen.blit(text, (sx - text.get_width() // 2, graph.bottom + 5))
+        if self.curve_shown == "weight":
+            edited = self.curve_enemy()
+            drawn = [(i, e.weight, tuple(e.color)) for i, e in enumerate(self.level.enemies) if i != edited]
+            drawn.append((edited, points, tuple(self.level.enemies[edited].color)))
+        else:
+            drawn = [(None, points, ACCENT)]
+        clip = screen.get_clip()
+        screen.set_clip(graph.inflate(2, 2).clip(clip) if clip else graph.inflate(2, 2))
+        for owner, curve, color in drawn:
+            mine = curve is points
+            line = [self.curve_to_screen(graph, scale, x, curve_at(curve, x)) for x in range(1, last + 1)]
+            pygame.draw.lines(screen, color, False, line, 3 if mine else 1)
+        for i, (x, value) in enumerate(points):
+            spot = self.curve_to_screen(graph, scale, x, value)
+            pygame.draw.circle(screen, TEXT if i == self.curve_drag else ACCENT, spot, 6)
+            pygame.draw.circle(screen, BG, spot, 6, 2)
+        screen.set_clip(clip)
+        for rect, i in legend:
+            enemy = self.level.enemies[i]
+            pygame.draw.rect(screen, tuple(enemy.color), (rect.x, rect.y + 4, 10, 10))
+            screen.blit(self.small.render(enemy.name, True, TEXT if i == self.curve_enemy() else DIM),
+                        (rect.x + 14, rect.y))
+        hint = "Drag a point, click to add one, right-click removes; type exact values in the Details pane"
+        if self.curve_shown == "weight":
+            hint = "How likely each kind is (0: none); click a name to edit its curve"
+        self.blit_fitted(screen, self.small, hint, DIM, (card.x + 12, card.bottom - 20), card.right - 10)
+        if graph.collidepoint(self.mouse):
+            x, _value = self.curve_from_screen(graph, scale, self.mouse)
+            here = pygame.Rect(self.mouse[0] - 1, self.mouse[1] - 1, 3, 3)
+            self.tips.append((here, f"Round {x}: {curve_at(points, x):g}"))
+
     def settings_card_rect(self):
         """The buy menu preview's card: beside the list, or below it when there is no room."""
         area = self.map_area()
@@ -5376,6 +5636,9 @@ class Editor:
         card = pygame.Rect(right, area.y + 74 - self.settings_scroll, width, self.buy_preview_height())
         if width < 240:
             card = pygame.Rect(add.x, add.bottom + 24, min(380, max(200, area.w - 40)), self.buy_preview_height())
+        waves = self.waves_card_rect()
+        if waves is not None and (waves.x == card.x or waves.colliderect(card)):
+            card.y = waves.bottom + 20                      # (under the Waves card)
         return card
 
     def settings_content_bottom(self):
@@ -5417,8 +5680,7 @@ class Editor:
             text += (f"   hold {rules.hill_time:g}s, capture {rules.capture_time:g}s (+{rules.capture_bonus:g}s),"
                      f" {rules.win_limit:g} rounds to win")
         if rules.mode == "zombies":
-            text += (f"   {curve_text(rules.zombie_count)} enemies, at most {rules.max_alive:g} at once,"
-                     f" {rules.intermission:g}s between rounds")
+            text += (f"   enemies: {curve_text(rules.zombie_count)}, {rules.intermission:g}s between rounds")
         if rules.mode in ("ffa", "teams", "coop") and rules.respawn_delay > 0:
             text += f"   respawn {rules.respawn_delay:g}s"
         if rules.has_waiting():
@@ -5481,6 +5743,9 @@ class Editor:
                                    self.buy_entry_summary(i), i == self.settings_selected,
                                    entry_tile(entry, self.level.guns))
         self._draw_add_button(screen, add, "+ Add to buy menu")
+        waves = self.waves_card_rect()
+        if waves is not None:
+            self.draw_waves_card(screen, waves)
         self.draw_buy_preview(screen, self.settings_card_rect())
         self.draw_scrollbar(screen, "settings")
         screen.set_clip(None)

@@ -36,6 +36,9 @@ def quick(**rules):
     base = dict(mode="zombies", intermission=0.5, spawn_interval=0.1, zombie_count=[[1, 2], [2, 4]],
                 zombie_health=[[1, 1.0], [2, 2.0]], max_alive=24, game_over_time=1.0)
     base.update(rules)
+    for name in ("max_alive", "spawn_interval"):            # (a number: the same every round)
+        if isinstance(base[name], (int, float)):
+            base[name] = [[1, base[name]]]
     return MapSettings(**base)
 
 
@@ -636,7 +639,7 @@ def test_choosing_zombies_adds_a_zombie_and_lists_the_enemies(ed):
     ed.set_rule("mode", "zombies")
     assert [e.name for e in ed.level.enemies] == ["Zombie"]
     keys = [r.field.key for r in ed.details_rows()]
-    assert "max_alive" in keys and "zombie_count_note" in keys
+    assert "extra_per_player" in keys and "zombie_count0x" in keys and "zombie_count0y" in keys
     rows, add = ed.enemy_rows()
     assert len(rows) == 1
     click(ed, add.center)
@@ -996,3 +999,130 @@ def test_the_editor_says_which_barricades_act_as_one(ed):
     group = next(r.field for r in ed.details_rows() if r.field.key == "group")
     assert "1 touching" in group.label and "3, 3" in group.get()
     ed.draw(pygame.display.get_surface())
+
+
+# ------------------------------------------------------------------ waves
+
+def test_wave_curves_load_save_and_old_numbers_become_flat_curves():
+    data = json.loads(level_text(zombie_level()))
+    data["settings"]["max_alive"] = 24
+    data["settings"]["spawn_interval"] = 1.5
+    data["enemies"][0]["weight"] = [[1, 0], [5, 2]]
+    level = parse_level(data)
+    assert level.settings.max_alive == [[1, 24.0]] and level.settings.spawn_interval == [[1, 1.5]]
+    assert level.enemies[0].weight == [[1, 0.0], [5, 2.0]]
+    again = parse_level(json.loads(level_text(level)))
+    assert again.settings == level.settings and again.enemies == level.enemies
+    copy = level.copy()
+    copy.settings.max_alive[0][1] = 3
+    copy.enemies[0].weight[0][1] = 9
+    assert level.settings.max_alive == [[1, 24.0]] and level.enemies[0].weight[0][1] == 0
+
+
+def test_more_players_face_more_enemies():
+    one = zombie_game(zombie_count=[[1, 10]], max_alive=4, extra_per_player=0.5)
+    go_live(one)
+    play(one, 2.0)
+    two = zombie_game(players=(0, 1, 2), zombie_count=[[1, 10]], max_alive=4, extra_per_player=0.5)
+    go_live(two)
+    play(two, 2.0)
+    assert len(one.round.enemies) + one.round.to_spawn == 10 and len(one.round.enemies) == 4
+    assert len(two.round.enemies) + two.round.to_spawn == 20 and len(two.round.enemies) == 8     # (x2 for 3)
+
+
+def test_the_spawn_gap_follows_its_curve():
+    game = zombie_game(zombie_count=[[1, 20]], spawn_interval=[[1, 1.0]], max_alive=50)
+    go_live(game)
+    play(game, 2.05)
+    assert len(game.round.enemies) == 3                     # at 0, 1 and 2 seconds
+
+
+def test_kinds_come_in_by_their_weights_for_the_round():
+    walker = Enemy(name="Walker", weight=[[1, 1.0]])
+    brute = Enemy(name="Brute", weight=[[1, 0.0], [4, 0.0], [5, 1.0], [20, 9.0]])
+    game = zombie_game(enemies=[walker, brute])
+    game.round.number = 1
+    assert {game.round.pick_kind() for _ in range(200)} == {0}               # no brutes in round 1
+    game.round.number = 20
+    picks = [game.round.pick_kind() for _ in range(1000)]
+    assert 800 < picks.count(1) < 980                                       # about 9 in 10 by round 20
+
+
+def test_a_kind_stops_at_its_most_a_round_and_all_zero_weights_still_send_something():
+    boss = Enemy(name="Boss", weight=[[1, 100.0]], max_per_round=1)
+    walker = Enemy(name="Walker", weight=[[1, 0.0]])
+    game = zombie_game(enemies=[boss, walker], zombie_count=[[1, 5]], spawn_interval=0.0, max_alive=10)
+    go_live(game)
+    play(game, 0.2)
+    kinds = sorted(e.kind for e in game.round.enemies.values())
+    assert kinds == [0, 1, 1, 1, 1]                         # one boss, then the only kind left (weight 0 or not)
+
+
+def test_the_waves_card_adds_drags_and_removes_points(ed):
+    import map_editor
+    ed.do("mapsettings")
+    ed.set_rule("mode", "zombies")
+    ed.settings_selected = map_editor.RULES_ROW
+    ed.draw(pygame.display.get_surface())
+    card = ed.waves_card_rect()
+    tabs, graph, _legend = ed.curve_layout(card)
+    ed.curve_shown = "max_alive"
+    ed.level.settings.max_alive = [[1, 10.0], [10, 30.0]]
+    scale = ed.curve_scale(graph)
+    spot = ed.curve_to_screen(graph, scale, 5, 20.0)
+    assert ed.curve_press(spot, 1)                          # empty: a new point, grabbed
+    assert [p[0] for p in ed.level.settings.max_alive] == [1, 5, 10] and ed.curve_drag == 1
+    ed.curve_move(ed.curve_to_screen(graph, scale, 15, 40.0))                  # held between its neighbors
+    assert ed.level.settings.max_alive[1][0] == 9
+    ed.on_mouse_up(pygame.event.Event(pygame.MOUSEBUTTONUP, pos=spot, button=1))
+    assert ed.curve_drag is None
+    ed.curve_press(ed.curve_to_screen(graph, ed.curve_scale(graph), *ed.level.settings.max_alive[1]), 3)
+    assert [p[0] for p in ed.level.settings.max_alive] == [1, 10]
+    ed.do("undo")
+    assert len(ed.level.settings.max_alive) == 3
+    ed.curve_press(tabs["zombie_health"].center, 1)
+    assert ed.curve_shown == "zombie_health" and "zombie_health0y" in [r.field.key for r in ed.details_rows()]
+    ed.draw(pygame.display.get_surface())
+
+
+def test_typing_a_points_round_keeps_it_between_its_neighbors(ed):
+    ed.set_rule("mode", "zombies")
+    ed.level.settings.zombie_count = [[1, 6], [5, 18], [10, 40]]
+    ed.set_curve_point("zombie_count", 1, x=50)
+    ed.set_curve_point("zombie_count", 1, value=12.4)
+    assert ed.level.settings.zombie_count[1] == [9, 12]
+    ed.set_curve_point("zombie_count", 0, value=-3)
+    assert ed.level.settings.zombie_count[0] == [1, 0]
+
+
+def test_the_enemy_mix_tab_edits_the_selected_enemys_weight(ed):
+    import map_editor
+    ed.do("mapsettings")
+    ed.set_rule("mode", "zombies")
+    ed.add_enemy()                                          # selects it: Zombie 2
+    ed.curve_shown = "weight"
+    ed.draw(pygame.display.get_surface())
+    card = ed.waves_card_rect()
+    _tabs, graph, legend = ed.curve_layout(card)
+    assert [i for _rect, i in legend] == [0, 1]
+    ed.curve_press(ed.curve_to_screen(graph, ed.curve_scale(graph), 8, 1.5), 1)
+    assert ed.level.enemies[1].weight == [[1, 1.0], [8, 1.5]] and ed.level.enemies[0].weight == [[1, 1.0]]
+    ed.curve_press(legend[0][0].center, 1)
+    assert ed.settings_selected == map_editor.ENEMY_ROW and ed.curve_points() is ed.level.enemies[0].weight
+    assert "weight0y" in [r.field.key for r in ed.details_rows()]
+    ed.draw(pygame.display.get_surface())
+
+
+def test_the_graph_holds_its_scale_while_a_point_is_dragged(ed):
+    ed.set_rule("mode", "zombies")
+    ed.do("mapsettings")
+    ed.curve_shown = "zombie_count"
+    ed.level.settings.zombie_count = [[1, 10.0]]
+    ed.draw(pygame.display.get_surface())
+    _tabs, graph, _legend = ed.curve_layout(ed.waves_card_rect())
+    before = ed.curve_scale(graph)
+    ed.curve_press(ed.curve_to_screen(graph, before, 1, 10.0), 1)
+    ed.curve_move((graph.x, graph.y - 40))                  # above the top: past what the graph showed
+    assert ed.curve_scale(graph) == before and ed.level.settings.zombie_count[0][1] > before[1]
+    ed.on_mouse_up(pygame.event.Event(pygame.MOUSEBUTTONUP, pos=(graph.x, graph.y), button=1))
+    assert ed.curve_scale(graph)[1] > before[1]             # fits it again once let go

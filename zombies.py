@@ -2,7 +2,8 @@
 
 The map defines kinds of enemy (mapfile.Enemy: health, speed, size, attacks, who they chase) and where they come in
 (Spawners of team ENEMY_SPAWN). Each round sends a number of them (MapSettings.zombie_count, a curve over the rounds),
-tougher as the rounds go on (zombie_health), no more than max_alive at once, one every spawn_interval seconds. They
+tougher as the rounds go on (zombie_health), no more than max_alive at once, one every spawn_interval seconds (curves
+too; more for more players: extra_per_player), each of a kind picked by the kinds' weights for the round. They
 find their way to the players (pathing.py) and attack whoever they reach. Players earn money for every hit and kill.
 When all of a round's enemies are dead the next round starts after the intermission, and the players who were knocked
 out come back.
@@ -255,6 +256,7 @@ class ZombieRound:
         self.message, self.message_left = "", 0.0
         self.paths = {}                         # body height -> Pathing (the places differ with height)
         self.spawn_turn = 0                     # which spawner the next enemy comes in at
+        self.spawned = {}                       # kind index -> how many of it came in this round
         self.downed = {}                        # player id -> seconds until they bleed out
         self.revives = {}                       # downed player id -> [reviver's id, seconds of reviving done]
         self.grace = {}                         # player id -> seconds enemies cannot hurt them (just revived)
@@ -489,7 +491,8 @@ class ZombieRound:
         self.number += 1
         self.phase = "live"
         self.repaid = {}
-        self.to_spawn = round(curve_at(settings.zombie_count, self.number))
+        self.to_spawn = round(curve_at(settings.zombie_count, self.number) * self.player_scale())
+        self.spawned = {}                       # kind index -> how many of it came in this round
         self.spawn_wait = 0.0
         self.say(f"Round {self.number}")
 
@@ -557,18 +560,40 @@ class ZombieRound:
     def spawners(self):
         return [s for s in self.game.level.spawners if s.team == ENEMY_SPAWN]
 
+    def player_scale(self):
+        """How many times a round's enemies (and the most at once) the players face: 1 for one player, and the map's
+        extra_per_player more for each player beyond."""
+        return 1.0 + self.game.level.settings.extra_per_player * max(0, len(self.game.players) - 1)
+
+    def pick_kind(self):
+        """The index of the kind the next enemy is: picked by the kinds' weights for this round, leaving out kinds
+        that have come in their max_per_round times already. When every weight is 0, the first kind not at its most;
+        when every kind is, the first."""
+        kinds = enemy_kinds(self.game.level)
+        open_ = [i for i, k in enumerate(kinds) if k.max_per_round <= 0 or self.spawned.get(i, 0) < k.max_per_round]
+        weights = [(i, curve_at(kinds[i].weight, self.number)) for i in open_]
+        total = sum(w for _, w in weights)
+        if total <= 0:
+            return open_[0] if open_ else 0
+        roll = self.game.rng.random() * total
+        for i, w in weights:
+            roll -= w
+            if roll < 0 and w > 0:
+                return i
+        return next(i for i, w in reversed(weights) if w > 0)
+
     def spawn(self, dt):
         """Bring in the round's next enemies, one every spawn_interval, while fewer than max_alive are in the map."""
         settings, level = self.game.level.settings, self.game.level
         self.spawn_wait -= dt
         places = self.spawners()
-        while (self.to_spawn > 0 and self.spawn_wait <= 0 and len(self.enemies) < settings.max_alive
-               and places):
+        most = max(1, round(curve_at(settings.max_alive, self.number) * self.player_scale()))
+        while self.to_spawn > 0 and self.spawn_wait <= 0 and len(self.enemies) < most and places:
             spot = places[self.spawn_turn % len(places)]
             self.spawn_turn += 1
-            kinds = enemy_kinds(level)
-            kind_index = self.game.rng.randrange(len(kinds))
-            kind = kinds[kind_index]
+            kind_index = self.pick_kind()
+            kind = enemy_kinds(level)[kind_index]
+            self.spawned[kind_index] = self.spawned.get(kind_index, 0) + 1
             start = spawn_at(self.game.world, spot.x, spot.y, spot.span, spot.angle)
             body = EnemyBody(start.x, start.y, start.z, angle=start.angle, span=start.span, tall=kind.height,
                              radius=kind.radius)
@@ -578,7 +603,7 @@ class ZombieRound:
             self.enemies[enemy.ident] = enemy
             self.next_ident += 1
             self.to_spawn -= 1
-            self.spawn_wait += settings.spawn_interval
+            self.spawn_wait += curve_at(settings.spawn_interval, self.number)
         if self.spawn_wait < 0:
             self.spawn_wait = 0.0
 
