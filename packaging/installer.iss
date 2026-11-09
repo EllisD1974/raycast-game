@@ -9,8 +9,10 @@
 ; shortcut and an uninstaller come with it. Not needed for Steam, which installs the build folder itself.
 
 #define AppName "Raycast Game"
-; AppVersion: keep in step with pyproject.toml
-#define AppVersion "0.1.0"
+; AppVersion: the version the build was given (dist\RaycastGame\_internal\version.txt): ISCC /DAppVersion=0.8b ...
+#ifndef AppVersion
+  #define AppVersion "0.0-dev"
+#endif
 #define Build "..\dist\RaycastGame"
 
 [Setup]

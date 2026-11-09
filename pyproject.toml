@@ -10,6 +10,18 @@ dependencies = [
     "pygame-ce>=2.5",
 ]
 
+# Commands run with `uv run <name>`. The project is installed (in development mode) only so these exist; it is not
+# meant to be built as a package.
+[project.scripts]
+build = "buildtool:main"        # build the game and the editor locally, as a dev version (buildtool.py)
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+only-include = ["buildtool.py", "version.py"]
+
 [dependency-groups]
 dev = [
     "pyinstaller>=6.22.3",
