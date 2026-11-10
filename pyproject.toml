@@ -26,7 +26,31 @@ only-include = ["buildtool.py", "version.py"]
 dev = [
     "pyinstaller>=6.22.3",
     "pytest>=8",
+    "ruff>=0.17.4",
+    "ty>=0.0.99",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # Pyflakes
+    "W",    # pycodestyle warnings
+    "I",    # isort (import sorting)
+    "B",    # flake8-bugbear
+    "UP",   # pyupgrade
+    "SIM",  # simplify
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.ty.environment]
+python-version = "3.13"
