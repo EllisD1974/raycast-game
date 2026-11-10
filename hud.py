@@ -10,7 +10,7 @@ from constants import HEIGHT, WIDTH
 from entities import offer_text
 from koth import HillView, on_hill
 from respawn import RespawnView
-from zombies import REVIVE_REACH, REVIVE_UP, ZombieView, nearest_group
+from zombies import REVIVE_REACH, REVIVE_UP, ZombieView, door_price, nearest_door, nearest_group
 from mapfile import CT_TEAM, DEFUSE_KIT, KOTH_NAMES, SITE_NAMES, T_TEAM, TEAM_NAMES
 
 TEXT = (255, 255, 255)
@@ -321,6 +321,21 @@ def draw_offer(picture, font, items, view, me_id, me):
         e = item.entity
         shadowed(picture, font, f"E: buy {offer_text(e)} for ${e.price:g}", (WIDTH // 2, HEIGHT // 2 + 64),
                  HIGHLIGHT if me.stats.money >= e.price else DIM, center=True)
+
+
+def draw_doors(picture, font, view, me_id, me, level):
+    """Zombies: beside a door players can open, "Press E to open the door ($750)", in red when they cannot pay."""
+    if not isinstance(view, ZombieView) or me_id not in view.alive or me_id in view.downed or view.repairs.get(me_id):
+        return
+    index = nearest_door(level, view.doors, me.body.x, me.body.y)
+    if index is None:
+        return
+    door = level.doors[level.door_leader(index)]                           # (the group's settings)
+    price = door_price(door)
+    have = me.stats.money if door.cost_kind == "money" else me.stats.score
+    can_pay = door.cost_kind == "free" or have >= door.cost
+    text = f"Press E to open {door.label()}" + (f" ({price})" if price else "")
+    shadowed(picture, font, text, (WIDTH // 2, HEIGHT // 2 + 84), HIGHLIGHT if can_pay else DANGER, center=True)
 
 
 def draw_respawn(picture, font, view, me_id, watching=None):

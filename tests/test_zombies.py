@@ -1171,3 +1171,327 @@ def test_the_graph_holds_its_scale_while_a_point_is_dragged(ed):
     assert ed.curve_scale(graph) == before and ed.level.settings.zombie_count[0][1] > before[1]
     ed.on_mouse_up(pygame.event.Event(pygame.MOUSEBUTTONUP, pos=(graph.x, graph.y), button=1))
     assert ed.curve_scale(graph)[1] > before[1]             # fits it again once let go
+
+
+# ------------------------------------------------------------------ doors
+
+def door_game(players=(0,), cost=500.0, **kwargs):
+    """The zombie room cut in two by a wall at x = 12 with a door two cells tall at (12, 5)-(12, 6): players on the
+    left, enemies coming in on the right."""
+    from mapfile import Door
+    level = zombie_level(**kwargs)
+    for y in range(1, 11):
+        level.set("walls", 12, y, 0 if y in (5, 6) else 1)
+    level.doors = [Door("Gate", 12, 5, 1, 2, cost=cost)]
+    game = Game(level, World(level, 32), random.Random(1), character_tile=FIRST_CHARACTER)
+    for pid in players:
+        game.add_player(pid)
+    return game
+
+
+def test_doors_are_saved_loaded_and_moved_with_the_map():
+    from mapfile import Door
+    level = zombie_level()
+    level.doors = [Door("Gate", 3, 4, 2, 1, cost=900, cost_kind="score", prompt="the gate", open_at_start=True)]
+    level.spawners[1].door = "Gate"
+    again = parse_level(json.loads(level_text(level)))
+    assert again.doors == level.doors and again.spawners[1].door == "Gate"
+    data = json.loads(level_text(level))
+    data["doors"] += [{"name": "Gate", "x": 8, "y": 8}, {"name": "Over", "x": 4, "y": 4}, {"x": 99, "y": 1},
+                      {"name": "Big", "x": 18, "y": 1, "width": 50, "cost": "lots", "cost_kind": "gold"}]
+    again = parse_level(data)
+    assert [d.name for d in again.doors] == ["Gate", "Big"]          # (taken name, overlap, off the map: left out)
+    assert again.doors[1].width == 2 and again.doors[1].cost == 750 and again.doors[1].cost_kind == "money"
+    level.resize_edges(left=2, top=1)
+    assert (level.doors[0].x, level.doors[0].y) == (5, 5)
+    assert '"doors"' not in level_text(Level.blank(5, 5))
+
+
+def test_a_closed_door_stops_everyone_and_everything():
+    from test_world_changes import shot_lands
+    game = door_game()
+    world = game.world
+    assert world.span_at(12.5, 5.5, 0.0) == -1 and world.for_enemies().span_at(12.5, 6.5, 0.0) == -1
+    assert shot_lands(world) < 12.0
+    assert world.wall_tex[5, 12] == game.level.doors[0].tile
+
+
+def test_pressing_e_beside_a_door_buys_it_open():
+    game = door_game(cost=500.0, start_money=300)
+    me = game.players[0]
+    place(me.body, 11.5, 5.5)
+    play(game, 0.1, {0: Inputs(use=True)})
+    assert not game.round.doors[0]                                   # not enough money
+    me.stats.money = 800
+    play(game, 0.5, {0: Inputs(use=True)})
+    assert not game.round.doors[0]                                   # (held, not pressed again)
+    play(game, DT, {0: Inputs()})
+    said = []
+    for _ in range(2):
+        for events in game.tick({0: Inputs(use=True)}, DT).values():
+            said += events.picked
+    assert game.round.doors[0] and me.stats.money == 300 and "Opened the door" in said
+    assert game.world.span_at(12.5, 5.5, 0.0) == 0 and game.round.view().doors == [True]
+
+
+def test_a_door_only_a_trigger_opens_and_a_free_door():
+    game = door_game(cost=0.0)
+    game.level.doors[0].buyable = False
+    place(game.players[0].body, 11.5, 5.5)
+    play(game, 0.1, {0: Inputs(use=True)})
+    assert not game.round.doors[0]
+    game.level.doors[0].buyable, game.level.doors[0].cost_kind = True, "free"
+    play(game, DT, {0: Inputs()})
+    play(game, DT, {0: Inputs(use=True)})
+    assert game.round.doors[0]
+
+
+def test_enemy_spawn_points_behind_a_door_wait_for_it():
+    game = door_game(spawners=((17.5, 5.5), (2.5, 9.5)))
+    game.level.spawners[1].door = "Gate"                             # the one on the right waits
+    assert [(s.x, s.y) for s in game.round.spawners()] == [(2.5, 9.5)]
+    game.round.open_door(0)
+    assert len(game.round.spawners()) == 2
+
+
+def test_enemies_come_through_a_door_once_it_is_open():
+    game = door_game(enemies=[Enemy(speed=3.0)], zombie_count=[[1, 1]])
+    place(game.players[0].body, 3.5, 5.5)
+    go_live(game)
+    play(game, 4.0)
+    assert all(e.body.x > 12.5 for e in game.round.enemies.values())
+    game.round.open_door(0)
+    assert play(game, 8.0, until=lambda: any(e.body.x < 12 for e in game.round.enemies.values()))
+
+
+def test_a_new_game_closes_the_doors_again():
+    game = door_game()
+    game.round.open_door(0)
+    game.round.new_game()
+    assert game.round.doors == [False] and game.world.span_at(12.5, 5.5, 0.0) == -1
+
+
+def test_a_joiner_sees_a_door_open():
+    game = door_game()
+    host = HostSession(game, net.Host("pw", port=0))
+    client = ClientSession(net.Client("127.0.0.1", host.host.port, "pw"), make_world, FIRST_CHARACTER)
+    try:
+        run([host, client], lambda: client.ready and isinstance(client.round, ZombieView))
+        assert client.world.span_at(12.5, 5.5, 0.0) == -1
+        game.round.open_door(0)
+        run([host, client], lambda: client.round.doors == [True])
+        assert client.world.span_at(12.5, 5.5, 0.0) == 0
+    finally:
+        client.close()
+        host.close()
+
+
+def test_the_door_tool_drags_out_doors_and_edits_them(ed):
+    from mapfile import ENEMY_SPAWN, Spawner
+    ed.do("tool:door")
+    ed.map_click((2, 2), 1)
+    ed.door_drag = ((2, 2), (3, 4))
+    ed.finish_door()
+    assert [(d.name, d.x, d.y, d.width, d.height) for d in ed.level.doors] == [("Door", 2, 2, 2, 3)]
+    assert ed.selected_door() is ed.level.doors[0]
+    ed.door_drag = ((3, 3), (5, 3))
+    ed.finish_door()
+    assert len(ed.level.doors) == 1 and "overlap" in ed.message
+    ed.level.spawners = [Spawner(7.5, 7.5, team=ENEMY_SPAWN, door="Door")]
+    ed.set_door("name", "Vault")
+    assert ed.level.spawners[0].door == "Vault"
+    ed.set_door("cost_kind", "free")
+    assert "cost" not in [r.field.key for r in ed.details_rows()]
+    ed.draw(pygame.display.get_surface())
+    ed.map_click((2, 2), 3)
+    assert ed.level.doors == [] and ed.level.spawners[0].door == ""
+    ed.do("undo")
+    assert ed.level.doors[0].name == "Vault" and ed.level.spawners[0].door == "Vault"
+
+
+def test_the_spawn_tool_gives_enemy_spawn_points_a_door_to_wait_for(ed):
+    from mapfile import Door
+    ed.level.doors = [Door("Gate", 1, 1)]
+    ed.do("tool:spawn")
+    ed.spawn_team = ENEMY_SPAWN
+    ed.do("spawn_door")
+    assert ed.spawn_door == "Gate"
+    ed.map_click((5, 5), 1)
+    assert ed.level.spawners[-1].door == "Gate"
+    ed.do("spawn_door")
+    assert ed.spawn_door == ""
+
+
+def test_the_door_prompt_draws_beside_a_door():
+    from hud import draw_doors
+    game = door_game(start_money=100)
+    me = game.players[0]
+    picture = pygame.Surface((640, 360))
+    font = pygame.font.Font(None, 22)
+    place(me.body, 3.5, 5.5)
+    draw_doors(picture, font, game.round.view(), 0, me, game.level)        # (too far: nothing)
+    place(me.body, 11.5, 5.5)
+    draw_doors(picture, font, game.round.view(), 0, me, game.level)
+
+
+def test_clicking_an_atlas_tile_sets_the_selected_doors_picture(ed):
+    from mapfile import Door
+    ed.level.doors = [Door("Gate", 1, 1)]
+    ed.do("tool:door")
+    ed.map_click((1, 1), 1)
+    ed.atlas_drag = ((4, 0), (4, 0))
+    ed.finish_atlas_drag()
+    assert ed.level.doors[0].tile == 4
+
+
+def test_doors_that_touch_are_one_group():
+    from mapfile import Door
+    level = Level.blank(20, 12)
+    level.doors = [Door("A", 2, 2, 2, 1), Door("Far", 10, 10), Door("B", 4, 2), Door("C", 5, 3, 1, 2),
+                   Door("Gap", 7, 3)]
+    assert level.door_groups() == [[0, 2, 3], [1], [4]]     # (side by side, then corner to corner; a gap: apart)
+    assert level.door_leader(3) == 0 and level.door_leader(1) == 1
+
+
+def test_buying_one_door_of_a_group_opens_them_all_at_the_first_ones_price():
+    from mapfile import Door
+    game = door_game(cost=500.0, start_money=2000)
+    level = game.level
+    level.doors = [Door("Gate", 12, 5, 1, 1, cost=900, prompt="the big gate"), Door("Half", 12, 6, 1, 1, cost=10)]
+    game.world = World(level, 32)
+    game.round = ZombieRound(game)
+    me = game.players[0]
+    place(me.body, 11.5, 6.6)                                       # beside the second one
+    said = []
+    for _ in range(2):
+        for events in game.tick({0: Inputs(use=True)}, DT).values():
+            said += events.picked
+    assert game.round.doors == [True, True] and me.stats.money == 1100 and "Opened the big gate" in said
+    assert game.world.span_at(12.5, 5.5, 0.0) == 0 and game.world.span_at(12.5, 6.5, 0.0) == 0
+
+
+def test_a_door_of_a_group_whose_first_is_trigger_only_cannot_be_bought():
+    from mapfile import Door
+    game = door_game(start_money=2000)
+    game.level.doors = [Door("Gate", 12, 5, buyable=False), Door("Half", 12, 6)]
+    game.world = World(game.level, 32)
+    game.round = ZombieRound(game)
+    place(game.players[0].body, 11.5, 6.6)
+    play(game, 0.1, {0: Inputs(use=True)})
+    assert game.round.doors == [False, False]
+    game.round.open_door(0)                                         # (a trigger)
+    assert game.round.doors == [True, True]
+
+
+def test_the_editor_says_which_doors_open_together(ed):
+    from mapfile import Door
+    ed.level.doors = [Door("Gate", 3, 3), Door("Side", 4, 4)]
+    ed.do("tool:door")
+    ed.map_click((4, 4), 1)
+    group = next(r.field for r in ed.details_rows() if r.field.key == "door_group")
+    assert "1 touching" in group.label and "Gate" in group.get()
+    ed.draw(pygame.display.get_surface())
+
+
+# ------------------------------------------------------------------ saved door types, and heights
+
+def test_door_types_are_saved_and_doors_take_their_settings():
+    from mapfile import Door, DoorKind
+    level = Level.blank(12, 12)
+    level.door_kinds = [DoorKind("Vault", tile=9, cost=2500, cost_kind="score", tall=1.5)]
+    level.doors = [Door("A", 2, 2, kind="Vault"), Door("B", 6, 6, cost=10), Door("C", 9, 9, kind="Gone")]
+    level.apply_door_kinds()
+    assert (level.doors[0].tile, level.doors[0].cost, level.doors[0].cost_kind, level.doors[0].tall) == \
+        (9, 2500, "score", 1.5)
+    assert level.doors[1].cost == 10 and level.doors[2].kind == ""                  # (no such type: detached)
+    again = parse_level(json.loads(level_text(level)))
+    assert again.door_kinds == level.door_kinds and again.doors == level.doors
+    assert '"door_kinds"' not in level_text(Level.blank(5, 5))
+
+
+def test_saving_a_door_as_a_type_and_placing_more_of_it(ed):
+    ed.do("tool:door")
+    assert ed.door_palette_active() and [r.field.key for r in ed.details_rows()][:2] == ["palette", "pick_plain"]
+    ed.door_drag = ((2, 2), (2, 3))
+    ed.finish_door()
+    ed.set_door("cost", 1250)
+    ed.set_door("tall", 1.1)
+    ed.save_door_kind()
+    kind = ed.level.door_kinds[0]
+    assert (kind.name, kind.cost, kind.tall) == ("Door", 1250, 1.1) and ed.place_door_kind == "Door"
+    ed.deselect()
+    ed.door_drag = ((6, 6), (7, 6))
+    ed.finish_door()
+    second = ed.level.doors[1]
+    assert second.kind == "Door" and second.cost == 1250 and second.name == "Door 2"
+    ed.set_door("cost", 300)                                # the type: both follow
+    ed.set_door("open_at_start", True)                      # only this door
+    assert [d.cost for d in ed.level.doors] == [300, 300] and [d.open_at_start for d in ed.level.doors] == [False, True]
+    ed.rename_door_kind("Steel")
+    assert [d.kind for d in ed.level.doors] == ["Steel", "Steel"] and ed.place_door_kind == "Steel"
+    ed.draw(pygame.display.get_surface())
+    ed.set_door_kind("")
+    assert second.kind == "" and second.cost == 300
+    ed.map_click((2, 2), 1)
+    ed.delete_door_kind()
+    assert ed.level.door_kinds == [] and ed.level.doors[0].kind == "" and ed.level.doors[0].cost == 300
+    ed.do("undo")
+    assert ed.level.door_kinds[0].name == "Steel"
+
+
+def test_door_types_can_be_imported_from_another_map():
+    from mapfile import Door, DoorKind, import_things
+    source = Level.blank(8, 8)
+    source.door_kinds = [DoorKind("Steel", cost=4000)]
+    level = Level.blank(8, 8)
+    level.door_kinds = [DoorKind("Steel", cost=10)]
+    level.doors = [Door("A", 2, 2, kind="Steel")]
+    level.apply_door_kinds()
+    import_things(level, source, {("door_kinds", "Steel")}, taken="replace")
+    assert level.door_kinds[0].cost == 4000 and level.doors[0].cost == 4000
+
+
+def test_a_door_with_a_height_is_a_panel_that_stops_walking_and_bullets_below_its_top():
+    game = door_game()
+    game.level.doors[0].tall = 0.5
+    game.world = World(game.level, 32)
+    game.round = ZombieRound(game)
+    world = game.world
+    assert world.solid[5, 12] == 0 and world.pane_tex[5, 12] == game.level.doors[0].tile
+    assert world.span_at(12.5, 5.5, 0.0) == -1 and world.for_enemies().span_at(12.5, 6.5, 0.0) == -1
+    assert not world.point_open(12.5, 5.5, 0.3) and world.point_open(12.5, 5.5, 0.7)     # (seen over)
+    game.round.open_door(0)
+    assert world.pane_tex[5, 12] == -1 and world.span_at(12.5, 5.5, 0.0) == 0
+    game.round.new_game()
+    assert world.span_at(12.5, 5.5, 0.0) == -1
+
+
+def test_a_barricade_with_a_height_shows_its_boards_that_high():
+    from zombies import apply_boards
+    game = barricade_game(boards=4)
+    barricade = game.level.barricades[0]
+    barricade.tall = 0.6
+    world, (x, y) = game.world, WINDOW
+    world.extras.clear()
+    apply_boards(world, game.level, game.round.boards)
+    assert world.pane_top[y, x] == pytest.approx(0.6)
+    game.round.boards[0] = 2
+    apply_boards(world, game.level, game.round.boards)
+    assert world.pane_top[y, x] == pytest.approx(0.3)                       # (no stages: shrinks from its height)
+    barricade.stages = [3, 4]
+    world.extras.clear()
+    apply_boards(world, game.level, game.round.boards)
+    assert world.pane_top[y, x] == pytest.approx(0.6) and world.span_at(x + 0.5, y + 0.5, 0.0) == -1
+
+
+def test_the_height_rows_are_in_the_details_pane(ed):
+    from mapfile import Barricade, Door
+    ed.level.doors = [Door("Gate", 1, 1)]
+    ed.level.barricades = [Barricade(5, 5)]
+    ed.do("tool:door")
+    ed.map_click((1, 1), 1)
+    assert "tall" in [r.field.key for r in ed.details_rows()]
+    ed.do("tool:barricade")
+    ed.map_click((5, 5), 1)
+    ed.set_barricade("tall", 0.75)
+    assert ed.level.barricades[0].tall == 0.75 and "tall" in [r.field.key for r in ed.details_rows()]

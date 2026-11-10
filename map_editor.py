@@ -215,7 +215,8 @@ from mapfile import (ANIMATION_KINDS, ANIMATION_LABELS, DEFAULTS, EDIT_LAYERS, E
                      BOMB_NUMBERS, SITE_NAMES, SPAWN_TEAMS, SPAWN_TEAM_LABELS, CT_TEAM, T_TEAM,
                      ATTACK_KINDS, ATTACK_KIND_LABELS, ATTACK_NUMBERS, ENEMY_NUMBERS, ENEMY_PATHING,
                      ENEMY_PATHING_LABELS, ENEMY_SPAWN, MAX_ATTACKS, MAX_ENEMIES, SPAWNER_TEAMS, ZOMBIE_NUMBERS,
-                     Attack, Barricade, BarricadeKind, BARRICADE_TILE, Enemy, unique_thing_name,
+                     Attack, Barricade, BarricadeKind, BARRICADE_TILE, Enemy, unique_thing_name, Door, MAX_DOORS,
+                     DoorKind, DOOR_KIND_FIELDS, DOOR_TILE, MAX_TALL,
                      CURVE_LIMITS, MAX_CURVE_POINTS, MAX_CURVE_X, curve_at, BARRICADE_NUMBERS, MAX_BARRICADE_BOARDS, MAX_BARRICADE_STAGES,
                      REWARD_KINDS,
                      REWARD_KIND_LABELS,
@@ -337,6 +338,7 @@ WAVES_CARD_W, WAVES_CARD_H = 480, 330
 CURVE_MIN_ROUNDS = 20                           # the graph shows at least this many rounds
 CURVE_HIT = 9                                   # how close (pixels) a click must be to grab a point
 BARRICADE_FILL, BARRICADE_PLANK = (120, 80, 40), (200, 150, 90)     # a barricade on the map
+DOOR_FILL, DOOR_EDGE = (70, 120, 200), (170, 210, 255)               # a door on the map
 EDITOR_LAYERS = tuple(name for name in EDIT_LAYERS if name != "site") + ("sides", "site")   # the stored layers, the
                                                             # sides of walls, and bomb sites last (keys 1-9)
 TILE_LAYERS = STAMP_LAYERS + ("sides",)                     # layers painted with atlas tiles
@@ -350,10 +352,11 @@ ELEVATION_STEP = 0.05                           # [ / ] and the Elevation row mo
 SPAWN_FILL, SPAWN_EDGE = (90, 170, 255), (15, 40, 90)   # a spawn point on the map
 MOUNT_ZONE = 0.3                                # an item clicked this close (in cells) to a walled side hangs on it
 TOOLS = {"paint": "B", "erase": "E", "fill": "F", "pick": "I", "start": "S", "spawn": "O", "stairs": "T",
-         "shape": "H", "select": "M", "camera": "C", "entity": "N", "barricade": "U"}
+         "shape": "H", "select": "M", "camera": "C", "entity": "N", "barricade": "U", "door": "D"}
 TOOL_KEYS = {pygame.K_b: "paint", pygame.K_e: "erase", pygame.K_f: "fill",
              pygame.K_i: "pick", pygame.K_s: "start", pygame.K_o: "spawn", pygame.K_t: "stairs", pygame.K_h: "shape",
-             pygame.K_m: "select", pygame.K_c: "camera", pygame.K_n: "entity", pygame.K_u: "barricade"}
+             pygame.K_m: "select", pygame.K_c: "camera", pygame.K_n: "entity", pygame.K_u: "barricade",
+             pygame.K_d: "door"}
 SHAPES = {"line": "Line", "box": "Box", "filled_box": "Filled box", "ellipse": "Ellipse",
           "filled_ellipse": "Filled ellipse"}           # what the Shape tool draws, and its button
 ENTITY_MODE_COLORS = {"once": (255, 255, 255), "respawn": (90, 210, 255), "persistent": (110, 230, 120),
@@ -616,6 +619,9 @@ class Editor:
         self.effect_selected = None             # index in level.effects of the effect being edited
         self.barricade_selected = None          # index in level.barricades of the one being edited (Barricade tool)
         self.place_barricade_kind = ""          # the saved barricade type the Barricade tool places ("": plain)
+        self.door_selected = None               # index in level.doors of the door being edited (Door tool)
+        self.door_drag = None                   # (start cell, current cell) while a new door is dragged out
+        self.place_door_kind = ""               # the saved door type the Door tool places ("": plain)
         self.curve_shown = "zombie_count"       # the curve the Waves card shows (CURVE_TABS)
         self.curve_drag = None                  # the index of the point of it being dragged ...
         self.curve_drag_scale = None            # ... and the graph's scale, held while it is
@@ -638,6 +644,7 @@ class Editor:
         self.side_lock = None                   # the wall side a whole shape paints (None: the one at the mouse)
         self.spawn_order = 0                    # the order the Spawn tool gives the spawn points it places
         self.spawn_team = 0                     # ... and the team (0 anyone, T_TEAM, CT_TEAM)
+        self.spawn_door = ""                    # ... and the door it waits for (zombies' enemy spawn points)
         self.area = None                        # Select tool: the cells selected, (x0, y0, x1, y1), or None
         self.area_drag = None                   # (start cell, current cell) while dragging a selection
         self.clip = None                        # what was copied (mapfile.Area); kept across maps
@@ -804,11 +811,13 @@ class Editor:
         chosen = (self.selected_entity() or self.selected_gun() or self.selected_ammo() or self.selected_prefab()
                   or self.selected_effect() or self.selected_light() or (self.ambient_chosen() or None)
                   or self.selected_buy_item() or self.selected_enemy() or self.selected_barricade()
+                  or self.selected_door()
                   or (self.settings_row() or None))
-        if chosen is None and not self.palette_active() and not self.barricade_palette_active():
+        if (chosen is None and not self.palette_active() and not self.barricade_palette_active()
+                and not self.door_palette_active()):
             return 0
         key = (self.revision, id(self.level), id(chosen), self.section_name(), self.place_prefab,
-               self.place_barricade_kind, self.tool, self._size())
+               self.place_barricade_kind, self.place_door_kind, self.tool, self._size())
         if self._width_cache[0] != key:                 # (asked for all the time: worked out once per change)
             self._width_cache = (key, details.pane_width(self.details_fields(), (self.font, self.small),
                                                          max(PANE_WIDTH, self._size()[0] // 3)))
@@ -837,6 +846,9 @@ class Editor:
         barricade = self.selected_barricade()
         if barricade is not None:
             return self.barricade_fields(barricade)
+        door = self.selected_door()
+        if door is not None:
+            return self.door_fields(door)
         light = self.selected_light()
         if light is not None:
             return self.light_fields(light)
@@ -856,6 +868,8 @@ class Editor:
             return self.entity_fields(prefab, is_prefab=True)
         if self.barricade_palette_active():
             return self.barricade_palette_fields()
+        if self.door_palette_active():
+            return self.door_palette_fields()
         e = self.selected_entity()
         if e is None:
             return self.palette_fields() if self.palette_active() else []
@@ -1556,6 +1570,13 @@ class Editor:
             return self.settings_selected
         return None
 
+    def selected_door(self):
+        """The door being edited with the Door tool, or None."""
+        i = self.door_selected
+        if self.tool == "door" and not self.section_open() and i is not None and 0 <= i < len(self.level.doors):
+            return self.level.doors[i]
+        return None
+
     def selected_barricade(self):
         """The barricade being edited with the Barricade tool, or None."""
         i = self.barricade_selected
@@ -1909,13 +1930,16 @@ class Editor:
 
     def deselect(self):
         self.selected, self.field_edit, self.menu_open = None, None, None
-        self.barricade_selected = None
+        self.barricade_selected = self.door_selected = None
         self.gun_selected = self.ammo_selected = self.prefab_selected = self.effect_selected = None
         self.light_selected = self.settings_selected = None
 
     def delete_selected(self):
         if self.selected_buy_item() is not None:
             self.delete_buy_item()
+            return
+        if self.selected_door() is not None:
+            self.delete_door(self.door_selected)
             return
         if self.selected_barricade() is not None:
             self.begin_edit()
@@ -2007,6 +2031,8 @@ class Editor:
             return "Delete enemy"
         if self.selected_barricade() is not None:
             return "Delete barricade"
+        if self.selected_door() is not None:
+            return "Delete door"
         if self.settings_row() is not None:
             return ""
         if self.selected_light() is not None:
@@ -2147,8 +2173,13 @@ class Editor:
             row2 += [None, ("btn", "Order-", "order-"), ("btn", "Order+", "order+"),
                      ("txt", f"order {self.spawn_order}", ACCENT),
                      ("btn", f"Team: {self.spawn_team_label(self.spawn_team)}", "spawn_team"),
+                     *([("btn", f"Door: {self.spawn_door or 'none'}", "spawn_door")]
+                       if self.spawn_team == ENEMY_SPAWN and self.level.doors else []),
                      ("txt", f"{len(self.level.spawners)} spawn point{'s' if len(self.level.spawners) != 1 else ''}"
                              " (0 is used first)", DIM)]
+        if self.tool == "door":
+            row2 += [None, ("txt", "Drag across cells to make a door (a wall until it is opened), click one to edit it; "
+                                   "right-click removes one", DIM)]
         if self.tool == "barricade":
             row2 += [None, ("txt", "Click an open ground floor cell (a gap in a wall) to board it up, or a barricade "
                                    "to edit it; right-click removes one", DIM)]
@@ -2599,6 +2630,17 @@ class Editor:
         if self.tool == "barricade":
             (self.remove_barricade if button == 3 else self.place_barricade)(cell)
             return
+        if self.tool == "door":
+            found = self.level.door_at(*cell) if self.level.in_bounds(*cell) else None
+            if button == 3:
+                if found is not None:
+                    self.delete_door(found)
+            elif found is not None:
+                self.door_selected = found
+                self.field_edit = self.menu_open = None
+            elif self.level.in_bounds(*cell):
+                self.door_drag = (cell, cell)
+            return
         if self.tool == "select":
             if button == 3:                             # right-click: stop pasting, or let go of the selection
                 if self.pasting:
@@ -2827,14 +2869,226 @@ class Editor:
         self.begin_edit()
         team = self.spawn_team_label(self.spawn_team)
         if not found:
-            level.spawners.append(Spawner(cell[0] + 0.5, cell[1] + 0.5, self.floor, 0.0, self.spawn_order, self.spawn_team))
+            door = self.spawn_door if self.spawn_team == ENEMY_SPAWN else ""
+            level.spawners.append(Spawner(cell[0] + 0.5, cell[1] + 0.5, self.floor, 0.0, self.spawn_order,
+                                          self.spawn_team, door))
             self.say(f"Spawn point {len(level.spawners)}, order {self.spawn_order}, {team} (click it again to turn it)")
-        elif found[0].order != self.spawn_order or found[0].team != self.spawn_team:
+        elif (found[0].order != self.spawn_order or found[0].team != self.spawn_team
+              or found[0].door != (self.spawn_door if self.spawn_team == ENEMY_SPAWN else "")):
             found[0].order, found[0].team = self.spawn_order, self.spawn_team
+            found[0].door = self.spawn_door if self.spawn_team == ENEMY_SPAWN else ""
             self.say(f"Spawn point now has order {self.spawn_order}, {team}")
         else:
             found[0].angle = (found[0].angle + math.pi / 2) % math.tau
             self.say(f"Spawn point faces {math.degrees(found[0].angle):.0f} deg")
+
+    def finish_door(self):
+        """The Door tool's drag let go: a new door over the cells dragged across (unless another door has one), plain
+        or of the saved type picked to place."""
+        x0, y0, x1, y1 = area_rect(self.level, *self.door_drag)
+        self.door_drag = None
+        level = self.level
+        cells = [(x, y) for y in range(y0, y1 + 1) for x in range(x0, x1 + 1)]
+        if any(level.door_at(x, y) is not None for x, y in cells):
+            self.say("Doors cannot overlap")
+            return
+        if len(level.doors) >= MAX_DOORS:
+            self.say(f"A map has at most {MAX_DOORS} doors")
+            return
+        self.begin_edit()
+        kind = self.place_door_kind if level.door_kind_named(self.place_door_kind) else ""
+        name = self.new_door_name(kind or "Door")
+        level.doors.append(Door(name, x0, y0, x1 - x0 + 1, y1 - y0 + 1, kind=kind))
+        level.apply_door_kinds()
+        self.door_selected = len(level.doors) - 1
+        self.field_edit = self.menu_open = None
+        note = "" if level.settings.mode == "zombies" else " (doors are only used in Zombies)"
+        self.say(f"{name}: a wall until opened; set it up in the Details pane, or save it as a type{note}")
+
+    def new_door_name(self, base="Door", skip=None):
+        taken = {d.name for d in self.level.doors if d is not skip}
+        return base if base not in taken else unique_thing_name(base, taken)
+
+    def door_palette_active(self):
+        """The Door tool with no door selected shows the list of what to place."""
+        return self.tool == "door" and not self.section_open() and self.selected_door() is None
+
+    def door_palette_fields(self):
+        """The Door tool's list of what to place: a plain door, or one of the map's saved types."""
+        def pick(name):
+            return lambda: setattr(self, "place_door_kind", name)
+
+        fields = [Field("palette", "Place", "header", None, None),
+                  Field("pick_plain", "Plain door", "button", (lambda: self.place_door_kind == ""), None,
+                        action=pick(""), icon=DOOR_TILE)]
+        for i, kind in enumerate(self.level.door_kinds):
+            fields.append(Field(f"pick_{i}", kind.name, "button", (lambda n=kind.name: self.place_door_kind == n),
+                                None, action=pick(kind.name), icon=kind.tile))
+        if not self.level.door_kinds:
+            fields.append(Field("no_types", "Types", "info", (lambda: "none yet: select a door, Save as a type"), None))
+        return fields
+
+    def door_target(self):
+        """What the Details pane's door type settings change: the selected door's saved type (and so every door of
+        it) when it has one, else the door itself."""
+        door = self.selected_door()
+        if door is None:
+            return None
+        return self.level.door_kind_named(door.kind) if door.kind else door
+
+    def door_fields(self, door):
+        """One door, for the Details pane (Door tool): its own name and start, its type, then the type's settings
+        (which change every door of that type, when it has one)."""
+        target = self.door_target() or door
+
+        def field(name, label, kind, **options):
+            owner = target if name in DOOR_KIND_FIELDS else door
+            return Field(name, label, kind, (lambda n=name: getattr(owner, n)),
+                         (lambda v, n=name: self.set_door(n, v)), **options)
+
+        fields = [field("name", "Name", "text"),
+                  Field("cells", "Cells", "info", (lambda: f"{door.x}, {door.y}: {door.width} x {door.height}"), None)]
+        index = self.level.doors.index(door)
+        group = next(g for g in self.level.door_groups() if index in g)
+        if len(group) > 1:
+            first = self.level.doors[group[0]]
+            note = "its price and settings count for all" if group[0] == index else f"{first.name} sets the price"
+            fields.append(Field("door_group", f"Opens with {len(group) - 1} touching", "info", (lambda: note), None))
+        fields.append(field("open_at_start", "At the start", "enum", choices=(False, True),
+                            labels={False: "Closed", True: "Open"}))
+        names = ("",) + tuple(k.name for k in self.level.door_kinds)
+        fields.append(Field("kind", "Type", "enum", (lambda: door.kind), self.set_door_kind, choices=names,
+                            labels={"": "(its own settings)", **{n: n for n in names if n}}))
+        if door.kind:
+            fields += [Field("type_header", f"Type {door.kind}: changes all of them", "header", None, None),
+                       Field("type_name", "Type name", "text", (lambda: door.kind), self.rename_door_kind)]
+        fields += [field("tile", "Looks like", "tile", low=0, high=len(self.tiles) - 1),
+                   field("tall", "Height (0: to the ceiling)", "num", step=0.05, low=0.0, high=MAX_TALL),
+                   field("buyable", "Opened by", "enum", choices=(True, False),
+                         labels={True: "Players (E), or a trigger", False: "Only a trigger"})]
+        if target.buyable:
+            fields += [field("cost_kind", "Costs", "enum", choices=BUY_COSTS, labels=BUY_COST_LABELS)]
+            if target.cost_kind != "free":
+                fields.append(field("cost", "Price", "num", step=50.0, low=0.0, high=MAX_MONEY))
+            fields.append(field("prompt", "Called (HUD)", "text"))
+        if door.kind:
+            fields += [Field("detach", "Detach", "button", None, None, action=lambda: self.set_door_kind(""),
+                             text_override="Detach (its own settings from now on)"),
+                       Field("delete_type", "Delete type", "button", None, None, action=self.delete_door_kind,
+                             text_override=f"Delete the type {door.kind}")]
+        else:
+            fields.append(Field("save_type", "Save as a type", "button", None, None, action=self.save_door_kind,
+                                text_override="Save as a type (to place more of it)"))
+        waiting = sum(1 for s in self.level.spawners if s.door == door.name)
+        fields.append(Field("door_spawns", "Enemy spawns behind", "info",
+                            (lambda: f"{waiting} wait for it (Spawn tool: Door)"), None))
+        return fields
+
+    def set_door(self, name, value):
+        """Change one setting of the selected door (one undo step): its type's when it has one (every door of the type
+        follows); renaming it renames it on spawn points too."""
+        door = self.selected_door()
+        if door is None:
+            return
+        target = self.door_target() if name in DOOR_KIND_FIELDS else door
+        if name == "name":
+            value = self.new_door_name(str(value).strip()[:MAX_NAME] or "Door", skip=door)
+        elif name == "prompt":
+            value = str(value).strip()[:MAX_NAME * 2]
+        if getattr(target, name) == value:
+            return
+        self.begin_edit()
+        if name == "name":
+            for s in self.level.spawners:
+                if s.door == door.name:
+                    s.door = value
+            if self.spawn_door == door.name:
+                self.spawn_door = value
+        setattr(target, name, value)
+        self.level.apply_door_kinds()
+
+    def save_door_kind(self):
+        """Save the selected door's settings as a new type, link it to it, and pick that type to place."""
+        door = self.selected_door()
+        if door is None or door.kind:
+            return
+        self.begin_edit()
+        taken = {k.name for k in self.level.door_kinds}
+        kind = DoorKind.from_door("Door" if "Door" not in taken else unique_thing_name("Door", taken), door)
+        self.level.door_kinds.append(kind)
+        door.kind = self.place_door_kind = kind.name
+        self.say(f"Saved as the door type {kind.name}: it is picked to place (and can be imported into other maps)")
+
+    def set_door_kind(self, name):
+        """Link the selected door to a saved type (taking its settings), or detach it ("": it keeps them)."""
+        door = self.selected_door()
+        if door is None or door.kind == name:
+            return
+        self.begin_edit()
+        door.kind = name
+        self.level.apply_door_kinds()
+
+    def rename_door_kind(self, name):
+        door, kind = self.selected_door(), self.door_target()
+        if door is None or not door.kind or kind is None:
+            return
+        taken = {k.name for k in self.level.door_kinds if k is not kind}
+        name = str(name).strip()[:MAX_NAME] or "Door"
+        name = name if name not in taken else unique_thing_name(name, taken)
+        if name == kind.name:
+            return
+        self.begin_edit()
+        for d in self.level.doors:
+            if d.kind == kind.name:
+                d.kind = name
+        if self.place_door_kind == kind.name:
+            self.place_door_kind = name
+        kind.name = name
+
+    def delete_door_kind(self):
+        """Delete the selected door's type: the doors of it keep its settings as their own."""
+        door, kind = self.selected_door(), self.door_target()
+        if door is None or not door.kind or kind is None:
+            return
+        self.begin_edit()
+        self.level.door_kinds.remove(kind)
+        self.level.apply_door_kinds()
+        if self.place_door_kind == kind.name:
+            self.place_door_kind = ""
+        self.say(f"Deleted the door type {kind.name}: its doors keep its settings")
+
+    def delete_door(self, index):
+        """Remove a door; spawn points that waited for it no longer wait."""
+        door = self.level.doors[index]
+        self.begin_edit()
+        del self.level.doors[index]
+        for s in self.level.spawners:
+            if s.door == door.name:
+                s.door = ""
+        if self.spawn_door == door.name:
+            self.spawn_door = ""
+        self.door_selected = None
+        self.say(f"Removed {door.name} ({len(self.level.doors)} left)")
+
+    def draw_doors(self, screen):
+        """Doors: a blue box over their cells with their name and price (on every floor: a door fills them all)."""
+        z = self.zoom
+        leaders = {g[0] for g in self.level.door_groups()}           # (one name and price per group)
+        for i, door in enumerate(self.level.doors):
+            box = self.area_screen_rect(door.x, door.y, door.x + door.width - 1, door.y + door.height - 1)
+            shade = pygame.Surface(box.size, pygame.SRCALPHA)
+            shade.fill((*DOOR_FILL, 140))
+            screen.blit(shade, box)
+            edge = ACCENT if i == self.door_selected and self.tool == "door" else DOOR_EDGE
+            pygame.draw.rect(screen, edge, box, 2)
+            if z >= 14 and i in leaders:
+                price = "" if not door.buyable else (" free" if door.cost_kind == "free" else
+                                                     f" ${door.cost:g}" if door.cost_kind == "money"
+                                                     else f" {door.cost:g} score")
+                self.blit_fitted(screen, self.small, door.name + price, (255, 255, 255), (box.x + 3, box.y + 2),
+                                 box.right - 2)
+        if self.door_drag:
+            pygame.draw.rect(screen, ACCENT, self.area_screen_rect(*area_rect(self.level, *self.door_drag)), 2)
 
     def place_barricade(self, cell):
         """Barricade tool: board up an open ground floor cell with what is picked to place (a plain barricade, or one
@@ -2930,6 +3184,7 @@ class Editor:
         fields.append(field("reward", "Per board", "num", step=5.0, low=low, high=high))
         low, high = BARRICADE_NUMBERS["reward_cap"]
         fields.append(field("reward_cap", "Most per round", "num", step=10.0, low=low, high=high))
+        fields.append(field("tall", "Height (0: to the ceiling)", "num", step=0.05, low=0.0, high=MAX_TALL))
         last = len(self.tiles) - 1
         if not target.stages:
             fields.append(field("tile", "Boards look like", "tile", low=0, high=last))
@@ -3219,6 +3474,10 @@ class Editor:
             else:
                 self.say("Select a gun or an ammo type first (or add one), then click a tile")
             return
+        if self.selected_door() is not None:           # what the selected door looks like
+            self.set_door("tile", min(picked))
+            self.say(f"Door: tile {min(picked) + 1}")
+            return
         barricade = self.barricade_target()
         if barricade is not None:                       # what the selected barricade (or one of its stages) looks like
             target = self.tile_target
@@ -3400,6 +3659,10 @@ class Editor:
             self.say(f"Painting {SITE_BRUSHES[self.site_brush]}")
         elif action == "dir":
             self.ramp_dir = self.ramp_dir % 4 + 1
+        elif action == "spawn_door":
+            names = [""] + [d.name for d in self.level.doors]
+            self.spawn_door = names[(names.index(self.spawn_door) + 1) % len(names) if self.spawn_door in names else 0]
+            self.say(f"New enemy spawn points wait for {self.spawn_door or 'no door'} (click one to give it this)")
         elif action == "spawn_team":
             self.spawn_team = SPAWNER_TEAMS[(SPAWNER_TEAMS.index(self.spawn_team) + 1) % len(SPAWNER_TEAMS)]
             self.say(f"New spawn points are for {self.spawn_team_label(self.spawn_team)} (click one to give it this team)")
@@ -3998,6 +4261,8 @@ class Editor:
             self.finish_move()
         if self.shape_drag and e.button == (3 if self.shape_drag[2] else 1):
             self.finish_shape()
+        if self.door_drag and e.button == 1:
+            self.finish_door()
         if self.area_drag and e.button == 1:
             self.area = area_rect(self.level, *self.area_drag)
             self.area_drag = None
@@ -4040,6 +4305,8 @@ class Editor:
             self.shape_drag = (self.shape_drag[0], self.cell_at(e.pos), self.shape_drag[2])
         elif self.area_drag:
             self.area_drag = (self.area_drag[0], self.cell_at(e.pos))
+        elif self.door_drag:
+            self.door_drag = (self.door_drag[0], self.cell_at(e.pos))
         elif self.pan_drag:
             self.pan[0] += e.rel[0]
             self.pan[1] += e.rel[1]
@@ -4270,6 +4537,7 @@ class Editor:
         self.draw_entities(screen)
         self.draw_spawners(screen)
         self.draw_barricades(screen)
+        self.draw_doors(screen)
         self.draw_start(screen)
         self.draw_camera(screen)
         self.draw_cursor(screen, area)
@@ -5820,6 +6088,11 @@ class Editor:
                      "Co-op: everyone is on one team.", "Friendly fire off: teammates' bullets",
                      "and blasts do not hurt (your own do).", "Knocking out an opponent earns the",
                      "Score / Money per kill. Score and money", "stay when a player is knocked out.")
+        elif self.selected_door() is not None:
+            notes = ("Zombies: a door is a wall (on every", "floor of its cells) until it opens, for",
+                     "good: a player pressing E beside it",
+                     "who can pay, or a trigger. Enemy spawn", "points can wait for it (Spawn tool:",
+                     "Door), so rooms behind it fill only", "once it is open.")
         elif self.selected_barricade() is not None:
             notes = ("Zombies: players can never walk", "through a barricade; enemies tear its",
                      "boards off, then climb through.", "Players hold E beside it to put boards",
@@ -5888,6 +6161,12 @@ class Editor:
             return "Enemy", notes
         if self.selected_barricade() is not None:
             return "Barricade", notes
+        if self.selected_door() is not None:
+            return "Door", notes
+        if self.door_palette_active():
+            return "Door to place", ("Drag across cells to make a door of what", "is picked here. Select a door and Save",
+                                     "as a type to place more like it; Import", "brings types in from other maps.",
+                                     "Right-click removes one.")
         if self.barricade_palette_active():
             return "Barricade to place", ("Click an open ground floor cell (a gap", "in a wall) to board it up with what is",
                                           "picked here. Select a barricade and", "Save as a type to place more like it;",
@@ -6645,7 +6924,7 @@ class ImportDialog:
                 picture.fill(tuple(round(c * 255 / bright) for c in (thing.r, thing.g, thing.b)))
                 pygame.draw.rect(picture, GRID, picture.get_rect(), 1)
             elif self.tiles:
-                icon = barricade_icon(thing) if kind == "barricade_kinds" else thing.tile
+                icon = barricade_icon(thing) if kind == "barricade_kinds" else thing.tile   # (a door type: its tile)
                 tile = self.tiles[max(0, min(icon, len(self.tiles) - 1))]
                 box = tile.get_bounding_rect()                  # just what is drawn in the tile, made to fit
                 if box.w and box.h:

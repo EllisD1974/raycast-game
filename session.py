@@ -30,7 +30,7 @@ from bomb import BOMB_TILE, RoundView, bomb_sprite
 from entities import Entities, PlayerStats
 from koth import HillView, hill_sprite
 from respawn import RespawnView
-from zombies import ZombieView, apply_boards, enemy_sprites
+from zombies import ZombieView, apply_boards, apply_doors, enemy_sprites
 from constants import CROUCH_HEIGHT, PLAYER_HEIGHT
 from game import (MAX_STEP_DT, NO_TEAM, Events, Inputs, PlayerState, character_sprite, character_tile_for, clean_name, speed_of,
                   move_body, shown_name, watchable_ids)
@@ -521,6 +521,7 @@ class ClientSession:
             self.me.alive = self.round is None or self.id in self.round.alive
             if isinstance(self.round, ZombieView):
                 apply_boards(self.world, self.level, self.round.boards)     # (the boards the host says are left)
+                apply_doors(self.world, self.level, self.round.doors)       # (and which doors are open)
         else:
             self.round, self.me.alive = None, True
         self.watched_state = watched_from(message.get("watched"), self.level, self.names)

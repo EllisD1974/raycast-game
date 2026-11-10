@@ -123,20 +123,121 @@ class Spawner:
              starts over (see game.SpawnOrder). A map without spawners uses its start instead.
     team     0: anyone comes in here; T_TEAM / CT_TEAM: in a mode with teams, only that team's players (and a
              team with no spawn points of its own uses the others); ENEMY_SPAWN: enemies come in here (zombies),
-             players never do"""
+             players never do
+    door     zombies: the name of a Door that has to be open before enemies come in here ("" for always), so the
+             rooms behind a door only fill with enemies once the players have opened it"""
     x: float
     y: float
     span: int = 0
     angle: float = 0.0
     order: int = 0
     team: int = 0
+    door: str = ""
 
     @classmethod
     def from_dict(cls, data):
         team = data.get("team", 0)
         return cls(float(data["x"]), float(data["y"]), max(0, int(data.get("span", 0))),
                    float(data.get("angle", 0.0)), max(0, min(MAX_SPAWN_ORDER, int(data.get("order", 0)))),
-                   team if team in SPAWNER_TEAMS else 0)
+                   team if team in SPAWNER_TEAMS else 0, str(data.get("door", ""))[:MAX_NAME])
+
+
+DOOR_TILE = 2                                   # the atlas's wood (make_atlas.py): what a door looks like by default
+MAX_DOORS = 64
+MAX_DOOR_SIZE = 32                              # cells a door may span across or down
+
+
+@dataclass
+class Door:
+    """A door in zombies mode: a rectangle of cells (x, y, width by height) that is a wall filling every floor while
+    it is closed, stopping players, enemies and bullets alike, and open cells once it is opened. It opens for good
+    (until a new game) when a player buys it, pressing the use key (E) beside it, or when a trigger opens it.
+
+    name           what it is called (spawners and triggers name it)
+    tile           the atlas tile it is drawn with while closed
+    buyable        whether players can open it themselves; if not, only a trigger can
+    cost, cost_kind   what opening it costs: money, score, or free
+    prompt         what the HUD says it is ("" for "the door")
+    tall           how tall it is: 0 for a wall up to the ceiling on every floor of its cells; above 0, a panel that
+                   high on the ground floor, which can be seen (not climbed or shot) over
+    open_at_start  open when a game starts (a trigger may close it)
+    kind           the DoorKind it is placed from ("" for its own settings): its tile, buyable, cost, cost_kind,
+                   prompt and tall come from that type
+
+    Doors that touch (side by side or corner to corner) are one door (Level.door_groups): opening one opens them
+    all, and the first of them in the map's list says whether players can open it, what it costs and what it is
+    called."""
+    name: str = "Door"
+    x: int = 0
+    y: int = 0
+    width: int = 1
+    height: int = 1
+    tile: int = DOOR_TILE
+    buyable: bool = True
+    cost: float = 750.0
+    cost_kind: str = "money"
+    prompt: str = ""
+    open_at_start: bool = False
+    tall: float = 0.0
+    kind: str = ""
+
+    def cells(self):
+        return [(x, y) for y in range(self.y, self.y + self.height) for x in range(self.x, self.x + self.width)]
+
+    def label(self):
+        return self.prompt or "the door"
+
+    @classmethod
+    def from_dict(cls, data):
+        def size(key):
+            value = data.get(key, 1)
+            return max(1, min(MAX_DOOR_SIZE, int(value))) if isinstance(value, (int, float)) else 1
+        cost = data.get("cost", 750.0)
+        return cls(str(data.get("name", ""))[:MAX_NAME] or "Door", max(0, int(data["x"])), max(0, int(data["y"])),
+                   size("width"), size("height"), max(0, min(255, int(data.get("tile", DOOR_TILE)))),
+                   bool(data.get("buyable", True)),
+                   max(0.0, min(1000000.0, float(cost))) if isinstance(cost, (int, float)) else 750.0,
+                   data.get("cost_kind") if data.get("cost_kind") in ("free", "money", "score") else "money",
+                   str(data.get("prompt", ""))[:MAX_NAME * 2], bool(data.get("open_at_start", False)),
+                   read_tall(data.get("tall")), str(data.get("kind", ""))[:MAX_NAME])
+
+
+MAX_TALL = 8.0                                  # the tallest a door or barricade can be made (0: to the ceiling)
+
+
+def read_tall(value):
+    """A door's or barricade's height from a file: 0 (to the ceiling) up to MAX_TALL."""
+    return max(0.0, min(MAX_TALL, float(value))) if isinstance(value, (int, float)) and not isinstance(value, bool) \
+        else 0.0
+
+
+DOOR_KIND_FIELDS = ("tile", "buyable", "cost", "cost_kind", "prompt", "tall")
+
+
+@dataclass
+class DoorKind:
+    """A saved door (a type of door): a name and the settings of a Door that are not its place or own name. Doors
+    placed from it (Door.kind) take its settings (Level.apply_door_kinds), so changing it changes them all; it can be
+    brought into another map with the editor's Import."""
+    name: str = "Door"
+    tile: int = DOOR_TILE
+    buyable: bool = True
+    cost: float = 750.0
+    cost_kind: str = "money"
+    prompt: str = ""
+    tall: float = 0.0
+
+    def clone(self):
+        return replace(self)
+
+    @classmethod
+    def from_door(cls, name, door):
+        return cls(name, **{key: getattr(door, key) for key in DOOR_KIND_FIELDS})
+
+    @classmethod
+    def from_dict(cls, data):
+        settings = Door.from_dict(dict(data, x=0, y=0, name="x"))
+        return cls.from_door(str(data.get("name", ""))[:MAX_NAME] or "Door", settings)
 
 
 ATTACK_KINDS = ("melee",)
@@ -274,7 +375,8 @@ class Barricade:
     stages       atlas tiles it is drawn with as it is torn down, whole first and most damaged last, each filling
                  the opening (give them transparent pixels where boards are missing, to see through the gaps).
                  The share of boards gone picks the stage (see stage_tile); it can only be walked through once
-                 every board is gone, whatever the picture shows"""
+                 every board is gone, whatever the picture shows
+    tall         how tall its boards are: 0 for up to the ceiling; above 0, that high (seen over, never climbed)"""
     x: int = 0
     y: int = 0
     boards: int = 6
@@ -285,6 +387,7 @@ class Barricade:
     tile: int = BARRICADE_TILE
     stages: list = field(default_factory=list)
     kind: str = ""                              # the BarricadeKind it is placed from ("" for its own settings)
+    tall: float = 0.0
 
     def stage_tile(self, left, boards=None):
         """The tile it shows with `left` of `boards` (its own, unless given: a group's) on, left above 0: with stages,
@@ -303,6 +406,7 @@ class Barricade:
                    reward_kind=data.get("reward_kind") if data.get("reward_kind") in REWARD_KINDS else "money",
                    tile=max(0, min(255, int(data.get("tile", BARRICADE_TILE)))),
                    stages=read_stages(data.get("stages")), kind=str(data.get("kind", ""))[:MAX_NAME],
+                   tall=read_tall(data.get("tall")),
                    **clamped_numbers(cls, data, BARRICADE_NUMBERS))
 
 
@@ -314,7 +418,7 @@ def read_stages(stages):
             if isinstance(t, (int, float)) and not isinstance(t, bool)][:MAX_BARRICADE_STAGES]
 
 
-BARRICADE_KIND_FIELDS = ("boards", "repair_time", "reward", "reward_kind", "reward_cap", "tile", "stages")
+BARRICADE_KIND_FIELDS = ("boards", "repair_time", "reward", "reward_kind", "reward_cap", "tile", "stages", "tall")
 
 
 @dataclass
@@ -330,6 +434,7 @@ class BarricadeKind:
     reward_cap: float = 100.0
     tile: int = BARRICADE_TILE
     stages: list = field(default_factory=list)
+    tall: float = 0.0
 
     def clone(self):
         return replace(self, stages=list(self.stages))
@@ -1176,8 +1281,11 @@ def default_floor_name(index):
 class Level:
     def __init__(self, grids, start_x=1.5, start_y=1.5, start_angle=0.0, start_span=0, names=None,
                  entities=None, guns=None, ammo_types=None, prefabs=None, effects=None, lights=None, ambient=1.0,
-                 spawners=None, settings=None, enemies=None, barricades=None, barricade_kinds=None):
+                 spawners=None, settings=None, enemies=None, barricades=None, barricade_kinds=None, doors=None,
+                 door_kinds=None):
         self.grids = grids
+        self.door_kinds = list(door_kinds or [])    # saved doors to place more of (DoorKind)
+        self.doors = list(doors or [])              # doors that open during a game (see Door; zombies mode)
         self.barricade_kinds = list(barricade_kinds or [])     # saved barricades to place more of (BarricadeKind)
         self.barricades = list(barricades or [])    # boarded-up openings (see Barricade; zombies mode)
         self.enemies = list(enemies or [])          # kinds of enemy defined for this map (see Enemy; zombies mode)
@@ -1219,7 +1327,56 @@ class Level:
                      [replace(f) for f in self.effects], [replace(light) for light in self.lights], self.ambient,
                      [replace(s) for s in self.spawners], self.settings.copy(), [e.clone() for e in self.enemies],
                      [replace(b, stages=list(b.stages)) for b in self.barricades],
-                     [k.clone() for k in self.barricade_kinds])
+                     [k.clone() for k in self.barricade_kinds], [replace(d) for d in self.doors],
+                     [k.clone() for k in self.door_kinds])
+
+    def door_named(self, name):
+        return next((d for d in self.doors if d.name == name), None)
+
+    def door_kind_named(self, name):
+        return next((k for k in self.door_kinds if k.name == name), None)
+
+    def apply_door_kinds(self):
+        """Give every door placed from a saved type that type's settings. One whose type no longer exists is
+        detached: it keeps the settings it last had."""
+        for door in self.doors:
+            kind = self.door_kind_named(door.kind) if door.kind else None
+            if kind is None:
+                door.kind = ""
+                continue
+            for key in DOOR_KIND_FIELDS:
+                setattr(door, key, getattr(kind, key))
+
+    def door_groups(self):
+        """The doors that act as one: [[index, ...], ...], each group the doors whose rectangles touch (side by side
+        or corner to corner), in order of their first index, which is the one whose settings count."""
+        def touch(a, b):
+            return (a.x - 1 <= b.x + b.width - 1 and b.x <= a.x + a.width
+                    and a.y - 1 <= b.y + b.height - 1 and b.y <= a.y + a.height)
+        seen, groups = set(), []
+        for i in range(len(self.doors)):
+            if i in seen:
+                continue
+            group, todo = [], [i]
+            seen.add(i)
+            while todo:
+                j = todo.pop()
+                group.append(j)
+                for k, other in enumerate(self.doors):
+                    if k not in seen and touch(self.doors[j], other):
+                        seen.add(k)
+                        todo.append(k)
+            groups.append(sorted(group))
+        return groups
+
+    def door_leader(self, index):
+        """The index of the door whose settings count for door `index` (the first of its group)."""
+        return next((g[0] for g in self.door_groups() if index in g), index)
+
+    def door_at(self, x, y):
+        """The index of the door covering cell (x, y), or None."""
+        return next((i for i, d in enumerate(self.doors)
+                     if d.x <= x < d.x + d.width and d.y <= y < d.y + d.height), None)
 
     def barricade_kind_named(self, name):
         return next((k for k in self.barricade_kinds if k.name == name), None)
@@ -1560,6 +1717,8 @@ class Level:
         self.entities = [e for e in self.entities if e.x < width and e.y < height]
         self.spawners = [s for s in self.spawners if s.x < width and s.y < height]
         self.barricades = [b for b in self.barricades if b.x < width and b.y < height]
+        self.doors = [replace(d, width=min(d.width, width - d.x), height=min(d.height, height - d.y))
+                      for d in self.doors if d.x < width and d.y < height]
 
     def resize_edges(self, left=0, right=0, top=0, bottom=0):
         """Add (positive) or remove (negative) columns and rows along each side, keeping the cells
@@ -1585,6 +1744,9 @@ class Level:
                          if 0 <= s.x + left < width and 0 <= s.y + top < height]
         self.barricades = [replace(b, x=b.x + left, y=b.y + top) for b in self.barricades
                            if 0 <= b.x + left < width and 0 <= b.y + top < height]
+        self.doors = [replace(d, x=d.x + left, y=d.y + top) for d in self.doors
+                      if 0 <= d.x + left and d.x + left + d.width <= width
+                      and 0 <= d.y + top and d.y + top + d.height <= height]
         return left, top
 
     @staticmethod
@@ -1852,6 +2014,21 @@ def parse_level(data, label="level"):
             enemy = Enemy.from_dict(item)
             if level.enemy_named(enemy.name) is None:
                 level.enemies.append(enemy)
+    for item in data.get("door_kinds", []):
+        if isinstance(item, dict):
+            kind = DoorKind.from_dict(item)
+            if level.door_kind_named(kind.name) is None:
+                level.door_kinds.append(kind)
+    for item in data.get("doors", []):
+        try:
+            door = Door.from_dict(item)
+        except (KeyError, TypeError, ValueError, AttributeError):
+            continue
+        if (len(level.doors) < MAX_DOORS and level.in_bounds(door.x, door.y) and level.door_named(door.name) is None
+                and not any(level.door_at(x, y) is not None for x, y in door.cells())):
+            door.width = min(door.width, level.width - door.x)
+            door.height = min(door.height, level.height - door.y)
+            level.doors.append(door)
     for item in data.get("barricade_kinds", []):
         if isinstance(item, dict):
             kind = BarricadeKind.from_dict(item)
@@ -1867,6 +2044,7 @@ def parse_level(data, label="level"):
     level.settings = MapSettings.from_dict(data.get("settings", {}))
     level.apply_prefabs()
     level.apply_barricade_kinds()
+    level.apply_door_kinds()
     return level
 
 
@@ -1909,6 +2087,10 @@ def level_text(level):
            if level.prefabs else "")
         + ('  "enemies": [\n' + ",\n".join("    " + json.dumps(asdict(e)) for e in level.enemies) + "\n  ],\n"
            if level.enemies else "")
+        + ('  "door_kinds": [\n' + ",\n".join("    " + json.dumps(asdict(k)) for k in level.door_kinds)
+           + "\n  ],\n" if level.door_kinds else "")
+        + ('  "doors": [\n' + ",\n".join("    " + json.dumps(asdict(d)) for d in level.doors) + "\n  ],\n"
+           if level.doors else "")
         + ('  "barricade_kinds": [\n' + ",\n".join("    " + json.dumps(asdict(k)) for k in level.barricade_kinds)
            + "\n  ],\n" if level.barricade_kinds else "")
         + ('  "barricades": [\n' + ",\n".join("    " + json.dumps(asdict(b)) for b in level.barricades) + "\n  ],\n"
@@ -2038,9 +2220,10 @@ def paste_area(level, area, x, y, floor):
 
 IMPORT_KINDS = {"prefabs": "Prefabs", "lights": "Lights", "effects": "Effects", "guns": "Guns",
                 "ammo_types": "Ammo types",
-                "barricade_kinds": "Barricade types"}       # what can be brought in from another map, and its label
+                "barricade_kinds": "Barricade types",
+                "door_kinds": "Door types"}                 # what can be brought in from another map, and its label
 IMPORT_ORDER = ("lights", "effects", "ammo_types", "guns", "prefabs",
-                "barricade_kinds")                          # each kind only names kinds before it
+                "barricade_kinds", "door_kinds")            # each kind only names kinds before it
 REFERENCES = {                                              # the fields of each kind that name another thing
     "lights": (),
     "effects": (("light", "lights"),),
@@ -2050,6 +2233,7 @@ REFERENCES = {                                              # the fields of each
     "guns": (("ammo", "ammo_types"), ("muzzle", "effects"), ("flash", "lights")),
     "prefabs": (("light", "lights"), ("emits", "effects"), ("gun", "guns"), ("ammo", "ammo_types")),
     "barricade_kinds": (),
+    "door_kinds": (),
 }
 TAKEN_CHOICES = ("keep", "replace", "copy")                 # what to do when an imported name is already used
 
@@ -2134,7 +2318,7 @@ def import_things(level, source, picks, taken="copy"):
         mine = getattr(level, kind)
         for name in sorted(n for k, n in wanted if k == kind):
             thing = things_named(source, kind)[name]
-            thing = thing.clone() if kind in ("prefabs", "barricade_kinds") else replace(thing)
+            thing = thing.clone() if kind in ("prefabs", "barricade_kinds", "door_kinds") else replace(thing)
             existing = things_named(level, kind)
             if name in existing and taken == "keep":
                 result.kept.append((kind, name))
@@ -2166,6 +2350,7 @@ def import_things(level, source, picks, taken="copy"):
                 result.added.append((kind, name))
     level.apply_prefabs()                                       # (copies placed from a replaced prefab follow it)
     level.apply_barricade_kinds()                               # (and barricades from a replaced type)
+    level.apply_door_kinds()                                    # (and doors)
     return result
 
 

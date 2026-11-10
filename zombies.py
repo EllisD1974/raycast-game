@@ -15,7 +15,11 @@ game starts at round 1. (Alone, going down is the end.)
 
 Barricades (mapfile.Barricade) board up openings: players can never walk through one, enemies only once its boards
 are all torn off; bullets go through. Barricades that touch (side by side or corner to corner) are one
-(Level.barricade_groups), with one count of boards. An enemy whose way leads through a boarded one stops at it and tears a board off every break_rate
+(Level.barricade_groups), with one count of boards.
+
+Doors (mapfile.Door) are walls until they are opened, for good, by a player pressing the use key beside one and
+paying its cost, or by a trigger. Doors that touch are one (Level.door_groups): they open together. Enemy spawn points can wait for a door (Spawner.door), so the rooms behind it only
+fill with enemies once it is open. apply_doors keeps a world showing which doors are open. An enemy whose way leads through a boarded one stops at it and tears a board off every break_rate
 seconds; a player holding the use key beside one puts a board back every repair_time seconds, for a reward (up to a
 cap each round). apply_boards keeps a world (the host's and each joiner's own) showing the boards there are.
 
@@ -46,6 +50,7 @@ REVIVE_UP = 1.0                 # ... and how far above or below
 TEAR_REACH = 0.95               # how close (cells) an enemy's middle has to be to a barricade's to tear at it
 REPAIR_REACH = 1.3              # how close a player has to be to a barricade's middle to rebuild it
 BREAK_COST = 30                 # the extra cost (pathing.STRAIGHT is one cell) of a way through a boarded barricade
+DOOR_REACH = 1.0                # how close (cells) a player's middle has to be to a door to open it
 
 
 @dataclass
@@ -95,6 +100,7 @@ class ZombieView:
     revives: dict = field(default_factory=dict)     # downed player id -> (reviver's id, seconds of reviving done)
     boards: list = field(default_factory=list)      # boards left on each group of barricades (barricade_groups)
     repairs: dict = field(default_factory=dict)     # player id -> (group index, seconds into the next board)
+    doors: list = field(default_factory=list)       # whether each of the level's doors is open
     crawl: float = 0.6                              # how fast the downed crawl (the map's downed_speed)
     can_buy: bool = True
 
@@ -119,7 +125,8 @@ class ZombieView:
                            for pid, (left, x, y, z, name) in sorted(self.downed.items())],
                 "revives": [[pid, reviver, round(done, 2)] for pid, (reviver, done) in sorted(self.revives.items())],
                 "boards": list(self.boards),
-                "repairs": [[pid, index, round(done, 2)] for pid, (index, done) in sorted(self.repairs.items())]}
+                "repairs": [[pid, index, round(done, 2)] for pid, (index, done) in sorted(self.repairs.items())],
+                "doors": "".join("1" if opened else "0" for opened in self.doors)}
 
     @classmethod
     def from_dict(cls, data, teams=None):
@@ -132,10 +139,11 @@ class ZombieView:
             revives = {int(pid): (int(reviver), float(done)) for pid, reviver, done in data["revives"]}
             boards = [max(0, int(n)) for n in data["boards"]]
             repairs = {int(pid): (int(index), float(done)) for pid, index, done in data["repairs"]}
+            doors = [c == "1" for c in str(data["doors"])]
             phase = data["phase"] if data["phase"] in ("intermission", "live", "over") else "intermission"
             return cls({int(p) for p in data["alive"]}, dict(teams or {}), int(data["number"]), phase,
                        float(data["clock"]), int(data["left"]), str(data["msg"])[:80], float(data["msg_left"]),
-                       enemies, downed, revives, boards, repairs, max(0.0, min(3.0, float(data["crawl"]))))
+                       enemies, downed, revives, boards, repairs, doors, max(0.0, min(3.0, float(data["crawl"]))))
         except (KeyError, IndexError, TypeError, ValueError):
             return None
 
@@ -178,6 +186,8 @@ def apply_boards(world, level, boards):
                 continue
             cells.append((x, y))
             floor, ceiling = world.floor_of(0, x + 0.5, y + 0.5), world.ceil_of(0, x + 0.5, y + 0.5)
+            if barricade.tall > 0:
+                ceiling = floor + barricade.tall            # (its own height, under the room's ceiling or not)
             if left > 0 and barricade.stages:
                 world.set_pane(x, y, barricade.stage_tile(left, total), ceiling, shoot_through=True)
             elif left > 0:
@@ -189,6 +199,56 @@ def apply_boards(world, level, boards):
             world.set_cost(cells, BREAK_COST)
         if before is None or (before > 0) != (left > 0):
             world.set_blocks(cells, players=True, enemies=left > 0)
+
+
+def apply_doors(world, level, opened):
+    """Make `world` show the doors of `level` open or closed as `opened` (one flag each) says: a closed door is a wall
+    of its tile filling every floor of its cells (World.close_cells), or with a height of its own (Door.tall) a panel
+    that high on the ground floor that stops walking and bullets below its top; an open one is what the level has
+    there. Only what changed is touched."""
+    shown = world.extras.setdefault("doors", {})
+    for i, (door, is_open) in enumerate(zip(level.doors, opened)):
+        if shown.get(i) == is_open:
+            continue
+        first = i not in shown
+        shown[i] = is_open
+        cells = [(x, y) for x, y in door.cells() if 0 <= x < world.width and 0 <= y < world.height]
+        if door.tall <= 0:
+            if is_open:
+                world.open_cells(cells)
+            else:
+                world.close_cells(cells, door.tile)
+            continue
+        for x, y in cells:
+            if is_open:
+                world.set_pane(x, y, -1, 1e9)
+            else:
+                world.set_pane(x, y, door.tile, world.floor_of(0, x + 0.5, y + 0.5) + door.tall)
+        if not (first and is_open):
+            world.set_blocks(cells, players=not is_open, enemies=not is_open)
+
+
+def door_gap(door, x, y):
+    """How far (x, y) is from the nearest point of a door's rectangle (0 inside it)."""
+    dx = max(door.x - x, 0.0, x - (door.x + door.width))
+    dy = max(door.y - y, 0.0, y - (door.y + door.height))
+    return math.hypot(dx, dy)
+
+
+def nearest_door(level, opened, x, y):
+    """The index of the closed door players can open (its group's first door says whether they can) nearest (x, y),
+    within DOOR_REACH; None for none."""
+    near = [(door_gap(d, x, y), i) for i, d in enumerate(level.doors)
+            if level.doors[level.door_leader(i)].buyable and i < len(opened) and not opened[i]]
+    near = [(gap, i) for gap, i in near if gap <= DOOR_REACH]
+    return min(near)[1] if near else None
+
+
+def door_price(door):
+    """What a door's prompt says it costs: "$750", "40 score", or "" when it is free."""
+    if door.cost_kind == "free" or door.cost <= 0:
+        return ""
+    return f"${door.cost:g}" if door.cost_kind == "money" else f"{door.cost:g} score"
 
 
 def nearest_group(level, groups, boards, x, y):
@@ -277,6 +337,9 @@ class ZombieRound:
         self.boards = [game.level.barricades[g[0]].boards for g in self.groups]    # boards left on each group
         self.repairs = {}                       # player id -> [group index, seconds into the next board]
         self.repaid = {}                        # player id -> what rebuilding has earned them this round
+        self.doors = [d.open_at_start for d in game.level.doors]       # which doors are open
+        self.holding = set()                    # players who held the use key last step (to tell a press)
+        apply_doors(game.world, game.level, self.doors)
         self.barricade_cells = {(game.level.barricades[i].x, game.level.barricades[i].y): g
                                 for g, group in enumerate(self.groups) for i in group}     # cell -> its group
         apply_boards(game.world, game.level, self.boards)
@@ -291,7 +354,7 @@ class ZombieRound:
                           self.number, self.phase, self.clock, self.to_spawn + len(self.enemies), self.message,
                           self.message_left, self.shown_enemies(), downed,
                           {pid: tuple(entry) for pid, entry in self.revives.items()}, list(self.boards),
-                          {pid: tuple(entry) for pid, entry in self.repairs.items()},
+                          {pid: tuple(entry) for pid, entry in self.repairs.items()}, list(self.doors),
                           self.game.level.settings.downed_speed)
 
     def can_buy(self):
@@ -311,12 +374,47 @@ class ZombieRound:
             return Inputs(turn=wish.turn, tilt=wish.tilt)
         if pid in self.downed:
             return downed_inputs(wish, self.game.level.settings)
+        pressed = wish.use and pid not in self.holding
+        (self.holding.add if wish.use else self.holding.discard)(pid)
         if self.revive_step(pid, wish.use, dt):
             self.repairs.pop(pid, None)
             wish = replace(wish, fire=False)            # (hands busy)
         elif self.repair_step(pid, wish.use, dt):
             wish = replace(wish, fire=False)
+        elif pressed:
+            self.try_door(pid)
         return wish
+
+    # ------------------------------------------------------------------ doors
+
+    def try_door(self, pid):
+        """A player pressed the use key: open the door beside them (and those it touches) if they can pay its
+        group's cost, else say what it needs."""
+        state = self.game.players[pid]
+        index = nearest_door(self.game.level, self.doors, state.body.x, state.body.y)
+        if index is None:
+            return
+        door = self.game.level.doors[self.game.level.door_leader(index)]       # (the group's settings)
+        have = state.stats.money if door.cost_kind == "money" else state.stats.score
+        if door.cost_kind != "free" and have < door.cost:
+            self.game.notes.setdefault(pid, []).append(f"Opening {door.label()} needs {door_price(door)}")
+            return
+        if door.cost_kind == "money":
+            state.stats.money -= door.cost
+        elif door.cost_kind == "score":
+            state.stats.score -= door.cost
+        self.open_door(index)
+        self.game.notes.setdefault(pid, []).append(f"Opened {door.label()}")
+
+    def open_door(self, index, is_open=True):
+        """Open (or close) a door and every door it touches, for everyone; the enemies' ways change with it."""
+        if not 0 <= index < len(self.doors):
+            return
+        group = next(g for g in self.game.level.door_groups() if index in g)
+        if any(self.doors[i] != is_open for i in group):
+            for i in group:
+                self.doors[i] = is_open
+            apply_doors(self.game.world, self.game.level, self.doors)
 
     def speed_of(self, pid):
         return walking_speed(pid in self.downed, self.game.level.settings.downed_speed)
@@ -448,6 +546,7 @@ class ZombieRound:
         self.game.players[pid].alive = self.phase != "over"
 
     def left(self, pid):
+        self.holding.discard(pid)
         self.repairs.pop(pid, None)
         self.downed.pop(pid, None)
         self.grace.pop(pid, None)
@@ -541,6 +640,8 @@ class ZombieRound:
         self.boards = [game.level.barricades[g[0]].boards for g in self.groups]
         self.repairs, self.repaid = {}, {}
         apply_boards(game.world, game.level, self.boards)
+        self.doors = [d.open_at_start for d in game.level.doors]
+        apply_doors(game.world, game.level, self.doors)
         game.spawns.restart()
         for state in game.players.values():
             state.stats.money = game.level.settings.start_money
@@ -574,7 +675,11 @@ class ZombieRound:
     # ------------------------------------------------------------------ enemies
 
     def spawners(self):
-        return [s for s in self.game.level.spawners if s.team == ENEMY_SPAWN]
+        """The enemy spawn points in use: those that wait for no door, or for one that is open."""
+        level = self.game.level
+        names = {d.name: i for i, d in enumerate(level.doors)}
+        return [s for s in level.spawners if s.team == ENEMY_SPAWN
+                and (not s.door or s.door not in names or self.doors[names[s.door]])]
 
     def player_scale(self):
         """How many times a round's enemies (and the most at once) the players face: 1 for one player, and the map's
