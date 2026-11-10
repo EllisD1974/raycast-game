@@ -2157,14 +2157,19 @@ class Editor:
         row3 += [None, ("btn", "Undo", "undo"), ("btn", "Redo", "redo"), None,
                  ("btn", "Border", "border"), ("txt", "Edge", DIM),
                  *[("btn", f"{side}{sign}", f"edge:{side}{sign}") for side in "LRTB" for sign in "+-"],
-                 ("txt", f"{self.level.width}x{self.level.height}".ljust(7), ACCENT), None,
-                 ("btn", "New", "new"), ("btn", "Open", "open"), ("btn", "Import", "import"), ("btn", "Reload", "reload"), ("btn", "Save", "save"),
-                 ("btn", "Play(F5)", "play")]
+                 ("txt", f"{self.level.width}x{self.level.height}".ljust(7), ACCENT)]
+        files = [("btn", "New", "new"), ("btn", "Open", "open"), ("btn", "Import", "import"), ("btn", "Reload", "reload"),
+                 ("btn", "Save", "save"), ("btn", "Play(F5)", "play")]
+        files_w = sum(self.font.size(item[1])[0] + 20 for item in files) - 4
         for y, items in zip(ROW_Y, (row1, row2, row3)):
             x = 8
+            if items is row1:                           # the file buttons go at the right end of the top row
+                items = row1 + [("files",)] + files
             for item in items:
                 if item is None:
                     x += 10
+                elif item[0] == "files":                # right-aligned, but never over the row's other buttons
+                    x = max(x + 10, self._size()[0] - 8 - files_w)
                 elif item[0] == "txt":
                     self.readouts.append((item[1], (x, y + 8), item[2]))
                     x += self.font.size(item[1])[0] + 8
