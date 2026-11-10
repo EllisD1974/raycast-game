@@ -864,7 +864,7 @@ KOTH_NUMBERS = {"hill_time": (10.0, 3600.0), "unlock_time": (0.0, 600.0), "captu
 ZOMBIE_NUMBERS = {"extra_per_player": (0.0, 5.0), "intermission": (0.0, 300.0),
                   "game_over_time": (1.0, 60.0), "bleed_out": (1.0, 600.0), "revive_time": (0.1, 60.0),
                   "revive_reward": (0.0, MAX_MONEY), "revive_health": (1.0, 10000.0), "downed_speed": (0.0, 3.0),
-                  "revive_grace": (0.0, 30.0)}
+                  "revive_grace": (0.0, 30.0), "round_money": (0.0, MAX_MONEY)}
 ZOMBIE_COUNT = [[1, 6], [5, 18], [10, 40], [20, 110]]      # round -> enemies in it
 ZOMBIE_HEALTH = [[1, 1.0], [10, 2.0], [20, 4.0]]            # round -> what their health is multiplied by
 ZOMBIE_ALIVE = [[1, 12], [10, 30], [20, 60]]                # round -> the most in the map at once
@@ -995,6 +995,7 @@ class MapSettings:
     Which kind each enemy coming in is, is picked by the kinds' weights for the round (Enemy.weight).
     intermission     seconds between rounds (and before the first)
     game_over_time   seconds the game over message shows before a new game starts
+    round_money      money every player gets when a round is cleared
     A player at 0 health goes down instead of out while someone else is still standing: they crawl at
     downed_speed (cells per second), can shoot when downed_can_shoot, and are out (until the next round) after
     bleed_out seconds unless a teammate revives them by holding the use key (E) beside them for revive_time.
@@ -1049,6 +1050,7 @@ class MapSettings:
     extra_per_player: float = 0.5
     intermission: float = 10.0
     game_over_time: float = 8.0
+    round_money: float = 0.0
     bleed_out: float = 30.0
     revive_time: float = 3.0
     revive_reward: float = 100.0

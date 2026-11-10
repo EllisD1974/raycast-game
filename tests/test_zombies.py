@@ -1067,6 +1067,14 @@ def test_more_players_face_more_enemies():
     assert len(two.round.enemies) + two.round.to_spawn == 20 and len(two.round.enemies) == 8     # (x2 for 3)
 
 
+def test_clearing_a_round_pays_everyone():
+    game = zombie_game(players=(0, 1), start_money=500, round_money=250)
+    go_live(game)
+    game.hurt(1, 1000)
+    game.round.end_round()
+    assert [s.stats.money for s in game.players.values()] == [750, 750]
+
+
 def test_the_spawn_gap_follows_its_curve():
     game = zombie_game(zombie_count=[[1, 20]], spawn_interval=[[1, 1.0]], max_alive=50)
     go_live(game)

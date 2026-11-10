@@ -319,6 +319,7 @@ KOTH_FIELDS = (("hill_time", "Time to hold (s)", 10.0), ("unlock_time", "Point u
 # Zombies settings in the Map settings section, likewise.
 ZOMBIE_FIELDS = (("extra_per_player", "More per extra player", 0.1),
                  ("intermission", "Between rounds (s)", 1.0), ("game_over_time", "Game over pause (s)", 1.0),
+                 ("round_money", "Money / round cleared", 50.0),
                  ("bleed_out", "Downed bleed out (s)", 5.0), ("downed_speed", "Downed crawl (cells/s)", 0.1),
                  ("revive_time", "Revive takes (s)", 0.5), ("revive_reward", "Money / revive", 10.0),
                  ("revive_health", "Health after revive", 5.0), ("revive_grace", "Safe after revive (s)", 0.5))

@@ -510,12 +510,15 @@ class ZombieRound:
         self.say(f"Round {self.number}")
 
     def end_round(self):
-        """Every enemy of the round is dead: the downed get up, the players who were out come back (with only what a
-        new player carries, unless the map keeps their guns), and the intermission starts."""
+        """Every enemy of the round is dead: every player is paid the map's round_money, the downed get up, the
+        players who were out come back (with only what a new player carries, unless the map keeps their guns), and
+        the intermission starts."""
         settings = self.game.level.settings
         self.phase = "intermission"
         self.clock = settings.intermission
         self.say(f"Round {self.number} survived")
+        for pid in self.game.players:
+            self.pay(pid, settings.round_money)
         for pid in list(self.downed):
             self.revive(pid)
         for state in self.game.players.values():
