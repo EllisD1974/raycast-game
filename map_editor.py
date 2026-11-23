@@ -2009,9 +2009,9 @@ class Editor:
             elif f.kind == "menu":
                 if details.menu_anchor(row).collidepoint(pos):
                     self.menu_open = f.key
-            elif row.minus.collidepoint(pos):
+            elif f.kind != "text" and row.minus.collidepoint(pos):
                 f.set(f.stepped(-1))
-            elif row.plus.collidepoint(pos):
+            elif f.kind != "text" and row.plus.collidepoint(pos):
                 f.set(f.stepped(1))
             elif row.value.collidepoint(pos):
                 if f.kind == "num":

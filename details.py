@@ -80,8 +80,10 @@ class Field:
         return f"{value:g}{self.unit}"
 
     def stepped(self, direction, notches=1):
-        """The value after `notches` steps up (direction +1) or down (-1)."""
+        """The value after `notches` steps up (direction +1) or down (-1); text does not step (it stays)."""
         value = self.get()
+        if self.kind == "text":
+            return value
         if self.kind == "enum":
             i = self.choices.index(value) if value in self.choices else 0
             return self.choices[(i + direction * notches) % len(self.choices)]
@@ -363,7 +365,7 @@ def draw(screen, rect, title, rows, theme, fonts, editing=None, hover=None, tile
                 screen.blit(value, value.get_rect(midright=(row.plus.right, row.rect.centery)))
             continue
         label(row, row.minus.x)
-        for button, glyph_text in ((row.minus, "-"), (row.plus, "+")):
+        for button, glyph_text in ((row.minus, "-"), (row.plus, "+")) if f.kind != "text" else ():
             box(button, theme["button_hot"] if hot(button) else theme["button"])
             glyph = font.render(glyph_text, True, theme["text"])
             screen.blit(glyph, glyph.get_rect(center=button.center))
