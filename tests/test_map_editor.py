@@ -274,9 +274,9 @@ def test_painting_floor_height_on_floor_2_creates_a_room(ed):
     ed.do("floor:1")
     ed.do("layer:floor_h")
     assert not ed.level.span_present(1, 4, 4)
-    click(ed, 4, 4)                              # brush: floor 1.5, ceiling brush 3.0
+    click(ed, 4, 4)                              # brush: a slab above the ground's 1.0 ceiling, as tall
     g = ed.level.grids
-    assert (g["floor_h2"][4][4], g["ceil_h2"][4][4]) == (1.5, 3.0)
+    assert (g["floor_h2"][4][4], g["ceil_h2"][4][4]) == (1.25, 2.25)
     assert ed.level.span_present(1, 4, 4)
     assert g["floor_h"][4][4] == 0.0              # Floor 1 untouched
     assert ed.level.problems() == []
@@ -287,16 +287,28 @@ def test_painting_ceiling_on_floor_2_first_uses_the_floor_brush(ed):
     ed.do("layer:ceil_h")
     click(ed, 5, 5)
     g = ed.level.grids
-    assert (g["floor_h2"][5][5], g["ceil_h2"][5][5]) == (1.5, 3.0)
-    ed.value["ceil_h2"] = 1.0                     # too low for a room above a 1.5 floor
+    assert (g["floor_h2"][5][5], g["ceil_h2"][5][5]) == (1.25, 2.25)
+    ed.value["ceil_h2"] = 1.0                     # too low for a room above a 1.25 floor
     click(ed, 6, 5)
     assert g["ceil_h2"][5][6] == 1.0 and g["floor_h2"][5][6] == pytest.approx(-0.5)
+
+
+def test_a_new_upper_floor_sits_on_top_of_the_floor_below(ed):
+    ed.level.grids["ceil_h"] = [[3.0] * 10 for _ in range(10)]          # tall ground floor
+    ed.do("floor:1")
+    ed.do("layer:floor_h")
+    click(ed, 4, 4)
+    g = ed.level.grids
+    assert (g["floor_h2"][4][4], g["ceil_h2"][4][4]) == (3.25, 6.25)   # a slab above it, as tall
+    assert g["ceil_h"][4][4] == 3.0                                     # the room below keeps its ceiling
+    assert ed.level.problems() == []
 
 
 def test_new_upper_floor_lowers_the_lower_ceiling_into_a_slab(ed):
     ed.level.grids["ceil_h"] = [[3.0] * 10 for _ in range(10)]          # tall ground floor
     ed.do("floor:1")
     ed.do("layer:floor_h")
+    ed.value["floor_h2"] = 1.5
     click(ed, 4, 4)
     assert ed.level.grids["ceil_h"][4][4] == pytest.approx(1.25)        # 1.5 minus a 0.25 slab
     assert ed.level.grids["ceil_h"][4][5] == 3.0                        # neighbors unchanged
@@ -331,7 +343,7 @@ def test_stairs_on_floor_2_create_rooms_with_rising_floors(ed):
     assert ed.layer == "floor_h"
     mouse(ed, pygame.MOUSEMOTION, cell_pos(ed, 5, 3))
     mouse(ed, pygame.MOUSEBUTTONUP, cell_pos(ed, 5, 3))
-    assert ed.level.grids["floor_h2"][3][2:6] == [1.5, 1.75, 2.0, 2.25]
+    assert ed.level.grids["floor_h2"][3][2:6] == [1.25, 1.5, 1.75, 2.0]
     assert all(ed.level.span_present(1, x, 3) for x in range(2, 6))
     assert ed.level.grids["floor_h"][3][2:6] == [0.0] * 4               # Floor 1 untouched
 
@@ -378,7 +390,7 @@ def test_floor_2_data_survives_save_and_reload(ed):
     click(ed, 4, 4)
     ed.do("save")
     again = load_level(ed.path)
-    assert again.span_present(1, 4, 4) and again.grids["floor_h2"][4][4] == 1.5
+    assert again.span_present(1, 4, 4) and again.grids["floor_h2"][4][4] == 1.25
 
 
 def test_both_floors_draw_every_layer_without_error(ed):

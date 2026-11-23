@@ -307,7 +307,7 @@ def map_world(name):
 
 
 def scene_of(world):
-    return (world.floor_plane, world.ceil_plane, world.span_on, world.solid_from, world.pane_tex, world.pane_top,
+    return (world.floor_plane, world.ceil_plane, world.span_on, world.wall_on, world.pane_tex, world.pane_top,
             world.wall_tex, world.wall_sides, world.floor_tex, world.ceil_tex)
 
 

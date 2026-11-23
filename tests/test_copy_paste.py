@@ -199,3 +199,14 @@ def test_the_copy_is_kept_when_another_map_is_opened(ed, tmp_path):
     ed.do("paste")
     mouse(ed, pygame.MOUSEBUTTONDOWN, (5, 5))
     assert ed.level.walls[5][5] == 2 and ed.level.grids[grid_name("floor_tex", 0)][4][4] == 7
+
+
+def test_pasting_a_floor_carries_its_walls_onto_that_floor_only():
+    level = Level.blank(16, 12, floors=2)
+    level.walls[3][3] = 2
+    level.set_wall_floors(3, 3, 0b01)                           # a wall of the ground floor only
+    area = copy_area(level, (2, 2), (4, 4), 0)
+    paste_area(level, area, 2, 2, 1)                            # the same, on floor 2
+    assert level.is_solid(3, 3, 0) and level.is_solid(3, 3, 1)
+    clear_area(level, (2, 2), (4, 4), 0)                        # the ground floor's goes, floor 2's stays
+    assert not level.is_solid(3, 3, 0) and level.is_solid(3, 3, 1)

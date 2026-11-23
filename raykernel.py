@@ -23,7 +23,7 @@ ray passes is remembered, and after the column is drawn the faces are blended ov
 first, using the texture's alpha channel. Floor and ceiling textures ignore alpha.
 
 Span 0 of a cell is always below span 1. Array shapes: planes (S, H, W, 3), span_on and the
-texture grids (S, H, W), solid_from (the lowest floor each cell is a wall on, or S for none) and
+texture grids (S, H, W), wall_on (S, H, W: 1 where a wall fills that floor of the cell) and
 wall_tex (H, W). wall_sides (H, W, 4, 3) is, for each side of a wall (north, east, south, west: see side_of),
 the tile it shows of its own (-1: none, it shows what it otherwise would) and the world heights (from, to) that
 tile covers; above and below, the side shows what it otherwise would. The tile is laid over what the side
@@ -45,6 +45,15 @@ MAX_BRANCHES = 32       # spans a column can see into at once (two slabs, one be
 def plane_z(planes, s, cx, cy, fx, fy):
     """Height of span s's plane in cell (cx, cy) at local coordinates fx, fy in [0, 1]."""
     return planes[s, cy, cx, 0] + planes[s, cy, cx, 1] * fx + planes[s, cy, cx, 2] * fy
+
+
+@njit(cache=True)
+def _walled(wall_on, cx, cy):
+    """True if a wall fills any floor of cell (cx, cy)."""
+    for k in range(wall_on.shape[0]):
+        if wall_on[k, cy, cx] != 0:
+            return True
+    return False
 
 
 @njit(cache=True)
@@ -190,11 +199,11 @@ def _composite_panes(fb, zb, x, n, pane_t, pane_tx, pane_id, pane_zlo, pane_zhi,
 
 @njit(cache=True)
 def _render_column(fb, zb, x, px, py, eye_z, eye_span, rdx, rdy, horizon, focal,
-                   floor_plane, ceil_plane, span_on, solid_from, pane_tex, pane_top, wall_tex, wall_sides, floor_tex, ceil_tex,
+                   floor_plane, ceil_plane, span_on, wall_on, pane_tex, pane_top, wall_tex, wall_sides, floor_tex, ceil_tex,
                    textures, max_dist, fog_dist, bg):
     height = fb.shape[1]
     nspans = span_on.shape[0]
-    mh, mw = solid_from.shape
+    mh, mw = wall_on.shape[1], wall_on.shape[2]
     tmask = textures.shape[1] - 1
     tsize = textures.shape[1]
 
@@ -280,8 +289,8 @@ def _render_column(fb, zb, x, px, py, eye_z, eye_span, rdx, rdy, horizon, focal,
             s = cur_s[b]
             ytop = cur_top[b]
             ybot = cur_bot[b]
-            # A wall fills the cell on its own floor and the ones above it, not the floors below.
-            next_solid = (not inside) or s >= solid_from[ny, nx]
+            # A wall fills the cell only on the floors it was painted on.
+            next_solid = (not inside) or wall_on[s, ny, nx] != 0
 
             zf0 = plane_z(floor_plane, s, cx, cy, e0x, e0y)
             zf1 = plane_z(floor_plane, s, cx, cy, e1x, e1y)
@@ -356,7 +365,7 @@ def _render_column(fb, zb, x, px, py, eye_z, eye_span, rdx, rdy, horizon, focal,
                 if cur >= zc1:
                     break
             if cur < zc1:                # solid above the last span: the drop under a ceiling
-                if inside and solid_from[ny, nx] < nspans:      # a wall above this floor: its side shows
+                if inside and _walled(wall_on, nx, ny):      # a wall above this floor: its side shows
                     tex_above = wall_tex[ny, nx]
                 _wall_side(fb, zb, x, cur, zc1, ytop, ybot, t1, wtx, tex_above, own, band_low, band_high, shade,
                            eye_z, horizon, focal, textures)
@@ -378,7 +387,7 @@ def _render_column(fb, zb, x, px, py, eye_z, eye_span, rdx, rdy, horizon, focal,
 
 @njit(cache=True, parallel=True)
 def render_scene_depth(fb, zb, px, py, eye_z, eye_span, dir_x, dir_y, plane_x, plane_y, horizon, focal,
-                       floor_plane, ceil_plane, span_on, solid_from, pane_tex, pane_top, wall_tex, wall_sides, floor_tex,
+                       floor_plane, ceil_plane, span_on, wall_on, pane_tex, pane_top, wall_tex, wall_sides, floor_tex,
                        ceil_tex, textures, max_dist, fog_dist, bg):
     """Fill `fb` (shape (W, H, 3) uint8) with the view from the given camera, and `zb` (W, H) with the
     perpendicular distance of what was drawn in each pixel (for sprites to hide behind it).
@@ -391,18 +400,18 @@ def render_scene_depth(fb, zb, px, py, eye_z, eye_span, dir_x, dir_y, plane_x, p
         camera_x = 2.0 * (x + 0.5) / width - 1.0
         _render_column(fb, zb, x, px, py, eye_z, eye_span,
                        dir_x + plane_x * camera_x, dir_y + plane_y * camera_x,
-                       horizon, focal, floor_plane, ceil_plane, span_on, solid_from, pane_tex, pane_top,
+                       horizon, focal, floor_plane, ceil_plane, span_on, wall_on, pane_tex, pane_top,
                        wall_tex, wall_sides, floor_tex, ceil_tex, textures, max_dist, fog_dist, bg)
 
 
 @njit(cache=True)
 def render_scene(fb, px, py, eye_z, eye_span, dir_x, dir_y, plane_x, plane_y, horizon, focal,
-                 floor_plane, ceil_plane, span_on, solid_from, pane_tex, pane_top, wall_tex, wall_sides, floor_tex, ceil_tex,
+                 floor_plane, ceil_plane, span_on, wall_on, pane_tex, pane_top, wall_tex, wall_sides, floor_tex, ceil_tex,
                  textures, max_dist, fog_dist, bg):
     """render_scene_depth without the depth picture, for callers that only want the walls."""
     zb = np.empty((fb.shape[0], fb.shape[1]), np.float32)
     render_scene_depth(fb, zb, px, py, eye_z, eye_span, dir_x, dir_y, plane_x, plane_y, horizon, focal,
-                       floor_plane, ceil_plane, span_on, solid_from, pane_tex, pane_top, wall_tex, wall_sides, floor_tex,
+                       floor_plane, ceil_plane, span_on, wall_on, pane_tex, pane_top, wall_tex, wall_sides, floor_tex,
                        ceil_tex, textures, max_dist, fog_dist, bg)
 
 

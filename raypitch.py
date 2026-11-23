@@ -33,12 +33,12 @@ import math
 import numpy as np
 from numba import njit, prange
 
-from raykernel import MAX_PANES, SIDE_SHADE, _clamp01, _shade, plane_z, side_of
+from raykernel import MAX_PANES, SIDE_SHADE, _clamp01, _shade, _walled, plane_z, side_of
 
 SKIP_BLOCK = 4          # cells along each side of a block that rays can jump across (see skip_blocks)
 
 
-def skip_blocks(floor_plane, ceil_plane, span_on, solid_from, pane_tex):
+def skip_blocks(floor_plane, ceil_plane, span_on, wall_on, pane_tex):
     """float64 [2, span, block row, block column]: [0] the highest floor and [1] the lowest ceiling of span s anywhere
     in each SKIP_BLOCK x SKIP_BLOCK block of cells, sloped planes included. A block where any cell is not open on
     span s (the span missing, a wall, a pane, or off the map) has floor +inf and ceiling -inf: never skipped."""
@@ -49,7 +49,7 @@ def skip_blocks(floor_plane, ceil_plane, span_on, solid_from, pane_tex):
     top = a + np.maximum(sx, 0.0) + np.maximum(sy, 0.0)                 # a plane's highest corner in its cell
     a, sx, sy = (ceil_plane[..., i].astype(np.float64) for i in range(3))
     low = a + np.minimum(sx, 0.0) + np.minimum(sy, 0.0)                 # and lowest
-    closed = (span_on == 0) | (np.arange(spans)[:, None, None] >= solid_from[None]) | (pane_tex[None] >= 0)
+    closed = (span_on == 0) | (wall_on != 0) | (pane_tex[None] >= 0)
     floor = np.full((spans, bh * b, bw * b), np.inf)
     ceil = np.full((spans, bh * b, bw * b), -np.inf)
     floor[:, :h, :w] = np.where(closed, np.inf, top)
@@ -91,10 +91,10 @@ def _own_tile(wall_sides, x, y, face, z):
 
 @njit(cache=True, inline="always")
 def _trace_pixel(fb, zb, x, y, px, py, eye_z, eye_span, dx, dy, dz,
-                 floor_plane, ceil_plane, span_on, solid_from, pane_tex, pane_top, wall_tex, wall_sides, floor_tex, ceil_tex,
+                 floor_plane, ceil_plane, span_on, wall_on, pane_tex, pane_top, wall_tex, wall_sides, floor_tex, ceil_tex,
                  textures, max_dist, fog_dist, bg, blocks, pane_f, pane_i):
     nspans = span_on.shape[0]
-    mh, mw = solid_from.shape
+    mh, mw = wall_on.shape[1], wall_on.shape[2]
     tsize = textures.shape[1]
     tmask = tsize - 1
     cx = int(math.floor(px))
@@ -202,7 +202,7 @@ def _trace_pixel(fb, zb, x, y, px, py, eye_z, eye_span, dx, dy, dz,
         shade = _shade(t1, fog_dist) * (1.0 if side == 0 else SIDE_SHADE)
         inside = 0 <= nx < mw and 0 <= ny < mh
         own = _own_tile(wall_sides, nx, ny, side_of(side, step_x, step_y), z1) if inside else -1
-        if (not inside) or s >= solid_from[ny, nx]:
+        if (not inside) or wall_on[s, ny, nx] != 0:
             tex = wall_tex[ny, nx] if inside else 0
             red, green, blue = _fetch_over(textures, tex, own, wtx, _wall_ty(z1, tsize), shade)
             depth = t1
@@ -232,7 +232,7 @@ def _trace_pixel(fb, zb, x, y, px, py, eye_z, eye_span, dx, dy, dz,
                     tex = floor_tex[k, ny, nx]
                     below_a_floor = True
                     break
-            if (not below_a_floor) and solid_from[ny, nx] < nspans:
+            if (not below_a_floor) and _walled(wall_on, nx, ny):
                 tex = wall_tex[ny, nx]                              # a wall hanging above the room below
             red, green, blue = _fetch_over(textures, tex, own, wtx, _wall_ty(z1, tsize), shade)
             depth = t1
@@ -260,7 +260,7 @@ def _trace_pixel(fb, zb, x, y, px, py, eye_z, eye_span, dx, dy, dz,
 
 @njit(cache=True, parallel=True)
 def render_scene_pitch(fb, zb, px, py, eye_z, eye_span, dir_x, dir_y, pitch, focal,
-                       floor_plane, ceil_plane, span_on, solid_from, pane_tex, pane_top, wall_tex, wall_sides, floor_tex,
+                       floor_plane, ceil_plane, span_on, wall_on, pane_tex, pane_top, wall_tex, wall_sides, floor_tex,
                        ceil_tex, textures, max_dist, fog_dist, bg, blocks):
     """Fill `fb` (W, H, 3) and `zb` (W, H) for a camera looking along (dir_x, dir_y) tilted up by `pitch`
     radians (negative looks down), with `focal` the focal length in pixels. `blocks` is skip_blocks() of the same
@@ -278,5 +278,5 @@ def render_scene_pitch(fb, zb, px, py, eye_z, eye_span, dir_x, dir_y, pitch, foc
             v = (height * 0.5 - (y + 0.5)) / focal
             _trace_pixel(fb, zb, x, y, px, py, eye_z, eye_span,
                          fx + u * rx + v * ux, fy + u * ry + v * uy, fz + v * uz,
-                         floor_plane, ceil_plane, span_on, solid_from, pane_tex, pane_top, wall_tex, wall_sides, floor_tex,
+                         floor_plane, ceil_plane, span_on, wall_on, pane_tex, pane_top, wall_tex, wall_sides, floor_tex,
                          ceil_tex, textures, max_dist, fog_dist, bg, blocks, pane_f, pane_i)

@@ -5,14 +5,18 @@ A map is a set of same-sized grids ("layers"), one value per cell. A map has one
 ground floor) is open in every cell that is not a wall. Every higher floor exists only in the
 cells where you give it a room; between two floors lies solid material (the floor slab).
 
-    walls         tile id of a solid wall that fills every floor of the cell; 0 = open space
+    walls         tile id of a solid wall; 0 = open space. Which floors of the cell it fills is
+                  up to wall_floors (or, for older walls, wall_floor).
     wall_h        height of that wall above the lowest floor beside it; 0 = full height, up to
                   the ceiling. A positive height shorter than the room makes a short wall you can
                   see over. Like walls, it is shared by every floor.
-    wall_floor    the lowest floor the wall reaches: 0 = every floor, from the ground up (the wall
-                  fills the cell on all floors); N = only floor N and the floors above it, so the
-                  floors below stay open there. A wall painted in the editor starts on the floor
-                  being edited. Only a wall from the ground floor can be short or see-through.
+    wall_floor    the lowest floor the wall reaches. Only a wall from the ground floor can be short
+                  or see-through.
+    wall_floors   the floors the wall fills, as bits (bit N: floor N), so a wall painted on floor 1
+                  stands from floor 1's floor up to floor 2's floor and leaves floor 2 free for a
+                  room over it. 0 (walls from older maps) = floor wall_floor and every floor above
+                  it. A wall painted in the editor fills only the floor being edited; painting the
+                  same cell on another floor adds that floor.
     wall_ceil     the ceiling over a wall that is not full height (a short or see-through wall);
                   0 = automatic: the highest ceiling of the open cells beside it.
 
@@ -49,7 +53,7 @@ from dataclasses import asdict, dataclass, field, replace
 from constants import PLAYER_HEIGHT
 
 MAP_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "maps", "map.json")
-FORMAT_VERSION = 6
+FORMAT_VERSION = 7
 MAX_NAME_LENGTH = 24
 MIN_WALL_GAP = 0.05             # a wall this close to the ceiling is just a full-height wall
 
@@ -62,7 +66,7 @@ SIDES = "nesw"                                                  # the four sides
 SIDE_LAYERS = tuple(f"side_{side}" for side in SIDES)           # a wall's own texture on one side (0: the wall's tile)
 # The heights above the wall's base that a side's own texture covers, from and to (to 0: up to the top).
 SIDE_BAND_LAYERS = tuple(f"side_{side}_{end}" for side in SIDES for end in ("from", "to"))
-SHARED_LAYERS = ("walls", "wall_h", "wall_ceil", "wall_floor") + SIDE_LAYERS + SIDE_BAND_LAYERS  # one grid for all floors
+SHARED_LAYERS = ("walls", "wall_h", "wall_ceil", "wall_floor", "wall_floors") + SIDE_LAYERS + SIDE_BAND_LAYERS  # one grid for all floors
 SIDE_VECTORS = {"n": (0, -1), "e": (1, 0), "s": (0, 1), "w": (-1, 0)}  # which way each side faces on the map
 WALL_LABELS = {"": "Free standing", "n": "North wall", "e": "East wall", "s": "South wall", "w": "West wall"}
 MAX_ELEVATION = 8.0             # furthest a placed item may be raised or lowered from where its settings put it
@@ -71,7 +75,7 @@ EDIT_LAYERS = ("walls",) + SPAN_LAYERS + ("wall_h",)            # what the edito
 RAMP_DIRS = {1: (1, 0), 2: (-1, 0), 3: (0, 1), 4: (0, -1)}      # id -> (dx, dy) the floor rises toward
 SOLID_OUTSIDE = 1       # walls value reported outside the grid: a wall
 
-_GROUND_DEFAULTS = {"walls": 0, "wall_h": 0.0, "wall_ceil": 0.0, "wall_floor": 0, "floor_tex": 5, "ceil_tex": 6,
+_GROUND_DEFAULTS = {"walls": 0, "wall_h": 0.0, "wall_ceil": 0.0, "wall_floor": 0, "wall_floors": 0, "floor_tex": 5, "ceil_tex": 6,
                     "floor_h": 0.0, "ceil_h": 1.0, "ramp": 0, "site": 0, **{name: 0 for name in SIDE_LAYERS},
                     **{name: 0.0 for name in SIDE_BAND_LAYERS}}
 _UPPER_DEFAULTS = {"floor_tex": 3, "ceil_tex": 6, "floor_h": 0.0, "ceil_h": 0.0, "ramp": 0, "site": 0}
@@ -1736,10 +1740,14 @@ class Level:
         del self.names[floor]
         self.entities = [e.clone(span=e.span - 1 if e.span > floor else e.span)
                          for e in self.entities if e.span != floor]
-        wall_floor = self.grids["wall_floor"]
-        for row in wall_floor:                      # walls that began above the removed floor follow it down
+        wall_floor, masks = self.grids["wall_floor"], self.grids["wall_floors"]
+        for y, row in enumerate(wall_floor):        # walls that began above the removed floor follow it down
             for x, value in enumerate(row):
                 row[x] = min(value - 1 if value > floor else value, self.floor_count - 1)
+                mask = masks[y][x]
+                if mask:                            # the floors a wall fills lose the removed one
+                    low = mask & ((1 << floor) - 1)
+                    self.set_wall_floors(x, y, low | (mask >> (floor + 1) << floor))
         if self.start_span == floor:
             self.start_span = 0
         elif self.start_span > floor:
@@ -1783,9 +1791,29 @@ class Level:
 
     def is_solid(self, x, y, span=0):
         """True if a wall blocks this cell on the given floor (outside the map: always)."""
-        if self.get("walls", x, y) == 0:
-            return False
-        return span >= self.get("wall_floor", x, y)
+        if not self.in_bounds(x, y):
+            return True
+        return bool(self.wall_mask(x, y) >> span & 1)
+
+    def wall_mask(self, x, y):
+        """The floors the wall in this cell fills, as bits (bit N: floor N); 0 for no wall."""
+        if not self.walls[y][x]:
+            return 0
+        mask = self.grids["wall_floors"][y][x]
+        if mask:
+            return mask
+        low = self.grids["wall_floor"][y][x]           # an older map's wall: its floor and every one above
+        return ((1 << self.floor_count) - 1) >> low << low
+
+    def set_wall_floors(self, x, y, mask):
+        """Make the wall in this cell fill the floors in `mask` (bits); none removes the wall."""
+        mask &= (1 << self.floor_count) - 1
+        if not mask:
+            for layer in WALL_LAYERS + ("wall_floor", "wall_floors"):
+                self.set(layer, x, y, default_for(layer))
+            return
+        self.set("wall_floors", x, y, mask)
+        self.set("wall_floor", x, y, (mask & -mask).bit_length() - 1)
 
     def wall_floor(self, x, y):
         """Lowest floor a wall in this cell reaches (0 for a wall from the ground)."""
@@ -2171,6 +2199,10 @@ def parse_level(data, label="level"):
             raise ValueError(f"{path}: grid '{name}' must be {w}x{h} like 'walls'")
         grids[name] = [[cast(v) for v in row] for row in grid]
     grids["wall_floor"] = [[max(0, min(v, count - 1)) for v in row] for row in grids["wall_floor"]]
+    for y, row in enumerate(grids["wall_floors"]):  # (a mask may name floors the file does not have)
+        for x, mask in enumerate(row):
+            if mask and walls[y][x]:
+                level.set_wall_floors(x, y, max(0, mask))
     start = data.get("start", {})
     level.start_x, level.start_y = float(start.get("x", 1.5)), float(start.get("y", 1.5))
     level.start_angle = float(start.get("angle", 0.0))
@@ -2344,9 +2376,9 @@ class Area:
     """A rectangle of one floor copied out of a map, to paste elsewhere (on any floor, in any map).
 
     It holds what belongs to that floor only: its span grids (floor and ceiling textures and heights, ramps) and
-    the walls that start on it (their tile, height, the ceiling over them and their sides), and the items and spawn
-    points standing on it. Walls of other floors - a ground-floor wall fills every floor above it - are not part of
-    it. Positions are relative to the area's top-left cell."""
+    the walls on it (their tile, height, the ceiling over them and their sides), and the items and spawn
+    points standing on it. Walls of other floors - and an older map's ground-floor wall, which fills every floor
+    above it - are not part of it. Positions are relative to the area's top-left cell."""
     width: int
     height: int
     floor: int                                  # the floor it was copied from
@@ -2365,8 +2397,19 @@ def area_rect(level, a, b):
 
 
 def _starts_on(level, x, y, floor):
-    """True if the cell holds a wall that starts on `floor` (the walls a floor owns)."""
-    return bool(level.walls[y][x]) and level.wall_floor(x, y) == floor
+    """True if the cell holds a wall that belongs to `floor`: one painted on it, or an older map's wall that starts
+    on it (the walls a floor owns)."""
+    if not level.walls[y][x]:
+        return False
+    if level.grids["wall_floors"][y][x]:
+        return bool(level.grids["wall_floors"][y][x] >> floor & 1)
+    return level.wall_floor(x, y) == floor
+
+
+def _drop_floor(level, x, y, floor):
+    """Take `floor` out of the floors the wall in this cell fills (the whole wall, for an older map's wall)."""
+    mask = level.grids["wall_floors"][y][x]
+    level.set_wall_floors(x, y, mask & ~(1 << floor) if mask else 0)
 
 
 def _in(thing, x0, y0, x1, y1, floor):
@@ -2395,11 +2438,6 @@ def copy_area(level, a, b, floor):
     return area
 
 
-def _clear_wall(level, x, y):
-    for layer in WALL_LAYERS + ("wall_floor",):
-        level.set(layer, x, y, default_for(layer))
-
-
 def clear_area(level, a, b, floor):
     """Empty `floor` between cells a and b: its span grids back to the floor's defaults (no room on a higher floor),
     its walls, items and spawn points gone. Other floors' walls stay."""
@@ -2410,7 +2448,7 @@ def clear_area(level, a, b, floor):
                 name = grid_name(layer, floor)
                 level.set(name, x, y, default_for(name))
             if _starts_on(level, x, y, floor):
-                _clear_wall(level, x, y)
+                _drop_floor(level, x, y, floor)
     level.entities = [e for e in level.entities if not _in(e, x0, y0, x1, y1, floor)]
     level.spawners = [s for s in level.spawners if not _in(s, x0, y0, x1, y1, floor)]
     level.barricades = [b for b in level.barricades if not _barricade_in(b, x0, y0, x1, y1, floor)]
@@ -2434,13 +2472,14 @@ def paste_area(level, area, x, y, floor):
                 level.set(grid_name(layer, floor), cx, cy, area.span[layer][dy][dx])
             wall = area.walls.get((dx, dy))
             if wall is not None:
-                if level.walls[cy][cx] and level.wall_floor(cx, cy) < floor:
-                    continue                            # (a lower floor's wall already fills this cell)
+                if level.is_solid(cx, cy, floor) and not _starts_on(level, cx, cy, floor):
+                    continue                            # (an older map's lower wall already fills this cell)
+                mask = level.grids["wall_floors"][cy][cx] if level.walls[cy][cx] else 0
                 for layer, value in wall.items():
                     level.set(layer, cx, cy, value)
-                level.set("wall_floor", cx, cy, floor)
+                level.set_wall_floors(cx, cy, mask | 1 << floor)
             elif _starts_on(level, cx, cy, floor):
-                _clear_wall(level, cx, cy)
+                _drop_floor(level, cx, cy, floor)
     inside = lambda t: x0 <= math.floor(t.x + x) <= x1 and y0 <= math.floor(t.y + y) <= y1
     level.entities += [e.clone(x=e.x + x, y=e.y + y, span=floor) for e in area.entities if inside(e)]
     level.spawners += [replace(s, x=s.x + x, y=s.y + y, span=floor) for s in area.spawners if inside(s)]

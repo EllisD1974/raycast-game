@@ -95,7 +95,7 @@ class Pathing:
         w = self.world
         if not (0 <= cx < w.width and 0 <= cy < w.height) or not w.span_on[s, cy, cx]:
             return False
-        if w.blocked[cy, cx] or w.solid_from[cy, cx] <= s:
+        if w.blocked[cy, cx] or w.wall_on[s, cy, cx] or (s == 0 and w.pane_block[cy, cx]):
             return False
         if w.mover_blocked(s, cx, cy) and not w.path_cost(s, cx, cy):
             return False                        # (stopped there, and it is nothing they can break)

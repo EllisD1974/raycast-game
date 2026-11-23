@@ -26,7 +26,7 @@ import math
 import numpy as np
 from numba import njit, prange
 
-from raykernel import EPS, MAX_BRANCHES, MAX_PANES, SIDE_SHADE, _clamp01, _shade, plane_z, side_of
+from raykernel import EPS, MAX_BRANCHES, MAX_PANES, SIDE_SHADE, _clamp01, _shade, _walled, plane_z, side_of
 
 
 @njit(cache=True, inline="always")
@@ -110,13 +110,13 @@ def _surface(cb, db, r0, r1, m_near, m_far, t0, t1, px, py, rdx, rdy, tex, line,
 
 @njit(cache=True)
 def _render_line(cb, db, n, px, py, eye_z, eye_span, rdx, rdy, line,
-                 floor_plane, ceil_plane, span_on, solid_from, pane_tex, pane_top, wall_tex, wall_sides, floor_tex,
+                 floor_plane, ceil_plane, span_on, wall_on, pane_tex, pane_top, wall_tex, wall_sides, floor_tex,
                  ceil_tex, textures, max_dist, fog_dist, bg, branches, pane_f, pane_i):
     """Draw samples 0..n of one line into cb (n, 3) and db (n,): raykernel._render_column, walking the map along the
     unit direction (rdx, rdy), with the line's samples in place of a column's rows. branches (6, MAX_BRANCHES),
     pane_f and pane_i (4, MAX_PANES) are room to work in, reused from line to line."""
     nspans = span_on.shape[0]
-    mh, mw = solid_from.shape
+    mh, mw = wall_on.shape[1], wall_on.shape[2]
     tmask = textures.shape[1] - 1
     tsize = textures.shape[1]
 
@@ -186,7 +186,7 @@ def _render_line(cb, db, n, px, py, eye_z, eye_span, rdx, rdy, line,
             s = cur_s[b]
             top = cur_top[b]
             bot = cur_bot[b]
-            next_solid = (not inside) or s >= solid_from[ny, nx]
+            next_solid = (not inside) or wall_on[s, ny, nx] != 0
 
             zf0 = plane_z(floor_plane, s, cx, cy, e0x, e0y)
             zf1 = plane_z(floor_plane, s, cx, cy, e1x, e1y)
@@ -250,7 +250,7 @@ def _render_line(cb, db, n, px, py, eye_z, eye_span, rdx, rdy, line,
                 if cur >= zc1:
                     break
             if cur < zc1:
-                if inside and solid_from[ny, nx] < nspans:
+                if inside and _walled(wall_on, nx, ny):
                     tex_above = wall_tex[ny, nx]
                 _wall(cb, db, cur, zc1, top, bot, t1, wtx, tex_above, own, band_low, band_high, side_shade, eye_z,
                       line, textures, fog_dist)
@@ -421,7 +421,7 @@ def _plan(width, height, pitch, focal, dir_x, dir_y):
 
 @njit(cache=True, parallel=True)
 def _draw_lines(colors, depths, lines, offsets, px, py, eye_z, eye_span,
-                floor_plane, ceil_plane, span_on, solid_from, pane_tex, pane_top, wall_tex, wall_sides, floor_tex,
+                floor_plane, ceil_plane, span_on, wall_on, pane_tex, pane_top, wall_tex, wall_sides, floor_tex,
                 ceil_tex, textures, max_dist, fog_dist, bg):
     """Draw every line of the fan into its stretch of colors (samples, 3) and depths (samples,)."""
     n_lines = lines.shape[0]
@@ -436,7 +436,7 @@ def _draw_lines(colors, depths, lines, offsets, px, py, eye_z, eye_span,
                 continue
             o = offsets[j]
             _render_line(colors[o:o + n], depths[o:o + n], n, px, py, eye_z, eye_span, lines[j, 5], lines[j, 6],
-                         lines[j], floor_plane, ceil_plane, span_on, solid_from, pane_tex, pane_top, wall_tex,
+                         lines[j], floor_plane, ceil_plane, span_on, wall_on, pane_tex, pane_top, wall_tex,
                          wall_sides, floor_tex, ceil_tex, textures, max_dist, fog_dist, bg, branches, pane_f, pane_i)
 
 
@@ -489,7 +489,7 @@ class TiltScratch:
 
 
 def render_scene_tilt(fb, zb, px, py, eye_z, eye_span, dir_x, dir_y, pitch, focal,
-                      floor_plane, ceil_plane, span_on, solid_from, pane_tex, pane_top, wall_tex, wall_sides, floor_tex,
+                      floor_plane, ceil_plane, span_on, wall_on, pane_tex, pane_top, wall_tex, wall_sides, floor_tex,
                       ceil_tex, textures, max_dist, fog_dist, bg, scratch=None):
     """Fill `fb` (W, H, 3) and `zb` (W, H) for a camera looking along (dir_x, dir_y) tilted up by `pitch`
     radians (negative looks down; not level), with `focal` the focal length in pixels: the same picture as
@@ -498,7 +498,7 @@ def render_scene_tilt(fb, zb, px, py, eye_z, eye_span, dir_x, dir_y, pitch, foca
     width, height = fb.shape[0], fb.shape[1]
     fan, lines, offsets = _plan(width, height, pitch, focal, dir_x, dir_y)
     colors, depths = (scratch or TiltScratch()).ensure(int(offsets[-1]))
-    _draw_lines(colors, depths, lines, offsets, px, py, eye_z, eye_span, floor_plane, ceil_plane, span_on, solid_from,
+    _draw_lines(colors, depths, lines, offsets, px, py, eye_z, eye_span, floor_plane, ceil_plane, span_on, wall_on,
                 pane_tex, pane_top, wall_tex, wall_sides, floor_tex, ceil_tex, textures, max_dist, fog_dist, bg)
     _gather(fb, zb, width * 0.5, height * 0.5 - focal * math.cos(pitch) / math.sin(pitch), fan, lines, offsets,
             colors, depths, bg)

@@ -61,16 +61,21 @@ class World:
         self.pane_tex = np.full((h, w), -1, np.int32)           # see-through wall tile per cell, or -1
         self.pane_top = np.full((h, w), 1e9, np.float32)        # how high that pane reaches (a short wall)
         self.pane_open = np.zeros((h, w), np.uint8)             # 1: that pane lets bullets through (set_pane)
-        wall_floor = np.array(level.grids["wall_floor"], np.int32)
-        self.blocked = (self.solid != 0) & (wall_floor == 0)    # what the player cannot enter on any floor
+        # Which floors of each cell a wall fills: a wall painted on one floor leaves the others open. The renderer,
+        # span_at and pathing read this.
+        masks = np.array(level.grids["wall_floors"], np.int64)
+        lowest = np.array(level.grids["wall_floor"], np.int64)
+        each = np.arange(floors)[:, None, None]
+        # (an older map's wall, with no floors of its own, fills its lowest floor and every one above it)
+        self.wall_on = ((self.solid[None] != 0) & np.where(masks == 0, each >= lowest, (masks >> each) & 1 != 0)
+                        ).astype(np.uint8)
+        self.blocked = self.wall_on.all(axis=0)                 # what the player cannot enter on any floor
+        self.pane_block = np.zeros((h, w), np.uint8)            # 1: a see-through wall the player cannot walk through
         transparent = np.zeros(tile_count, bool) if transparent_tiles is None else np.asarray(transparent_tiles, bool)
         self._add_transparent_walls(level, transparent)
         self._add_short_walls(level, transparent)
         self.blocked = self.blocked.astype(np.uint8)
-        # Lowest floor each cell is a wall on (`floors` = no wall): a wall that starts on a higher
-        # floor leaves the floors below it open. The renderer and span_at read this.
-        self.solid_from = np.where(self.solid != 0, wall_floor, floors).astype(np.int32)
-        self._hang_upper_walls(level, wall_floor)
+        self._hang_upper_walls(level)
         self.team = None                                        # the team this world lets through barriers
         self._teams = {None: self}                              # team -> its for_team view (shared by all views)
         self.barrier = np.zeros((h, w), np.int32)               # the team a ground floor barrier lets through, or 0
@@ -79,7 +84,7 @@ class World:
         self.enemies = False                                    # True in the for_enemies view
         self.player_block = np.zeros((floors, h, w), np.uint8)  # floors of cells players cannot enter (set_blocks)
         self.enemy_block = np.zeros((floors, h, w), np.uint8)   # the same for enemies
-        self.light_occluder = (self.solid_from == 0).astype(np.uint8)   # walls that fill every floor stop light
+        self.light_occluder = self.wall_on[0].copy()            # walls on the ground floor stop light
         self.enemy_cost = np.zeros((floors, h, w), np.int32)    # extra cost of pathing through (set_cost)
         self.tile_count = tile_count
         self.extras = {}                                        # what a game mode keeps with the world (shared)
@@ -92,7 +97,7 @@ class World:
         for y, row in enumerate(level.grids.get(grid_name("site", 0), [])):
             for x, value in enumerate(row):
                 team = BARRIER_SITES.get(value)
-                if not team or not self.span_on[0, y, x] or self.solid_from[y, x] == 0:
+                if not team or not self.span_on[0, y, x] or self.wall_on[0, y, x]:
                     continue
                 self.barrier[y, x] = team
                 if self.pane_tex[y, x] < 0 and BARRIER_TILES[team] < tile_count:
@@ -124,9 +129,9 @@ class World:
         for x, y in cells:
             if (x, y) in self._opened or not (0 <= x < self.width and 0 <= y < self.height):
                 continue
-            self._opened[(x, y)] = (self.solid[y, x], self.wall_tex[y, x], self.blocked[y, x], self.solid_from[y, x],
+            self._opened[(x, y)] = (self.solid[y, x], self.wall_tex[y, x], self.blocked[y, x], self.wall_on[:, y, x].copy(),
                                     self.wall_sides[y, x].copy(), self.pane_tex[y, x], self.light_occluder[y, x])
-            self.solid[y, x], self.wall_tex[y, x], self.blocked[y, x], self.solid_from[y, x] = 1, tile, 1, 0
+            self.solid[y, x], self.wall_tex[y, x], self.blocked[y, x], self.wall_on[:, y, x] = 1, tile, 1, 1
             self.wall_sides[y, x, :, 0] = -1
             self.pane_tex[y, x] = -1
             self.light_occluder[y, x] = 1
@@ -138,7 +143,7 @@ class World:
             saved = self._opened.pop((x, y), None)
             if saved is None:
                 continue
-            (self.solid[y, x], self.wall_tex[y, x], self.blocked[y, x], self.solid_from[y, x], self.wall_sides[y, x],
+            (self.solid[y, x], self.wall_tex[y, x], self.blocked[y, x], self.wall_on[:, y, x], self.wall_sides[y, x],
              self.pane_tex[y, x], self.light_occluder[y, x]) = saved
         self.revision[0] += 1
 
@@ -186,27 +191,31 @@ class World:
         team = self.barrier[cy, cx]
         return bool(team) and team != self.team
 
-    def _hang_upper_walls(self, level, wall_floor):
-        """A wall that starts on a higher floor has its base at that floor's floor height. The rooms
-        below it stay open but their ceiling stops at that base, so the wall is seen hanging
-        from the ceiling instead of vanishing above it.
+    def _hang_upper_walls(self, level):
+        """A wall on a higher floor has its base at that floor's floor height. The rooms below it
+        stay open but their ceiling stops at that base, so the wall is seen hanging from the
+        ceiling instead of vanishing above it.
 
         The wall's top is the ceiling height stored for it on its own floor (0, or not above the
         base, means full height). A wall shorter than the rooms beside it on that floor becomes a
         raised block there: its floor is the wall's top, so you can see over it and see its top."""
-        for y, x in zip(*np.nonzero((self.solid != 0) & (wall_floor > 0))):
-            f = int(wall_floor[y, x])
-            base = level.grids[grid_name("floor_h", f)][y][x]
-            top = level.upper_wall_top(x, y)
+        for y, x in zip(*np.nonzero(self.wall_on[1:].any(axis=0))):
+            f = level.wall_floor(x, y)
             below = [s for s in range(f) if self.span_on[s, y, x]]
             open_to = self.ceil_plane[below[-1], y, x, 0] if below else 0.0    # the room's ceiling, before the wall hangs in it
-            for s in range(f):
-                if self.span_on[s, y, x]:
-                    low = self.floor_plane[s, y, x, 0] + 0.1
-                    self.ceil_plane[s, y, x, 0] = min(self.ceil_plane[s, y, x, 0], max(base, low))
+            for g in range(1, self.floors):         # each run of walled floors that starts above the ground
+                if not self.wall_on[g, y, x] or self.wall_on[g - 1, y, x]:
+                    continue
+                base = level.grids[grid_name("floor_h", g)][y][x]
+                for s in range(g):
+                    if self.span_on[s, y, x]:
+                        low = self.floor_plane[s, y, x, 0] + 0.1
+                        self.ceil_plane[s, y, x, 0] = min(self.ceil_plane[s, y, x, 0], max(base, low))
+            top = level.upper_wall_top(x, y) if f else None
             if top is not None:
-                self.solid[y, x] = 0
-                self.solid_from[y, x] = self.floors
+                self.wall_on[f, y, x] = 0
+                self.solid[y, x] = self.wall_on[:, y, x].any()
+                self.blocked[y, x] = 0
                 self.span_on[f, y, x] = 1
                 self.floor_plane[f, y, x] = (top, 0.0, 0.0)
                 above = level.upper_wall_ceiling(x, y)
@@ -227,7 +236,9 @@ class World:
                 floor = level.wall_base(x, y)               # the pane stands on the floor beside it
                 ceiling = max(level.wall_ceiling(x, y), floor + 0.1)
                 top = level.short_wall_top(x, y)       # (a transparent wall is never an upper-floor one)
-                self.solid[y, x] = 0
+                self.wall_on[0, y, x] = 0
+                self.solid[y, x] = self.wall_on[:, y, x].any()
+                self.pane_block[y, x] = 1
                 self.span_on[0, y, x] = 1
                 self.floor_plane[0, y, x] = (floor, 0.0, 0.0)
                 self.ceil_plane[0, y, x] = (ceiling, 0.0, 0.0)
@@ -246,7 +257,8 @@ class World:
                 top = level.short_wall_top(x, y)
                 if top is None or level.wall_floor(x, y) or transparent[self.wall_tex[y, x]]:
                     continue
-                self.solid[y, x] = 0
+                self.wall_on[0, y, x] = 0
+                self.solid[y, x] = self.wall_on[:, y, x].any()
                 self.blocked[y, x] = 0
                 self.span_on[0, y, x] = 1
                 self.floor_plane[0, y, x] = (top, 0.0, 0.0)
@@ -265,8 +277,8 @@ class World:
         elif self.pane_tex[cy, cx] >= 0 and z < self.pane_top[cy, cx] and not self.pane_open[cy, cx]:
             return False
         fx, fy = x - cx, y - cy
-        for s in range(min(self.floors, int(self.solid_from[cy, cx]))):     # (none in a wall, or a closed door)
-            if self.span_on[s, cy, cx] and plane_z(self.floor_plane, s, cx, cy, fx, fy) <= z \
+        for s in range(self.floors):
+            if self.span_on[s, cy, cx] and not self.wall_on[s, cy, cx] and plane_z(self.floor_plane, s, cx, cy, fx, fy) <= z \
                     < plane_z(self.ceil_plane, s, cx, cy, fx, fy):
                 return True
         return False
@@ -310,6 +322,8 @@ class World:
         s = self._span_at(x, y, z, current, grounded)
         if s == 0 and self.has_barriers and self.barred(math.floor(x), math.floor(y)):
             return -1
+        if s == 0 and self.pane_block[math.floor(y), math.floor(x)]:
+            return -1                   # (glass on the ground floor only: the floors above it are open)
         if s >= 0 and self.mover_blocked(s, math.floor(x), math.floor(y)):
             return -1
         return s
@@ -318,8 +332,8 @@ class World:
         cx, cy = math.floor(x), math.floor(y)
         if self.is_blocked(cx, cy):
             return -1
-        if current is not None and current >= self.solid_from[cy, cx]:
-            return -1                   # a wall that starts on this floor (or one below) fills the cell
+        if current is not None and 0 <= current < self.floors and self.wall_on[current, cy, cx]:
+            return -1                   # a wall fills the cell on this floor
         reach = [s for s in range(self.span_on.shape[0] - 1, -1, -1)
                  if self.span_on[s, cy, cx] and self.floor_of(s, x, y) <= z + STEP_HEIGHT + EPS]
         if not reach:

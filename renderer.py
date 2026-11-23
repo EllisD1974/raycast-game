@@ -57,7 +57,7 @@ class Renderer:
         the screen: a shear, which near level looks the same as tilting. A view tilted further is drawn as a true
         rotation, a line at a time through the vanishing point (raytilt.py), so looking well up and down is right."""
         dir_x, dir_y = math.cos(player.angle), math.sin(player.angle)
-        scene = (world.floor_plane, world.ceil_plane, world.span_on, world.solid_from, world.pane_tex,
+        scene = (world.floor_plane, world.ceil_plane, world.span_on, world.wall_on, world.pane_tex,
                  world.pane_top, world.wall_tex, world.wall_sides, world.floor_tex, world.ceil_tex)
         if abs(player.pitch) < SHEAR_PITCH:
             pitch, horizon = 0.0, self.horizon(player)  # (lighting and sprites: a level camera with the horizon moved)

@@ -210,10 +210,10 @@ def test_a_third_floor_gets_its_own_brushes_and_a_slab_over_the_floor_below(ed):
     ed.level.set("floor_h2", 4, 4, 1.5)
     ed.level.set("ceil_h2", 4, 4, 2.75)                          # a room on floor 2 at (4, 4)
     ed.do("layer:floor_h")
-    assert ed.brush("floor_h3") == 3.0 and ed.brush("ceil_h3") == 4.5
+    assert ed.brush("floor_h3") == 3.0 and ed.brush("ceil_h3") == 4.25   # on top of floor 2, as tall
     click(ed, 4, 4)
     g = ed.level.grids
-    assert (g["floor_h3"][4][4], g["ceil_h3"][4][4]) == (3.0, 4.5)
+    assert (g["floor_h3"][4][4], g["ceil_h3"][4][4]) == (3.0, 4.25)
     assert g["ceil_h2"][4][4] == 2.75                            # already under the new floor: untouched
     assert ed.level.problems() == []
 
@@ -292,11 +292,11 @@ def test_a_wall_painted_on_a_higher_floor_does_not_reach_the_floors_below(ed):
     assert level.span_present(0, 5, 5) and not level.span_present(1, 5, 5)
 
 
-def test_a_wall_painted_on_the_ground_floor_still_fills_every_floor(ed):
+def test_a_wall_painted_on_the_ground_floor_fills_only_the_ground_floor(ed):
     ed.do("layer:walls")
     ed.paint_at(5, 5)
     assert ed.level.wall_floor(5, 5) == 0
-    assert ed.level.is_solid(5, 5, 0) and ed.level.is_solid(5, 5, 1)
+    assert ed.level.is_solid(5, 5, 0) and not ed.level.is_solid(5, 5, 1)
 
 
 def test_the_ground_floor_view_shows_a_higher_floors_wall_as_open(ed):
@@ -353,7 +353,7 @@ def test_a_floating_wall_on_a_higher_floor_hangs_into_the_room_below(ed):
     ed.level.set("ceil_h", 5, 5, base + 1.0)                    # the room below is taller than the base
     world = World(ed.level, 4)
     assert world.ceil_of(0, 5.5, 5.5) == pytest.approx(base)    # the wall shows below the old ceiling
-    assert world.span_on[0, 5, 5] == 1 and world.solid_from[5, 5] == 1
+    assert world.span_on[0, 5, 5] == 1 and world.wall_on[:, 5, 5].tolist() == [0, 1]
 
 
 def test_ceil_h_on_a_higher_floors_wall_sets_its_top_and_makes_it_a_short_block(ed):
@@ -438,7 +438,9 @@ def test_a_floating_wall_with_no_room_beside_it_shows_its_height_from_both_floor
             level.set("ceil_h", x, y, 5.0)
     ed.do("floor:1")
     ed.do("layer:walls")
-    ed.paint_at(5, 5)                                           # base 1.5, nothing else on floor 2
+    ed.paint_at(5, 5)
+    assert level.get("floor_h2", 5, 5) == 5.25                  # by default it stands on top of the room below
+    level.set("floor_h2", 5, 5, 1.5)                            # lowered: it hangs into the room below
     ed.do("layer:ceil_h")
     ed.level.set("ceil_h2", 5, 5, 3.0)
     w = World(level, 4)
@@ -452,3 +454,128 @@ def test_a_floating_wall_with_no_room_beside_it_shows_its_height_from_both_floor
     wheel(ed, (5, 5), -2)
     assert level.grids["wall_h"][5][5] == pytest.approx(3.0)
     assert World(level, 4).floor_of(1, 5.5, 5.5) == pytest.approx(4.5)
+
+
+# ------------------------------------------------------------------ walls of one floor, holes and stairwells
+
+def two_storeys(ed):
+    """The ground floor 3 tall; floor 2 a room over the middle of the map (2..7, 2..7), on top of it."""
+    level = ed.level
+    level.grids["ceil_h"] = [[3.0] * 10 for _ in range(10)]
+    ed.do("floor:1")
+    ed.do("layer:floor_h")
+    for y in range(2, 8):
+        for x in range(2, 8):
+            ed.set_height(x, y, "floor_h", ed.brush("floor_h2"))
+    return level
+
+
+def test_a_wall_on_floor_2_stands_on_floor_2_and_leaves_floor_1_free_to_walk_through(ed):
+    from world import World
+    level = two_storeys(ed)
+    ed.do("layer:walls")
+    for y in range(2, 8):
+        ed.paint_at(4, y)                                       # a wall across floor 2
+    assert all(level.is_solid(4, y, 1) and not level.is_solid(4, y, 0) for y in range(2, 8))
+    assert level.get("floor_h2", 4, 4) == 3.25                  # it stands on floor 2's floor
+    world = World(level, 4)
+    assert world.span_at(4.5, 4.5, 0.0, current=0) == 0         # walking under it on the ground floor
+    assert world.ceil_of(0, 4.5, 4.5) >= 3.0 - 0.25             # with the headroom of the room
+    assert world.span_at(4.5, 4.5, 3.25, current=1) == -1       # on floor 2 it is a wall
+
+
+def test_a_ground_wall_lets_floor_2_have_a_room_over_it(ed):
+    from world import World
+    level = ed.level
+    ed.do("layer:walls")
+    ed.paint_at(5, 5)
+    ed.do("floor:1")
+    ed.do("layer:floor_h")
+    ed.paint_at(5, 5)
+    assert level.span_present(1, 5, 5) and level.is_solid(5, 5, 0)
+    world = World(level, 4)
+    assert world.wall_on[:, 5, 5].tolist() == [1, 0] and world.span_on[1, 5, 5]
+
+
+def test_painting_the_same_cell_on_both_floors_carries_the_wall_up_and_erasing_takes_one_floor_off(ed):
+    level = ed.level
+    ed.do("layer:walls")
+    ed.paint_at(5, 5)
+    ed.do("floor:1")
+    ed.paint_at(5, 5)
+    assert level.is_solid(5, 5, 0) and level.is_solid(5, 5, 1)
+    ed.erase_at(5, 5)                                           # off floor 2 only
+    assert level.is_solid(5, 5, 0) and not level.is_solid(5, 5, 1) and level.walls[5][5]
+    ed.erase_at(5, 5)                                           # nothing of floor 2's left to erase
+    assert level.is_solid(5, 5, 0)
+    ed.do("floor:0")
+    ed.erase_at(5, 5)
+    assert not level.walls[5][5] and level.wall_mask(5, 5) == 0
+
+
+def test_a_room_painted_over_an_older_wall_that_fills_every_floor_takes_its_place_up_there(ed):
+    level = ed.level
+    level.walls[5][5] = 1                                       # an older map's ground wall: every floor
+    assert level.is_solid(5, 5, 1)
+    ed.do("floor:1")
+    ed.do("layer:floor_h")
+    ed.paint_at(5, 5)
+    assert level.span_present(1, 5, 5) and level.is_solid(5, 5, 0) and not level.is_solid(5, 5, 1)
+
+
+def test_erasing_a_room_on_floor_2_leaves_a_hole_up_to_its_ceiling(ed):
+    level = two_storeys(ed)
+    ed.value["floor_h2"] = 3.0                                  # floor 2 lower: the slab comes out of floor 1
+    ed.set_height(1, 1, "floor_h", 3.0)
+    assert level.get("ceil_h", 1, 1) == 2.75
+    ceiling = level.get("ceil_h2", 1, 1)
+    ed.erase_at(1, 1)
+    assert not level.span_present(1, 1, 1) and level.get("ceil_h", 1, 1) == ceiling
+    ed.erase_at(4, 4)                                           # floor 1's ceiling was never lowered here
+    assert level.get("ceil_h", 4, 4) == ceiling
+
+
+def test_stairs_on_floor_1_cut_a_hole_in_floor_2_where_they_climb_into_it(ed):
+    from world import World
+    level = two_storeys(ed)
+    ed.do("floor:0")
+    ed.do("layer:floor_h")
+    ed.value["floor_h"] = 0.25
+    ed.stair_step = 0.5
+    ed.stairs_drag = ((2, 4), (7, 4))                           # 0.25 .. 2.75, under floor 2 at 3.25
+    ed.finish_stairs()
+    heights = level.grids["floor_h"][4][2:8]
+    assert heights == [0.25, 0.75, 1.25, 1.75, 2.25, 2.75]
+    holes = [x for x in range(2, 8) if not level.span_present(1, x, 4)]
+    assert holes and holes == list(range(holes[0], 8))          # the hole is over the top of the stairs
+    assert all(level.get("ceil_h", x, 4) - level.get("floor_h", x, 4) >= 0.8 for x in range(2, 8))
+    assert level.span_present(1, 4, 3) and level.span_present(1, 4, 5)     # beside the stairs: floor 2
+    assert World(level, 4).span_at(7.5, 4.5, 2.75, current=0) == 0
+
+
+def test_the_floors_a_wall_fills_survive_save_load_and_deleting_a_floor(ed, tmp_path):
+    from mapfile import load_level, save_level
+    level = ed.level
+    level.add_floor()
+    ed.do("layer:walls")
+    for floor in (0, 2):
+        ed.do(f"floor:{floor}")
+        ed.paint_at(5, 5)
+    ed.do("floor:2")
+    ed.paint_at(6, 6)
+    save_level(str(tmp_path / "w.json"), level)
+    again = load_level(str(tmp_path / "w.json"))
+    assert [again.is_solid(5, 5, s) for s in range(3)] == [True, False, True]
+    again.remove_floor(1)
+    assert [again.is_solid(5, 5, s) for s in range(2)] == [True, True]
+    again.remove_floor(1)                                       # (6, 6) was only on that floor
+    assert again.is_solid(5, 5, 0) and not again.walls[6][6]
+
+
+def test_floor_2_shows_a_ground_wall_with_no_room_over_it_faded(ed):
+    ed.do("layer:walls")
+    ed.paint_at(5, 5)                                           # a ground wall, nothing over it on floor 2
+    ed.do("floor:1")
+    for layer in ("walls", "floor_h", "floor_tex"):
+        ed.do(f"layer:{layer}")
+        ed.draw(pygame.display.get_surface())                   # (no room on either floor there: drawn, not a crash)

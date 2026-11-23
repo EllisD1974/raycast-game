@@ -11,9 +11,11 @@ floor on top, "Rename" (F2) renames the selected floor, and "Del" removes it (no
 floor). The floors below the one you edit are shown faded.
 
 A map has several layers; you edit one at a time (keys 1-7 or the Layer buttons):
-  1 Walls      solid wall tiles (0 = open space). A wall painted on a higher floor stands on that
-               floor and the ones above it; the floors below stay open under it. A wall painted
-               on the ground floor fills every floor.
+  1 Walls      solid wall tiles (0 = open space). A wall fills only the floor it is painted on:
+               from that floor's floor up to the floor above, which stays free for a room over it
+               (paint the same cell on that floor too to carry the wall up). Erasing takes it off
+               the floor being edited only. (Walls from maps made before this filled every floor
+               from theirs up; painting a room over one on a higher floor takes it off that floor.)
   2 FloorTex   floor texture of each cell (also the riser texture of stairs / raised blocks)
   3 CeilTex    ceiling texture of each cell
   4 FloorH     floor height of each cell (stairs, platforms, pits); [ ] change the brush value,
@@ -30,9 +32,13 @@ A map has several layers; you edit one at a time (keys 1-7 or the Layer buttons)
 
 A higher floor starts empty. Painting FloorH or CeilH on it creates the room in that cell, using
 the other brush value for the missing height, and lowers the ceiling of the floor below there to
-leave a thin slab. Erasing a height on a higher floor removes the room. To climb to a higher
-floor, end a ramp on a cell of the floor below that is raised to the higher floor's height (with a
-tall ceiling) and touches a room of the higher floor.
+leave a thin slab. The brush starts with the floor sitting on top of the floor below (at its
+ceiling) and as tall, and a wall painted on a higher floor stands on that floor's floor, so neither
+reaches down into the room below (a floor that already has rooms keeps to their heights). Erasing a height on a higher floor removes the room and leaves a
+hole: the room below opens up to the removed room's ceiling. To climb to a higher floor, end a ramp
+on a cell of the floor below that is raised to the higher floor's height (with a tall ceiling) and
+touches a room of the higher floor. Stairs (T) on a lower floor do this by themselves: a step that
+comes too close to the floor above cuts a hole in it.
 
 The WallH layer (key 7) sets how tall each wall is: paint a height onto wall cells (Val-/Val+ or
 [ ] change it; Fill sets the whole connected wall; Erase puts a wall back to full height). A wall
@@ -2150,7 +2156,47 @@ class Editor(LogicEditor):
 
     def brush(self, grid):
         """Current height brush for a stored grid such as floor_h or ceil_h3."""
-        return self.value.setdefault(grid, default_brush(grid))
+        if grid not in self.value:
+            self.value[grid] = self.floor_brush(grid)
+        return self.value[grid]
+
+    def floor_rooms(self, floor):
+        """(floor height, ceiling height) of every room of a floor."""
+        level = self.level
+        return [(level.get(grid_name("floor_h", floor), x, y), level.get(grid_name("ceil_h", floor), x, y))
+                for y in range(level.height) for x in range(level.width) if level.span_present(floor, x, y)]
+
+    def floor_brush(self, grid):
+        """Starting brush for a height grid. On a higher floor that already has rooms it is their most
+        common height. Otherwise the floor sits on top of the floor below, a slab above its most common
+        ceiling, and is as tall as its rooms, so it never reaches down into the room under it
+        (default_brush when there is nothing below either)."""
+        layer, floor = split_grid_name(grid)
+        if floor == 0 or layer not in ROOM_HEIGHT_LAYERS or floor >= self.level.floor_count:
+            return default_brush(grid)
+        common = lambda values: max(set(values), key=values.count)
+        own = self.floor_rooms(floor)
+        if own:
+            return common([round(f if layer == "floor_h" else c, 4) for f, c in own])
+        rooms = self.floor_rooms(floor - 1)
+        if not rooms:
+            return default_brush(grid)
+        base = round(common([round(c, 4) for _, c in rooms]) + SLAB, 4)
+        if layer == "floor_h":
+            return base
+        tall = [round(c - f, 4) for f, c in rooms if c - f >= MIN_SPAN]
+        return round(base + (common(tall) if tall else 1.5), 4)
+
+    def upper_base(self, x, y):
+        """Where the floor being edited (a higher one) has its floor in cell (x, y): its room's floor
+        there, or on top of the room below (a slab above its ceiling), or failing both the FloorH brush."""
+        level, floor = self.level, self.floor
+        if level.span_present(floor, x, y):
+            return level.get(self.gname("floor_h"), x, y)
+        below = max((s for s in range(floor) if level.span_present(s, x, y)), default=None)
+        if below is not None:
+            return round(level.get(grid_name("ceil_h", below), x, y) + SLAB, 4)
+        return self.brush(self.gname("floor_h"))
 
     def layout(self):
         """Compute toolbar buttons and text readouts for the current state."""
@@ -2442,14 +2488,16 @@ class Editor(LogicEditor):
         if self.floor == 0:
             level.set(layer, x, y, value)
             return
+        if level.is_solid(x, y, self.floor) and level.is_solid(x, y, self.floor - 1):
+            # A wall that reaches up from a lower floor: the room takes its place on this floor.
+            level.set_wall_floors(x, y, level.wall_mask(x, y) & ~(1 << self.floor))
         had_room = level.span_present(self.floor, x, y)
+        want = self.brush(ceil_grid if layer == "floor_h" else floor_grid)     # (before the cell counts as a room)
         level.set(self.gname(layer), x, y, value)
         if not had_room:
             if layer == "floor_h":
-                want = self.brush(ceil_grid)
                 level.set(ceil_grid, x, y, want if want - value >= MIN_SPAN else value + 1.5)
             else:
-                want = self.brush(floor_grid)
                 level.set(floor_grid, x, y, want if value - want >= MIN_SPAN else value - 1.5)
         self.make_slab(x, y)
 
@@ -2467,9 +2515,30 @@ class Editor(LogicEditor):
         if level.get(ceil_below, x, y) > top and top - level.get(floor_below, x, y) >= PLAYER_HEIGHT:
             level.set(ceil_below, x, y, top)
 
-    def remove_room(self, x, y):
+    def remove_room(self, x, y, floor=None):
+        """Take the room out of a higher floor's cell, leaving a hole in that floor: the room below,
+        whose ceiling stopped under it, opens up to the removed room's ceiling (a stairwell)."""
+        level = self.level
+        floor = self.floor if floor is None else floor
+        had = level.span_present(floor, x, y)
+        low, high = level.get(grid_name("floor_h", floor), x, y), level.get(grid_name("ceil_h", floor), x, y)
         for layer in ROOM_HEIGHT_LAYERS:
-            self.level.set(self.gname(layer), x, y, DEFAULTS[self.gname(layer)])
+            name = grid_name(layer, floor)
+            level.set(name, x, y, DEFAULTS[name])
+        below = max((s for s in range(floor) if level.span_present(s, x, y)), default=None)
+        if had and below is not None and level.get(grid_name("ceil_h", below), x, y) <= low + 1e-6:
+            level.set(grid_name("ceil_h", below), x, y, high)
+
+    def open_stairwell(self, x, y):
+        """After a step of stairs: if it leaves no headroom under the floor above, that floor gets a hole
+        there (remove_room), so the stairs climb up into it."""
+        level, floor = self.level, self.floor
+        if not level.span_present(floor, x, y):
+            return
+        above = next((s for s in range(floor + 1, level.floor_count) if level.span_present(s, x, y)), None)
+        if above is not None and level.get(self.gname("floor_h"), x, y) + PLAYER_HEIGHT > \
+                level.get(self.gname("ceil_h"), x, y):
+            self.remove_room(x, y, above)
 
     def side_at(self, pos):
         """The side ("n", "e", "s" or "w") of the cell under screen point `pos` that the point is nearest to."""
@@ -2546,10 +2615,12 @@ class Editor(LogicEditor):
                 for name in (f"side_{side}", f"side_{side}_from", f"side_{side}_to"):
                     level.set(name, x, y, DEFAULTS[name])
         if layer == "walls" and level.in_bounds(x, y) and not level.is_solid(x, y, self.floor):
-            level.set("wall_h", x, y, DEFAULTS["wall_h"])      # a new wall starts full height
-            level.set("wall_floor", x, y, self.floor)          # ... and on this floor, not the ones below
-            if self.floor > 0:                                  # its base: this floor's brush height
-                level.set(self.gname("floor_h"), x, y, self.brush(self.gname("floor_h")))
+            others = level.wall_mask(x, y)                      # floors a wall already fills here
+            if self.floor > 0:                                  # its base: this floor's floor, not the room below
+                level.set(self.gname("floor_h"), x, y, self.upper_base(x, y))
+            if not others:
+                level.set("wall_h", x, y, DEFAULTS["wall_h"])  # a new wall starts full height
+            level.set_wall_floors(x, y, others | 1 << self.floor)   # ... and fills this floor only
         level.set(self.gname(layer), x, y, tile_id)
 
     def edits_upper_wall(self, cx, cy):
@@ -2577,6 +2648,14 @@ class Editor(LogicEditor):
         if self.layer == "sides":
             self.set_side(cx, cy, self.painted_side(), 0)
         elif self.layer == "walls":
+            level = self.level
+            if not level.is_solid(cx, cy, self.floor):
+                return                                                  # (another floor's wall stays)
+            mask = level.wall_mask(cx, cy)
+            older = not level.grids["wall_floors"][cy][cx] and level.wall_floor(cx, cy) == self.floor
+            if mask & ~(1 << self.floor) and not older:                 # it fills other floors too: only this one goes
+                level.set_wall_floors(cx, cy, mask & ~(1 << self.floor))
+                return
             self.open_like_neighbors(cx, cy)
             for side in SIDES:                                          # ... and its sides' own tiles
                 for name in (f"side_{side}", f"side_{side}_from", f"side_{side}_to"):
@@ -2584,6 +2663,7 @@ class Editor(LogicEditor):
             self.level.set("wall_h", cx, cy, DEFAULTS["wall_h"])       # an erased wall forgets its height
             self.level.set("wall_ceil", cx, cy, DEFAULTS["wall_ceil"])  # ... and its ceiling
             self.level.set("wall_floor", cx, cy, DEFAULTS["wall_floor"])
+            self.level.set("wall_floors", cx, cy, DEFAULTS["wall_floors"])
             self.level.set("walls", cx, cy, DEFAULTS["walls"])
         elif self.edits_wall_ceiling(cx, cy):
             self.level.set("wall_ceil", cx, cy, DEFAULTS["wall_ceil"])  # back to the automatic ceiling
@@ -3412,6 +3492,7 @@ class Editor(LogicEditor):
                 self.put_wall_step(x, y, height)
             else:
                 self.set_height(x, y, "floor_h", height)
+                self.open_stairwell(x, y)
         self.say(f"Stairs: {len(steps)} cells, {fmt(steps[0][1])} to {fmt(steps[-1][1])}")
 
     def put_wall_step(self, x, y, height):
@@ -4480,9 +4561,15 @@ class Editor(LogicEditor):
             return
         grids = level.grids
         if floor >= 1 and not level.span_present(floor, x, y):
-            # No room on this floor here: show the floor below, faded, as context.
-            below = max(s for s in range(floor) if level.span_present(s, x, y))
-            screen.blit(self.tile_surface(grids[grid_name("floor_tex", below)][y][x] - 1, dim=True), rect)
+            # No room on this floor here: show the floor below, faded, as context (or the wall below it).
+            below = max((s for s in range(floor) if level.span_present(s, x, y)), default=-1)
+            walled = max((s for s in range(floor) if level.is_solid(x, y, s)), default=-1)
+            if walled > below:
+                screen.blit(self.tile_surface(level.walls[y][x] - 1, dim=True), rect)
+            elif below >= 0:
+                screen.blit(self.tile_surface(grids[grid_name("floor_tex", below)][y][x] - 1, dim=True), rect)
+            else:
+                pygame.draw.rect(screen, EMPTY_CELL, rect)
             return
         g = self.gname
         if layer in ("walls", "sides"):

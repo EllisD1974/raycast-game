@@ -239,7 +239,7 @@ def test_overlapping_lights_brighten_a_surface_without_burning_it_out():
 def test_walls_block_what_a_light_can_see():
     level = room(walls=[(6, y, 2) for y in range(1, 10)])                           # a wall across the room at x = 6
     world = World(level, 16)
-    occluder = (world.solid_from == 0).astype(np.uint8)
+    occluder = world.wall_on[0].copy()
     lights = np.array([[3.5, 5.5, 0.5, 1, 1, 1, 8.0]])
     vis = np.zeros((1, level.height, level.width), np.float32)
     build_visibility(lights, occluder, vis)
@@ -252,7 +252,7 @@ def test_a_light_in_a_doorway_sees_through_the_gap():
     walls = [(6, y, 2) for y in range(1, 10) if y != 5]                             # a gap at y = 5
     level = room(walls=walls)
     world = World(level, 16)
-    occluder = (world.solid_from == 0).astype(np.uint8)
+    occluder = world.wall_on[0].copy()
     lights = np.array([[3.5, 5.5, 0.5, 1, 1, 1, 9.0]])
     vis = np.zeros((1, level.height, level.width), np.float32)
     build_visibility(lights, occluder, vis)

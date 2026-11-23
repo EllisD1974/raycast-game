@@ -56,7 +56,7 @@ def test_a_closed_cell_stops_walking_bullets_and_sight():
 def test_opening_a_cell_puts_back_what_the_level_made():
     world = room()
     before = {name: getattr(world, name).copy() for name in
-              ("solid", "wall_tex", "blocked", "solid_from", "wall_sides", "pane_tex", "light_occluder")}
+              ("solid", "wall_tex", "blocked", "wall_on", "wall_sides", "pane_tex", "light_occluder")}
     world.close_cells(DOOR, 5)
     world.open_cells(DOOR)
     for name, array in before.items():
