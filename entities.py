@@ -61,6 +61,7 @@ class Entities:
     def __init__(self, level, world):
         self.clock = 0.0
         self.items = []
+        self.picked = []                                    # (who, Entity) picked up or bought, until taken
         self.guns = {g.name: g for g in level.guns}          # what a "gun" or "ammo" pickup refers to
         for e in level.entities:
             cx, cy = math.floor(e.x), math.floor(e.y)
@@ -108,9 +109,9 @@ class Entities:
                 and item.entity.mode != "scenery" and self._touched(item, player, BUY_REACH)]
         return min(near, key=lambda i: math.hypot(player.x - i.entity.x, player.y - i.entity.y), default=None)
 
-    def buy(self, player, stats, inventory=None):
-        """`player` pressed the use key: buy the item for sale beside them, if they have the money. Returns the
-        message to show them (None when nothing is for sale there)."""
+    def buy(self, player, stats, inventory=None, who=None):
+        """`player` (`who`) pressed the use key: buy the item for sale beside them, if they have the money. Returns
+        the message to show them (None when nothing is for sale there)."""
         item = self.offer(player)
         if item is None:
             return None
@@ -119,6 +120,7 @@ class Entities:
             return f"Not enough money for {offer_text(e)} (${e.price:g})"
         stats.money -= e.price
         self._apply(e, stats, inventory, self.guns)
+        self.picked.append((who, e))
         if e.mode == "once":
             item.present = False
         elif e.mode == "respawn":
@@ -146,6 +148,7 @@ class Entities:
             if touching and who not in item.touching:
                 self._apply(e, stats, inventory, self.guns)
                 messages.append(describe(e))
+                self.picked.append((who, e))
                 if e.mode == "once":
                     item.present = False
                 elif e.mode == "respawn":

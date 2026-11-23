@@ -30,7 +30,7 @@ from bomb import BOMB_TILE, RoundView, bomb_sprite
 from entities import Entities, PlayerStats
 from koth import HillView, hill_sprite
 from respawn import RespawnView
-from zombies import ZombieView, apply_boards, apply_doors, enemy_sprites
+from zombies import ZombieView, apply_boards, apply_doors, enemy_sprites, interact_sprites
 from constants import CROUCH_HEIGHT, PLAYER_HEIGHT
 from game import (MAX_STEP_DT, NO_TEAM, Events, Inputs, PlayerState, character_sprite, character_tile_for, clean_name, speed_of,
                   move_body, shown_name, watchable_ids)
@@ -559,6 +559,7 @@ class ClientSession:
                 sprites.append(marker)
         elif isinstance(self.round, ZombieView):
             sprites += enemy_sprites(self.level, self.round.enemies, self.character_tile, self.me.body.angle)
+            sprites += interact_sprites(self.level, self.world, self.round.used)
         if self.character_tile is not None and self.game_time is not None:
             for pid, samples in self.history.items():
                 if self.out_of_round(pid) or pid == hide:

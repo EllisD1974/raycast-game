@@ -393,7 +393,7 @@ class Game:
             self.notes.setdefault(player_id, []).append(self.buy(player_id, index))
         body, inventory = state.body, state.inventory
         if wish.use and player_id not in self.using and state.alive:     # (pressed, not held: one buy a press)
-            bought = self.items.buy(body, state.stats, inventory)
+            bought = self.items.buy(body, state.stats, inventory, who=player_id)
             if bought is not None:
                 self.notes.setdefault(player_id, []).append(bought)
         (self.using.add if wish.use else self.using.discard)(player_id)
@@ -508,9 +508,14 @@ class Game:
         if self.round is not None:
             self.round.update(dt)
         notes, self.notes = self.notes, {}
-        return {pid: notes.get(pid, []) + (self.items.touch(state.body, state.stats, state.inventory, who=pid)
+        said = {pid: notes.get(pid, []) + (self.items.touch(state.body, state.stats, state.inventory, who=pid)
                                            if state.alive else [])
                 for pid, state in self.players.items()}
+        picked, self.items.picked = self.items.picked, []
+        hook = getattr(self.round, "picked", None)          # (zombies: pickups set off triggers)
+        for who, entity in picked if hook is not None else ():
+            hook(who, entity)
+        return said
 
     def tick(self, inputs, dt):
         """Advance everything dt seconds. `inputs` maps a player id to their Inputs (a player left out

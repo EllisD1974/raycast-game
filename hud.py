@@ -10,7 +10,8 @@ from constants import HEIGHT, WIDTH
 from entities import offer_text
 from koth import HillView, on_hill
 from respawn import RespawnView
-from zombies import REVIVE_REACH, REVIVE_UP, ZombieView, door_price, nearest_door, nearest_group
+from zombies import (REVIVE_REACH, REVIVE_UP, ZombieView, door_price, interact_needs, nearest_door, nearest_group,
+                     nearest_interact)
 from mapfile import CT_TEAM, DEFUSE_KIT, KOTH_NAMES, SITE_NAMES, T_TEAM, TEAM_NAMES
 
 TEXT = (255, 255, 255)
@@ -169,7 +170,7 @@ def draw_round(picture, font, big, view, me_id, me, level, watching=None):
         draw_respawn(picture, font, view, me_id, watching)
         return
     if isinstance(view, ZombieView):
-        draw_zombies(picture, font, big, view, me_id, watching)
+        draw_zombies(picture, font, big, view, me_id, watching, level)
         return
     settings = level.settings
     middle = WIDTH // 2
@@ -219,9 +220,10 @@ def draw_round(picture, font, big, view, me_id, me, level, watching=None):
                  TEAM_COLORS[T_TEAM], center=True)
 
 
-def draw_zombies(picture, font, big, view, me_id, watching=None):
-    """Zombies: the round at the top (in red) with how many enemies are left, or the countdown to the next round;
-    the round's news in the middle; and, for a player who is out, that they are back next round."""
+def draw_zombies(picture, font, big, view, me_id, watching=None, level=None):
+    """Zombies: the round at the top (in red) with how many enemies are left, or the countdown to the next round,
+    and under them the map's counters that show ("Fuses 2/4"); the round's news in the middle; and, for a player
+    who is out, that they are back next round."""
     middle = WIDTH // 2
     if view.number:
         shadowed(picture, big, f"Round {view.number}", (middle, 6), DANGER, center=True)
@@ -232,6 +234,13 @@ def draw_zombies(picture, font, big, view, me_id, watching=None):
     else:
         under = f"New game in {max(1, math.ceil(view.clock))}"
     shadowed(picture, font, under, (middle, 32 if view.number else 10), DIM, center=True)
+    y = 52 if view.number else 30
+    for counter in (level.counters if level is not None else ()):
+        if counter.show and counter.name in view.counters:
+            value = view.counters[counter.name]
+            text = f"{counter.label or counter.name} {value:g}" + (f"/{counter.goal:g}" if counter.goal else "")
+            shadowed(picture, font, text, (middle, y), HIGHLIGHT, center=True)
+            y += 18
     if view.message and view.message_left > 0:
         shadowed(picture, big, view.message, (middle, HEIGHT // 2 - 70), HIGHLIGHT, center=True)
     if me_id not in view.alive and view.phase != "over":
@@ -336,6 +345,22 @@ def draw_doors(picture, font, view, me_id, me, level):
     can_pay = door.cost_kind == "free" or have >= door.cost
     text = f"Press E to open {door.label()}" + (f" ({price})" if price else "")
     shadowed(picture, font, text, (WIDTH // 2, HEIGHT // 2 + 84), HIGHLIGHT if can_pay else DANGER, center=True)
+
+
+def draw_interact(picture, font, view, me_id, me, level):
+    """Zombies: beside an interact point, "Press E to <what it does>" (and its price), or in red what is missing."""
+    if not isinstance(view, ZombieView) or me_id not in view.alive or me_id in view.downed:
+        return
+    index = nearest_interact(level, view.used, me.body)
+    if index is None:
+        return
+    interact = level.interacts[index]
+    missing = interact_needs(interact, me.stats, me.inventory) if me.inventory is not None else ""
+    price = ""
+    if interact.cost_kind != "free" and interact.cost > 0:
+        price = f" (${interact.cost:g})" if interact.cost_kind == "money" else f" ({interact.cost:g} score)"
+    text = f"Needs {missing} to {interact.label()}" if missing else f"Press E to {interact.label()}{price}"
+    shadowed(picture, font, text, (WIDTH // 2, HEIGHT // 2 + 104), DANGER if missing else HIGHLIGHT, center=True)
 
 
 def draw_respawn(picture, font, view, me_id, watching=None):

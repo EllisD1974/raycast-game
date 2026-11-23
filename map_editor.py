@@ -232,6 +232,7 @@ from gunpreview import GunPreview
 from projectiles import MUZZLE
 from particles import UP, ParticleSystem, placement
 from preview import Preview
+from trigger_editor import LogicEditor
 from version import label as version_label
 from window import maximize
 
@@ -352,11 +353,12 @@ ELEVATION_STEP = 0.05                           # [ / ] and the Elevation row mo
 SPAWN_FILL, SPAWN_EDGE = (90, 170, 255), (15, 40, 90)   # a spawn point on the map
 MOUNT_ZONE = 0.3                                # an item clicked this close (in cells) to a walled side hangs on it
 TOOLS = {"paint": "B", "erase": "E", "fill": "F", "pick": "I", "start": "S", "spawn": "O", "stairs": "T",
-         "shape": "H", "select": "M", "camera": "C", "entity": "N", "barricade": "U", "door": "D"}
+         "shape": "H", "select": "M", "camera": "C", "entity": "N", "barricade": "U", "door": "D",
+         "interact": "Q"}
 TOOL_KEYS = {pygame.K_b: "paint", pygame.K_e: "erase", pygame.K_f: "fill",
              pygame.K_i: "pick", pygame.K_s: "start", pygame.K_o: "spawn", pygame.K_t: "stairs", pygame.K_h: "shape",
              pygame.K_m: "select", pygame.K_c: "camera", pygame.K_n: "entity", pygame.K_u: "barricade",
-             pygame.K_d: "door"}
+             pygame.K_d: "door", pygame.K_q: "interact"}
 SHAPES = {"line": "Line", "box": "Box", "filled_box": "Filled box", "ellipse": "Ellipse",
           "filled_ellipse": "Filled ellipse"}           # what the Shape tool draws, and its button
 ENTITY_MODE_COLORS = {"once": (255, 255, 255), "respawn": (90, 210, 255), "persistent": (110, 230, 120),
@@ -544,7 +546,7 @@ def remember_map(path, settings=SETTINGS_PATH):
         pass
 
 
-class Editor:
+class Editor(LogicEditor):
     def __init__(self, path, settings=None):
         """Edit the map at `path` (a blank one if the file is not there yet). `settings` is the file to remember
         the map being edited in (see last_map), or None not to remember it."""
@@ -620,6 +622,7 @@ class Editor:
         self.barricade_selected = None          # index in level.barricades of the one being edited (Barricade tool)
         self.place_barricade_kind = ""          # the saved barricade type the Barricade tool places ("": plain)
         self.door_selected = None               # index in level.doors of the door being edited (Door tool)
+        self.init_logic_editor()                # the Interact tool and the Triggers section (trigger_editor.py)
         self.door_drag = None                   # (start cell, current cell) while a new door is dragged out
         self.place_door_kind = ""               # the saved door type the Door tool places ("": plain)
         self.curve_shown = "zombie_count"       # the curve the Waves card shows (CURVE_TABS)
@@ -762,8 +765,10 @@ class Editor:
         return None
 
     def section_open(self):
-        """True while a section (Guns, Prefabs, Effects, Lights, Map settings) is showing in place of the map."""
-        return self.guns_mode or self.prefabs_mode or self.effects_mode or self.lights_mode or self.settings_mode
+        """True while a section (Guns, Prefabs, Effects, Lights, Map settings, Triggers) is showing in place of the
+        map."""
+        return (self.guns_mode or self.prefabs_mode or self.effects_mode or self.lights_mode or self.settings_mode
+                or self.triggers_mode)
 
     def selected_prefab(self):
         """The prefab being edited in the Prefabs section, or None."""
@@ -811,7 +816,7 @@ class Editor:
         chosen = (self.selected_entity() or self.selected_gun() or self.selected_ammo() or self.selected_prefab()
                   or self.selected_effect() or self.selected_light() or (self.ambient_chosen() or None)
                   or self.selected_buy_item() or self.selected_enemy() or self.selected_barricade()
-                  or self.selected_door()
+                  or self.selected_door() or self.logic_chosen()
                   or (self.settings_row() or None))
         if (chosen is None and not self.palette_active() and not self.barricade_palette_active()
                 and not self.door_palette_active()):
@@ -849,6 +854,9 @@ class Editor:
         door = self.selected_door()
         if door is not None:
             return self.door_fields(door)
+        logic = self.logic_fields()
+        if logic is not None:
+            return logic
         light = self.selected_light()
         if light is not None:
             return self.light_fields(light)
@@ -1930,7 +1938,8 @@ class Editor:
 
     def deselect(self):
         self.selected, self.field_edit, self.menu_open = None, None, None
-        self.barricade_selected = self.door_selected = None
+        self.barricade_selected = self.door_selected = self.interact_selected = None
+        self.triggers_selected = None
         self.gun_selected = self.ammo_selected = self.prefab_selected = self.effect_selected = None
         self.light_selected = self.settings_selected = None
 
@@ -1940,6 +1949,8 @@ class Editor:
             return
         if self.selected_door() is not None:
             self.delete_door(self.door_selected)
+            return
+        if self.delete_logic():
             return
         if self.selected_barricade() is not None:
             self.begin_edit()
@@ -2033,6 +2044,8 @@ class Editor:
             return "Delete barricade"
         if self.selected_door() is not None:
             return "Delete door"
+        if self.logic_delete_label() is not None:
+            return self.logic_delete_label()
         if self.settings_row() is not None:
             return ""
         if self.selected_light() is not None:
@@ -2132,7 +2145,7 @@ class Editor:
             row1.append(("btn", "Del", "delfloor"))
         row1.append(("txt", f"floor {self.floor + 1} of {count}", DIM))
         row1 += [None, ("btn", "Guns(G)", "guns"), ("btn", "Prefabs(P)", "prefabs"), ("btn", "Effects(X)", "effects"), ("btn", "Lights(L)", "lights"),
-                 ("btn", "Map settings(J)", "mapsettings"),
+                 ("btn", "Map settings(J)", "mapsettings"), ("btn", "Triggers(Y)", "triggers"),
                  ("btn", "Key(K)", "legend"), ("btn", "3D(V)", "preview"),
                  ("btn", "Reload tex(F6)", "textures")]
         if self.show_preview:
@@ -2177,6 +2190,9 @@ class Editor:
                        if self.spawn_team == ENEMY_SPAWN and self.level.doors else []),
                      ("txt", f"{len(self.level.spawners)} spawn point{'s' if len(self.level.spawners) != 1 else ''}"
                              " (0 is used first)", DIM)]
+        if self.tool == "interact":
+            row2 += [None, ("txt", "Click an open cell to place an interact point (a button, a generator...), click one "
+                                   "to edit it; right-click removes one. Triggers(Y) say what using it does", DIM)]
         if self.tool == "door":
             row2 += [None, ("txt", "Drag across cells to make a door (a wall until it is opened), click one to edit it; "
                                    "right-click removes one", DIM)]
@@ -2630,6 +2646,9 @@ class Editor:
         if self.tool == "barricade":
             (self.remove_barricade if button == 3 else self.place_barricade)(cell)
             return
+        if self.tool == "interact":
+            (self.remove_interact if button == 3 else self.place_interact)(cell)
+            return
         if self.tool == "door":
             found = self.level.door_at(*cell) if self.level.in_bounds(*cell) else None
             if button == 3:
@@ -2999,6 +3018,7 @@ class Editor:
             return
         self.begin_edit()
         if name == "name":
+            self.level.rename_reference("door", door.name, value)
             for s in self.level.spawners:
                 if s.door == door.name:
                     s.door = value
@@ -3474,6 +3494,9 @@ class Editor:
             else:
                 self.say("Select a gun or an ammo type first (or add one), then click a tile")
             return
+        if self.selected_interact() is not None:       # the selected interact point's picture
+            self.set_interact("tile", min(picked))
+            return
         if self.selected_door() is not None:           # what the selected door looks like
             self.set_door("tile", min(picked))
             self.say(f"Door: tile {min(picked) + 1}")
@@ -3575,9 +3598,13 @@ class Editor:
             self.confirm = None
         if action != "dropdown":
             self.dropdown_open = False
+        if action in ("lights", "effects", "guns", "prefabs", "mapsettings") or action.startswith("tool:"):
+            self.triggers_mode = False
         if action in ("lights", "effects", "guns", "prefabs"):
             self.settings_mode = False
-        if action == "mapsettings":
+        if action == "triggers":
+            self.toggle_triggers()
+        elif action == "mapsettings":
             self.settings_mode = not self.settings_mode
             self.guns_mode = self.prefabs_mode = self.effects_mode = self.lights_mode = False
             self.deselect()
@@ -4140,6 +4167,8 @@ class Editor:
             self.do("lights")
         elif e.key == pygame.K_j:
             self.do("mapsettings")
+        elif e.key == pygame.K_y and not ctrl:
+            self.do("triggers")
         elif e.key == pygame.K_v:
             self.do("preview")
         elif e.key in LAYER_KEYS:
@@ -4238,6 +4267,9 @@ class Editor:
             elif self.lights_mode:
                 if e.button == 1:
                     self.lights_click(e.pos)
+            elif self.triggers_mode:
+                if e.button == 1:
+                    self.triggers_click(e.pos)
             elif self.settings_mode:
                 if e.button in (1, 3) and self.curve_press(e.pos, e.button):
                     pass
@@ -4373,6 +4405,8 @@ class Editor:
             self.draw_lights(screen)
         elif self.settings_mode:
             self.draw_settings(screen)
+        elif self.triggers_mode:
+            self.draw_triggers(screen)
         else:
             self.draw_map(screen)
         self.draw_panel(screen)
@@ -4538,6 +4572,7 @@ class Editor:
         self.draw_spawners(screen)
         self.draw_barricades(screen)
         self.draw_doors(screen)
+        self.draw_interacts(screen)
         self.draw_start(screen)
         self.draw_camera(screen)
         self.draw_cursor(screen, area)
@@ -5036,7 +5071,7 @@ class Editor:
 
     # ---------------------------------------------------------------- scrolling, and text cut short to fit
 
-    SCROLLED_SECTIONS = ("guns", "prefabs", "effects", "lights", "settings")
+    SCROLLED_SECTIONS = ("guns", "prefabs", "effects", "lights", "settings", "triggers")
 
     def section_name(self):
         """Which scrolling section is showing in place of the map, or None."""
@@ -5048,6 +5083,8 @@ class Editor:
             return self.guns_content_bottom()
         if name == "settings":
             return self.settings_content_bottom()
+        if name == "triggers":
+            return self.triggers_content_bottom()
         add = {"prefabs": self.prefab_rows, "effects": self.effect_rows, "lights": self.light_rows}[name]()[-1]
         bottom = add.bottom + 40
         card = self.section_card(name)
@@ -6163,6 +6200,8 @@ class Editor:
             return "Barricade", notes
         if self.selected_door() is not None:
             return "Door", notes
+        if self.logic_text() is not None:
+            return self.logic_text()
         if self.door_palette_active():
             return "Door to place", ("Drag across cells to make a door of what", "is picked here. Select a door and Save",
                                      "as a type to place more like it; Import", "brings types in from other maps.",
@@ -6661,7 +6700,7 @@ class Editor:
             active = action in (f"tool:{self.tool}", f"layer:{self.layer}", f"shape:{self.shape}") \
                 or (action == "legend" and self.show_legend) or (action == "guns" and self.guns_mode) \
                 or (action == "prefabs" and self.prefabs_mode) or (action == "effects" and self.effects_mode) or (action == "lights" and self.lights_mode) \
-                or (action == "mapsettings" and self.settings_mode)
+                or (action == "mapsettings" and self.settings_mode) or (action == "triggers" and self.triggers_mode)
             color = BUTTON_ON if active else (BUTTON_HOT if rect.collidepoint(self.mouse) else BUTTON)
             pygame.draw.rect(screen, color, rect, border_radius=4)
             text = self.font.render(label, True, TEXT)

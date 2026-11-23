@@ -348,6 +348,174 @@ class Enemy:
                    **clamped_numbers(cls, data, ENEMY_NUMBERS))
 
 
+# --------------------------------------------------------------------------- zombies: interact points and triggers
+
+MAX_INTERACTS = 64
+MAX_TRIGGERS = 128
+MAX_COUNTERS = 32
+MAX_CONDITIONS = 8
+MAX_ACTIONS = 16
+MAX_TEXT = 60                                   # characters in a trigger's message or an event's name
+
+
+def text_field(data, key, default="", length=MAX_NAME):
+    value = data.get(key, default)
+    return str(value)[:length] if isinstance(value, (str, int, float)) and not isinstance(value, bool) else default
+
+
+def number_field(data, key, default, low, high):
+    value = data.get(key, default)
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return default
+    return max(low, min(high, float(value)))
+
+
+@dataclass
+class Interact:
+    """A place in zombies mode a player uses by pressing the use key (E) beside it: a button, a lever, a generator.
+    Using it fires the event "used:<name>" for triggers (see Trigger).
+
+    x, y, span    where it is (the middle of a cell, on floor span)
+    prompt        what the HUD calls it ("Press E to <prompt>"; "" for "use <name>")
+    cost, cost_kind   what using it costs: money, score, or free
+    needs, needs_amount   an inventory item the player must carry that many of to use it ("" for none) ...
+    consume       ... taken from them when they do
+    once          it can be used once a game (it then disappears)
+    tile, size    the atlas tile it is drawn with (-1 for nothing), and how big, in cells"""
+    name: str = "Button"
+    x: float = 0.5
+    y: float = 0.5
+    span: int = 0
+    prompt: str = ""
+    cost: float = 0.0
+    cost_kind: str = "free"
+    needs: str = ""
+    needs_amount: float = 1.0
+    consume: bool = True
+    once: bool = False
+    tile: int = -1
+    size: float = 0.5
+
+    def label(self):
+        return self.prompt or f"use {self.name}"
+
+    @classmethod
+    def from_dict(cls, data):
+        return cls(text_field(data, "name", "Button") or "Button", float(data["x"]), float(data["y"]),
+                   max(0, int(data.get("span", 0))), text_field(data, "prompt", "", MAX_TEXT),
+                   number_field(data, "cost", 0.0, 0.0, 1000000.0),
+                   data.get("cost_kind") if data.get("cost_kind") in ("free", "money", "score") else "free",
+                   text_field(data, "needs"), number_field(data, "needs_amount", 1.0, 1.0, 1000.0),
+                   bool(data.get("consume", True)), bool(data.get("once", False)),
+                   int(number_field(data, "tile", -1, -1, 255)), number_field(data, "size", 0.5, 0.1, 3.0))
+
+
+@dataclass
+class Counter:
+    """A number zombies mode keeps through a game, that triggers add to and test (fuses found, switches on).
+
+    start      what it is when a game starts
+    goal       what it is counting up to (0: none), shown as "label 2/4"
+    show       whether the HUD shows it
+    label      what the HUD calls it ("" for its name)"""
+    name: str = "Counter"
+    start: float = 0.0
+    goal: float = 0.0
+    show: bool = True
+    label: str = ""
+
+    @classmethod
+    def from_dict(cls, data):
+        return cls(text_field(data, "name", "Counter") or "Counter", number_field(data, "start", 0.0, -1e6, 1e6),
+                   number_field(data, "goal", 0.0, 0.0, 1e6), bool(data.get("show", True)),
+                   text_field(data, "label", "", MAX_TEXT))
+
+
+CONDITION_KINDS = ("counter_at_least", "counter_below", "round_at_least", "player_has", "team_has", "door_open",
+                   "door_closed")
+CONDITION_LABELS = {"counter_at_least": "Counter at least", "counter_below": "Counter below",
+                    "round_at_least": "Round at least", "player_has": "The player carries",
+                    "team_has": "The team carries", "door_open": "Door open", "door_closed": "Door closed"}
+
+
+@dataclass
+class Condition:
+    """One of a trigger's conditions: kind (CONDITION_KINDS) about `name` (a counter, an inventory item or a door)
+    and `amount` (the number reached, round, or how many of the item)."""
+    kind: str = "counter_at_least"
+    name: str = ""
+    amount: float = 1.0
+
+    @classmethod
+    def from_dict(cls, data):
+        return cls(data.get("kind") if data.get("kind") in CONDITION_KINDS else "counter_at_least",
+                   text_field(data, "name"), number_field(data, "amount", 1.0, -1e6, 1e6))
+
+
+ACTION_KINDS = ("open_door", "close_door", "add_counter", "set_counter", "give_money", "give_score", "give_item",
+                "take_item", "message", "effect", "light", "spawn_enemies", "event", "win")
+ACTION_LABELS = {"open_door": "Open a door", "close_door": "Close a door", "add_counter": "Add to a counter",
+                 "set_counter": "Set a counter", "give_money": "Give money", "give_score": "Give score",
+                 "give_item": "Give an item", "take_item": "Take an item", "message": "Show a message",
+                 "effect": "Play an effect", "light": "Flash a light", "spawn_enemies": "Send enemies now",
+                 "event": "Fire an event", "win": "Win the game"}
+ACTION_WHO = ("player", "everyone")
+ACTION_WHO_LABELS = {"player": "The player who set it off", "everyone": "Everyone"}
+
+
+@dataclass
+class Action:
+    """One of a trigger's actions (ACTION_KINDS): `name` is the door, counter, item, effect, light, kind of enemy
+    ("" any) or event it is about; `amount` how much (negative takes away); `text` a message (or the winning one);
+    `who` gets it: the player who set the trigger off, or everyone; `at` is the interact point an effect or light
+    plays at ("" for where the player is)."""
+    kind: str = "message"
+    name: str = ""
+    amount: float = 1.0
+    text: str = ""
+    who: str = "player"
+    at: str = ""
+
+    @classmethod
+    def from_dict(cls, data):
+        return cls(data.get("kind") if data.get("kind") in ACTION_KINDS else "message", text_field(data, "name"),
+                   number_field(data, "amount", 1.0, -1e6, 1e6), text_field(data, "text", "", MAX_TEXT),
+                   data.get("who") if data.get("who") in ACTION_WHO else "player", text_field(data, "at"))
+
+
+@dataclass
+class Trigger:
+    """When the event `on` happens and every condition holds, run the actions in order (zombies mode). Events:
+    "game_start", "round_start", "used:<interact>", "picked:<item>", "door:<door>" (opened), "counter:<counter>"
+    (changed), or any name an "event" action fires. `once`: only the first time in a game."""
+    name: str = "Trigger"
+    on: str = "game_start"
+    conditions: list = field(default_factory=list)
+    actions: list = field(default_factory=list)
+    once: bool = False
+
+    def clone(self):
+        return replace(self, conditions=[replace(c) for c in self.conditions],
+                       actions=[replace(a) for a in self.actions])
+
+    @classmethod
+    def from_dict(cls, data):
+        conditions, actions = data.get("conditions"), data.get("actions")
+        return cls(text_field(data, "name", "Trigger") or "Trigger", text_field(data, "on", "game_start", MAX_TEXT),
+                   [Condition.from_dict(c) for c in conditions if isinstance(c, dict)][:MAX_CONDITIONS]
+                   if isinstance(conditions, list) else [],
+                   [Action.from_dict(a) for a in actions if isinstance(a, dict)][:MAX_ACTIONS]
+                   if isinstance(actions, list) else [],
+                   bool(data.get("once", False)))
+
+
+def pickup_name(entity):
+    """The name an item's pickup event is about ("picked:<name>"): its inventory item, else its prefab or own name."""
+    if entity.effect == "item" and entity.item:
+        return entity.item
+    return entity.prefab or entity.name
+
+
 REWARD_KINDS = ("money", "score")
 REWARD_KIND_LABELS = {"money": "Money", "score": "Score"}
 BARRICADE_TILE = 2                              # the atlas's wood (make_atlas.py): what boards look like by default
@@ -1282,8 +1450,11 @@ class Level:
     def __init__(self, grids, start_x=1.5, start_y=1.5, start_angle=0.0, start_span=0, names=None,
                  entities=None, guns=None, ammo_types=None, prefabs=None, effects=None, lights=None, ambient=1.0,
                  spawners=None, settings=None, enemies=None, barricades=None, barricade_kinds=None, doors=None,
-                 door_kinds=None):
+                 door_kinds=None, interacts=None, counters=None, triggers=None):
         self.grids = grids
+        self.interacts = list(interacts or [])      # places players use with E (see Interact; zombies mode)
+        self.counters = list(counters or [])        # numbers kept through a game (see Counter)
+        self.triggers = list(triggers or [])        # what happens when (see Trigger)
         self.door_kinds = list(door_kinds or [])    # saved doors to place more of (DoorKind)
         self.doors = list(doors or [])              # doors that open during a game (see Door; zombies mode)
         self.barricade_kinds = list(barricade_kinds or [])     # saved barricades to place more of (BarricadeKind)
@@ -1328,10 +1499,41 @@ class Level:
                      [replace(s) for s in self.spawners], self.settings.copy(), [e.clone() for e in self.enemies],
                      [replace(b, stages=list(b.stages)) for b in self.barricades],
                      [k.clone() for k in self.barricade_kinds], [replace(d) for d in self.doors],
-                     [k.clone() for k in self.door_kinds])
+                     [k.clone() for k in self.door_kinds], [replace(i) for i in self.interacts],
+                     [replace(c) for c in self.counters], [t.clone() for t in self.triggers])
 
     def door_named(self, name):
         return next((d for d in self.doors if d.name == name), None)
+
+    def interact_named(self, name):
+        return next((i for i in self.interacts if i.name == name), None)
+
+    def counter_named(self, name):
+        return next((c for c in self.counters if c.name == name), None)
+
+    def rename_reference(self, kind, old, new):
+        """Something a trigger can name was renamed: "door", "interact", "counter", "item" or "event". Every
+        trigger's event, conditions and actions that named it name the new one ("" for deleted: those keep the old
+        name, which no longer matches anything)."""
+        events = {"door": "door:", "interact": "used:", "counter": "counter:", "item": "picked:", "event": ""}
+        about = {"door": ("door_open", "door_closed", "open_door", "close_door"),
+                 "counter": ("counter_at_least", "counter_below", "add_counter", "set_counter"),
+                 "item": ("player_has", "team_has", "give_item", "take_item"), "event": ("event",), "interact": ()}
+        if not new:
+            return
+        for trigger in self.triggers:
+            if trigger.on == events[kind] + old:
+                trigger.on = events[kind] + new
+            for thing in trigger.conditions + trigger.actions:
+                if thing.kind in about[kind] and thing.name == old:
+                    thing.name = new
+            for action in trigger.actions:
+                if kind == "interact" and action.at == old:
+                    action.at = new
+        if kind == "item":
+            for interact in self.interacts:
+                if interact.needs == old:
+                    interact.needs = new
 
     def door_kind_named(self, name):
         return next((k for k in self.door_kinds if k.name == name), None)
@@ -1719,6 +1921,7 @@ class Level:
         self.barricades = [b for b in self.barricades if b.x < width and b.y < height]
         self.doors = [replace(d, width=min(d.width, width - d.x), height=min(d.height, height - d.y))
                       for d in self.doors if d.x < width and d.y < height]
+        self.interacts = [i for i in self.interacts if i.x < width and i.y < height]
 
     def resize_edges(self, left=0, right=0, top=0, bottom=0):
         """Add (positive) or remove (negative) columns and rows along each side, keeping the cells
@@ -1744,6 +1947,8 @@ class Level:
                          if 0 <= s.x + left < width and 0 <= s.y + top < height]
         self.barricades = [replace(b, x=b.x + left, y=b.y + top) for b in self.barricades
                            if 0 <= b.x + left < width and 0 <= b.y + top < height]
+        self.interacts = [replace(i, x=i.x + left, y=i.y + top) for i in self.interacts
+                          if 0 <= i.x + left < width and 0 <= i.y + top < height]
         self.doors = [replace(d, x=d.x + left, y=d.y + top) for d in self.doors
                       if 0 <= d.x + left and d.x + left + d.width <= width
                       and 0 <= d.y + top and d.y + top + d.height <= height]
@@ -2014,6 +2219,18 @@ def parse_level(data, label="level"):
             enemy = Enemy.from_dict(item)
             if level.enemy_named(enemy.name) is None:
                 level.enemies.append(enemy)
+    for key, cls, most, named in (("interacts", Interact, MAX_INTERACTS, "interact_named"),
+                                  ("counters", Counter, MAX_COUNTERS, "counter_named")):
+        for item in data.get(key, []):
+            try:
+                thing = cls.from_dict(item)
+            except (KeyError, TypeError, ValueError, AttributeError):
+                continue
+            if len(getattr(level, key)) < most and getattr(level, named)(thing.name) is None:
+                getattr(level, key).append(thing)
+    for item in data.get("triggers", []):
+        if isinstance(item, dict) and len(level.triggers) < MAX_TRIGGERS:
+            level.triggers.append(Trigger.from_dict(item))
     for item in data.get("door_kinds", []):
         if isinstance(item, dict):
             kind = DoorKind.from_dict(item)
@@ -2087,6 +2304,12 @@ def level_text(level):
            if level.prefabs else "")
         + ('  "enemies": [\n' + ",\n".join("    " + json.dumps(asdict(e)) for e in level.enemies) + "\n  ],\n"
            if level.enemies else "")
+        + ('  "interacts": [\n' + ",\n".join("    " + json.dumps(asdict(i)) for i in level.interacts) + "\n  ],\n"
+           if level.interacts else "")
+        + ('  "counters": [\n' + ",\n".join("    " + json.dumps(asdict(c)) for c in level.counters) + "\n  ],\n"
+           if level.counters else "")
+        + ('  "triggers": [\n' + ",\n".join("    " + json.dumps(asdict(t)) for t in level.triggers) + "\n  ],\n"
+           if level.triggers else "")
         + ('  "door_kinds": [\n' + ",\n".join("    " + json.dumps(asdict(k)) for k in level.door_kinds)
            + "\n  ],\n" if level.door_kinds else "")
         + ('  "doors": [\n' + ",\n".join("    " + json.dumps(asdict(d)) for d in level.doors) + "\n  ],\n"

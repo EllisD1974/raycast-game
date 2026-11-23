@@ -40,7 +40,8 @@ from buymenu import BuyMenu
 from character import character_tiles, sheet_tiles
 from constants import FPS_CAP, HEIGHT, MOUSE_SENSITIVITY, TURN_SPEED, WIDTH
 from game import NO_TEAM, Events, Game, Inputs, next_watch
-from hud import draw_doors, draw_downed, draw_hud, draw_offer, draw_hurt, draw_names, draw_rebuild, draw_round, hurt_flash
+from hud import (draw_doors, draw_downed, draw_hud, draw_hurt, draw_interact, draw_names, draw_offer, draw_rebuild,
+                 draw_round, hurt_flash)
 from home import Home
 from mapfile import KOTH_NAMES, MAP_PATH, TEAM_TITLES, load_or_default
 from menu import DIM, GameSettings, Menu
@@ -570,6 +571,7 @@ def play(screen, clock, graphics, settings, session, map_path, from_home=False):
             draw_downed(picture, font, big_font, graphics.renderer, camera, view, session.id, me, session.level)
             draw_rebuild(picture, font, view, session.id, me, session.level)
             draw_doors(picture, font, view, session.id, me, session.level)
+            draw_interact(picture, font, view, session.id, me, session.level)
             draw_offer(picture, font, session.items, view, session.id, me)
         overlay = None
         if menu.open or buy.open:
