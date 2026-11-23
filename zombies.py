@@ -465,10 +465,14 @@ class ZombieRound:
         return True
 
     def picked(self, pid, entity):
-        """A player picked up (or bought) an item: its pickup event."""
+        """A player picked up (or bought) an item: its pickup event, and for an "Add to a counter" item its amount
+        added to its counter (if the map has that counter)."""
         name = pickup_name(entity)
         if name:
             self.logic.fire(f"picked:{name}", pid)
+        if entity.effect == "counter" and self.game.level.counter_named(entity.counter) is not None:
+            value = self.logic.counters.get(entity.counter, 0.0) + entity.amount
+            self.logic.set_counter(entity.counter, value, pid)
 
     def send_enemies(self, count, kind_name=""):
         """A trigger sends `count` more enemies into this round, of the kind named (any kind for "" or a name the map

@@ -956,7 +956,8 @@ class Editor(LogicEditor):
         """What an item gives, in words: 'Give a gun: Shotgun', 'Health: +25', 'Give ammo: 24 9mm rounds'..."""
         label = EFFECT_LABELS[e.effect]
         detail = {"score": f"+{e.amount:g}", "health": f"+{e.amount:g}", "item": f"{e.amount:g} x {e.item or 'Item'}",
-                  "gun": e.gun or "(no gun)", "ammo": f"{e.amount:g} {e.ammo or 'default'} rounds"}.get(e.effect)
+                  "gun": e.gun or "(no gun)", "ammo": f"{e.amount:g} {e.ammo or 'default'} rounds",
+                  "counter": f"{e.counter or '(none)'} {e.amount:+g}"}.get(e.effect)
         return f"{label}: {detail}" if detail else label
 
     def edit_prefab(self, name):
@@ -980,7 +981,9 @@ class Editor(LogicEditor):
         fields = [field("name", "Name", "text")] if is_prefab else             self.placement_fields(e) + [Field("item_settings", "Item settings", "header", None, None)]
         fields += [field("tile", "Icon" if is_prefab else "Sprite", "tile", low=0, high=len(self.tiles) - 1),
                    field("mode", "Mode", "enum", choices=ENTITY_MODES, labels=MODE_LABELS),
-                   field("effect", "Effect", "enum", choices=ENTITY_EFFECTS, labels=EFFECT_LABELS)]
+                   field("effect", "Effect", "enum", labels=EFFECT_LABELS,
+                         choices=tuple(k for k in ENTITY_EFFECTS          # (counters: on maps that have them)
+                                       if k != "counter" or self.level.counters or e.effect == "counter"))]
         if e.effect == "item":
             fields.append(field("item", "Item name", "text"))
         if e.effect == "gun":
@@ -991,10 +994,16 @@ class Editor(LogicEditor):
             names = ("",) + tuple(a.name for a in self.level.ammo_types)
             fields.append(field("ammo", "Ammo type", "enum", choices=names,
                                 labels={"": "(default bullet)", **{n: n for n in names}}))
-        if e.effect in ("score", "health", "item", "ammo"):
-            step = {"score": 5.0, "health": 5.0, "item": 1.0, "ammo": 6.0}[e.effect]
+        if e.effect == "counter":
+            counters = ("",) + tuple(c.name for c in self.level.counters)
+            if e.counter not in counters:
+                counters += (e.counter,)
+            fields.append(field("counter", "Counter", "enum", choices=counters,
+                                labels={"": "(none: add one in Triggers, Y)", **{n: n for n in counters if n}}))
+        if e.effect in ("score", "health", "item", "ammo", "counter"):
+            step = {"score": 5.0, "health": 5.0, "item": 1.0, "ammo": 6.0, "counter": 1.0}[e.effect]
             fields.append(field("amount", "Amount" if e.effect != "ammo" else "Rounds", "num", step=step,
-                                low=0.0, high=1000.0))
+                                low=-1000.0 if e.effect == "counter" else 0.0, high=1000.0))
         if e.mode == "respawn":
             fields.append(field("respawn", "Respawn", "num", step=1.0, low=0.0, high=600.0, unit="s"))
         if e.mode != "scenery":
@@ -1144,7 +1153,10 @@ class Editor(LogicEditor):
         for t in targets:
             setattr(t, name, value)
             if name == "effect" and not (old in ("score", "health") and value in ("score", "health")):
-                t.amount = {"score": 10.0, "health": 25.0, "item": 1.0, "gun": 1.0, "ammo": 24.0}.get(value, t.amount)
+                t.amount = {"score": 10.0, "health": 25.0, "item": 1.0, "gun": 1.0, "ammo": 24.0,
+                            "counter": 1.0}.get(value, t.amount)
+                if value == "counter" and not t.counter and self.level.counters:
+                    t.counter = self.level.counters[0].name
             if name == "item":
                 t.item = str(value).strip()[:MAX_NAME]
         if is_prefab:

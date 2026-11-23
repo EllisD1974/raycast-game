@@ -47,6 +47,8 @@ def describe(entity):
         return f"Picked up {entity.gun or 'a gun'}"
     if entity.effect == "ammo":
         return f"+{amount} {entity.ammo or 'Bullet'} ammo"
+    if entity.effect == "counter":
+        return f"{entity.counter or 'Counter'} {entity.amount:+g}"
     return "Picked up"
 
 

@@ -79,11 +79,12 @@ _UPPER_DEFAULTS = {"floor_tex": 3, "ceil_tex": 6, "floor_h": 0.0, "ceil_h": 0.0,
 
 ENTITY_MODES = ("once", "respawn", "persistent", "scenery")
 PREFAB_FIELDS = ("tile", "mode", "effect", "amount", "respawn", "size", "lift", "item", "gun", "ammo", "price",
-                 "shown", "emits", "emits_override", "emits_offset_x", "emits_offset_y", "emits_offset_z", "light")
-ENTITY_EFFECTS = ("none", "score", "health", "item", "gun", "ammo")
+                 "shown", "emits", "emits_override", "emits_offset_x", "emits_offset_y", "emits_offset_z", "light",
+                 "counter")
+ENTITY_EFFECTS = ("none", "score", "health", "item", "gun", "ammo", "counter")
 MODE_LABELS = {"once": "Pick up once", "respawn": "Respawns", "persistent": "Stays", "scenery": "Scenery"}
 EFFECT_LABELS = {"none": "None", "score": "Score", "health": "Health", "item": "Inventory item",
-                 "gun": "Give a gun", "ammo": "Give ammo"}
+                 "gun": "Give a gun", "ammo": "Give ammo", "counter": "Add to a counter"}
 GUN_MODES = ("single", "semi", "auto")
 GUN_MODE_LABELS = {"single": "Single shot", "semi": "Semi-auto", "auto": "Full auto"}
 SHOT_TYPES = ("single", "multi", "projectile")
@@ -1074,6 +1075,7 @@ class Entity:
     emits_offset_y: float = 0.0
     emits_offset_z: float = 0.0
     light: str = ""                 # the light it gives off
+    counter: str = ""               # effect "counter" (zombies): the Counter it adds amount to (negative: takes)
     name: str = ""                  # a prefab's name (an item placed in the map has none)
     prefab: str = ""                # the prefab this item is an instance of ("" for a plain item)
     wall: str = ""                  # the side of its cell whose wall it hangs on ("" for none)
@@ -1102,6 +1104,7 @@ class Entity:
                        item=str(data.get("item", ""))[:MAX_NAME], gun=str(data.get("gun", ""))[:MAX_NAME],
                        ammo=str(data.get("ammo", ""))[:MAX_NAME],
                        price=max(0.0, min(MAX_MONEY, float(data.get("price", 0.0)))),
+                       counter=str(data.get("counter", ""))[:MAX_NAME],
                        shown=bool(data.get("shown", base.shown)), emits=str(data.get("emits", ""))[:MAX_NAME],
                        emits_override=bool(data.get("emits_override", False)),
                        emits_offset_x=float(data.get("emits_offset_x", 0.0)),
@@ -1538,6 +1541,10 @@ class Level:
             for interact in self.interacts:
                 if interact.needs == old:
                     interact.needs = new
+        if kind == "counter":
+            for thing in self.entities + self.prefabs:
+                if thing.counter == old:
+                    thing.counter = new
 
     def door_kind_named(self, name):
         return next((k for k in self.door_kinds if k.name == name), None)

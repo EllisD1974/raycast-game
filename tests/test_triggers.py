@@ -444,3 +444,78 @@ def test_in_waves_is_saved_and_the_editor_hides_the_wave_settings(ed):
     assert [i for _rect, i in ed.curve_layout(ed.waves_card_rect())[2]] == [0]
     ed.set_enemy("in_waves", True)
     assert "max_per_round" in keys(ed)
+
+
+# ------------------------------------------------------------------ items that add to a counter
+
+def test_picking_up_an_item_adds_to_its_counter_and_sets_off_the_counters_triggers():
+    parts = [Entity(2.5 + i * 2, 9.5, effect="counter", counter="parts", amount=1, mode="once")
+             for i in range(3)]
+    game = logic_game(entities=parts, counters=[Counter("parts", goal=3)],
+                      triggers=[Trigger("all", "counter:parts", [Condition("counter_at_least", "parts", 3)],
+                                        [Action("message", text="All parts!", who="everyone")])])
+    me = game.players[0]
+    for part in parts:
+        place(me.body, part.x, part.y)
+        play(game, 2 * DT)
+    assert game.round.logic.counters["parts"] == 3 and game.round.message == "All parts!"
+
+
+def test_copies_of_a_prefab_add_to_its_counter_and_a_bought_one_counts_too():
+    level_prefab = Entity(0, 0, name="Part", effect="counter", counter="parts", amount=2, mode="once")
+    copy = Entity(4.5, 9.5, prefab="Part")
+    bought = Entity(8.5, 9.5, effect="counter", counter="parts", amount=5, price=100, mode="once")
+    game = logic_game(entities=[copy, bought], counters=[Counter("parts")], start_money=100)
+    game.level.prefabs = [level_prefab]
+    game.level.apply_prefabs()
+    assert game.level.entities[0].counter == "parts"
+    from entities import Entities
+    game.items = Entities(game.level, game.world)
+    me = game.players[0]
+    place(me.body, 4.5, 9.5)
+    play(game, 2 * DT)
+    assert game.round.logic.counters["parts"] == 2
+    place(me.body, 8.5, 9.5)
+    press(game)
+    play(game, DT)
+    assert game.round.logic.counters["parts"] == 7
+
+
+def test_an_item_naming_a_counter_the_map_does_not_have_changes_nothing():
+    game = logic_game(entities=[Entity(4.5, 9.5, effect="counter", counter="gone", mode="once")])
+    place(game.players[0].body, 4.5, 9.5)
+    play(game, 2 * DT)
+    assert game.round.logic.counters == {}
+
+
+def test_the_counter_setting_is_saved_shown_in_the_editor_and_follows_renames(ed):
+    ed.level.counters = [Counter("parts")]
+    ed.level.entities = [Entity(3.5, 3.5, effect="counter", counter="parts", amount=2)]
+    ed.level.prefabs = [Entity(0, 0, name="Part", effect="counter", counter="parts")]
+    again = parse_level(json.loads(level_text(ed.level)))
+    assert again.entities[0].effect == "counter" and again.entities[0].counter == "parts"
+    assert again.entities[0].amount == 2
+    ed.level.entities.append(Entity(5.5, 5.5))
+    ed.do("tool:entity")
+    ed.select_entity(ed.level.entities[1])
+    assert "counter" not in keys(ed)                        # (only for that effect)
+    ed.set_entity("effect", "counter")
+    plain = ed.level.entities[1]
+    assert (plain.counter, plain.amount) == ("parts", 1.0) and {"counter", "amount"} <= set(keys(ed))
+    ed.set_entity("amount", -2)
+    assert plain.amount == -2
+    ed.do("triggers")
+    ed.triggers_selected = ("counter", 0)
+    ed.set_counter("name", "pieces")
+    assert ed.level.entities[0].counter == "pieces" and ed.level.prefabs[0].counter == "pieces"
+
+
+def test_add_to_a_counter_is_offered_only_on_maps_with_counters(ed):
+    ed.level.entities = [Entity(3.5, 3.5)]
+    ed.do("tool:entity")
+    ed.select_entity(ed.level.entities[0])
+    effect = next(r.field for r in ed.details_rows() if r.field.key == "effect")
+    assert "counter" not in effect.choices
+    ed.level.counters = [Counter("parts")]
+    effect = next(r.field for r in ed.details_rows() if r.field.key == "effect")
+    assert "counter" in effect.choices
