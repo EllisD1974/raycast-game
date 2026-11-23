@@ -403,3 +403,44 @@ def test_the_minus_and_plus_of_a_text_row_do_nothing(ed):
     click(ed, row.minus.center)
     assert ed.level.triggers[0].on == "game_start"
     ed.draw(pygame.display.get_surface())
+
+
+# ------------------------------------------------------------------ enemies only triggers send
+
+def test_an_enemy_kept_out_of_the_waves_only_comes_when_a_trigger_sends_it():
+    boss = Enemy(name="Boss", weight=[[1, 100.0]], in_waves=False)
+    game = logic_game(enemies=[Enemy(name="Walker"), boss], zombie_count=[[1, 6]], spawn_interval=0.0,
+                      interacts=[Interact("Alarm", *GEN)],
+                      triggers=[Trigger("boss", "used:Alarm", [], [Action("spawn_enemies", "Boss", 1)])])
+    go_live(game)
+    play(game, 0.5)
+    assert sorted(e.kind for e in game.round.enemies.values()) == [0] * 6       # (its weight does not matter)
+    place(game.players[0].body, 5.5, 6.2)
+    press(game)
+    play(game, 0.5)
+    assert sorted(e.kind for e in game.round.enemies.values()).count(1) == 1
+
+
+def test_a_map_whose_enemies_all_come_from_triggers_has_empty_rounds_until_one_sends_them():
+    game = logic_game(enemies=[Enemy(name="Boss", in_waves=False)], zombie_count=[[1, 6]],
+                      triggers=[Trigger("boss", "round_start", [], [Action("spawn_enemies", "Boss", 2)])])
+    go_live(game)
+    play(game, 0.5)
+    assert sorted(e.kind for e in game.round.enemies.values()) == [0, 0] and game.round.to_spawn == 0
+
+
+def test_in_waves_is_saved_and_the_editor_hides_the_wave_settings(ed):
+    ed.level.enemies = [Enemy(name="Walker"), Enemy(name="Boss", in_waves=False)]
+    again = parse_level(json.loads(level_text(ed.level)))
+    assert [e.in_waves for e in again.enemies] == [True, False]
+    import map_editor
+    ed.do("mapsettings")
+    ed.settings_selected = map_editor.ENEMY_ROW - 1
+    assert "in_waves" in keys(ed) and "max_per_round" not in keys(ed) and "weight0y" not in keys(ed)
+    assert "sent by triggers only" in ed.enemy_summary(ed.level.enemies[1])
+    ed.curve_shown = "weight"
+    assert ed.curve_enemy() == 0                            # (the Enemy mix edits a kind the waves send)
+    ed.draw(pygame.display.get_surface())
+    assert [i for _rect, i in ed.curve_layout(ed.waves_card_rect())[2]] == [0]
+    ed.set_enemy("in_waves", True)
+    assert "max_per_round" in keys(ed)

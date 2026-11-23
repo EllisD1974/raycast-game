@@ -1767,6 +1767,10 @@ class Editor(LogicEditor):
         if len(enemy.attacks) < MAX_ATTACKS:
             fields.append(Field("add_attack", "Add attack", "button", None, None, action=self.add_attack,
                                 text_override="+ Add an attack"))
+        fields.append(field("in_waves", "Comes in", "enum", choices=(True, False),
+                            labels={True: "With the waves", False: "Only when sent (a trigger)"}))
+        if not enemy.in_waves:
+            return fields
         low, high = ENEMY_NUMBERS["max_per_round"]
         fields.append(field("max_per_round", "Most a round (0: any)", "num", step=1, low=low, high=high))
         return fields + self.curve_point_fields("weight")
@@ -1844,7 +1848,8 @@ class Editor(LogicEditor):
     def enemy_summary(self, enemy):
         attacks = ", ".join(f"{a.damage:g} dmg / {a.windup + a.cooldown:g}s" for a in enemy.attacks)
         return (f"health {enemy.health:g}   speed {enemy.speed:g}   {ENEMY_PATHING_LABELS[enemy.pathing].lower()}"
-                f"   attacks: {attacks}   ${enemy.kill_reward:g} a kill")
+                f"   attacks: {attacks}   ${enemy.kill_reward:g} a kill"
+                + ("" if enemy.in_waves else "   sent by triggers only"))
 
     def buy_team_labels(self):
         """Names of the teams a buy menu entry can be for, in this map's game mode."""
@@ -5719,12 +5724,12 @@ class Editor(LogicEditor):
         return pygame.Rect(add.x, add.bottom + 24, min(WAVES_CARD_W, max(260, area.w - 40)), WAVES_CARD_H)
 
     def curve_enemy(self):
-        """The index of the kind of enemy whose weight the Enemy mix tab edits: the one selected, else the first
-        (None when the map has none)."""
+        """The index of the kind of enemy whose weight the Enemy mix tab edits: the one selected, else the first (of
+        those the waves send: None when there are none)."""
         enemy = self.selected_enemy()
-        if enemy is not None:
+        if enemy is not None and enemy.in_waves:
             return self.level.enemies.index(enemy)
-        return 0 if self.level.enemies else None
+        return next((i for i, e in enumerate(self.level.enemies) if e.in_waves), None)
 
     def curve_points(self, name=None):
         """The points of a curve: one of the map's zombies curves, or ("weight") the edited enemy's weight; None if
@@ -5746,6 +5751,8 @@ class Editor(LogicEditor):
         legend, x = [], graph.x
         if self.curve_shown == "weight":
             for i, enemy in enumerate(self.level.enemies):
+                if not enemy.in_waves:
+                    continue                            # (sent by triggers only: no weight)
                 width = self.small.size(enemy.name)[0] + 18
                 if x + width > card.right - 8:
                     break
@@ -5759,7 +5766,7 @@ class Editor(LogicEditor):
         mouse, even above the top), and fits again when it is let go."""
         if self.curve_drag is not None and self.curve_drag_scale is not None:
             return self.curve_drag_scale
-        curves = ([e.weight for e in self.level.enemies] if self.curve_shown == "weight"
+        curves = ([e.weight for e in self.level.enemies if e.in_waves] if self.curve_shown == "weight"
                   else [self.curve_points()])
         curves = [c for c in curves if c]
         last = max([CURVE_MIN_ROUNDS] + [c[-1][0] + 5 for c in curves])
@@ -5900,7 +5907,9 @@ class Editor(LogicEditor):
         pygame.draw.rect(screen, BG, graph)
         points = self.curve_points()
         if points is None:
-            self.blit_fitted(screen, self.small, "No enemies yet: add one under Enemies", DIM,
+            empty = ("No enemies yet: add one under Enemies" if not self.level.enemies
+                     else "No kind of enemy comes with the waves (all are sent by triggers)")
+            self.blit_fitted(screen, self.small, empty, DIM,
                              (graph.x + 8, graph.y + 8), graph.right - 8)
             return
         scale = self.curve_scale(graph)
@@ -5919,7 +5928,8 @@ class Editor(LogicEditor):
             screen.blit(text, (sx - text.get_width() // 2, graph.bottom + 5))
         if self.curve_shown == "weight":
             edited = self.curve_enemy()
-            drawn = [(i, e.weight, tuple(e.color)) for i, e in enumerate(self.level.enemies) if i != edited]
+            drawn = [(i, e.weight, tuple(e.color)) for i, e in enumerate(self.level.enemies)
+                     if i != edited and e.in_waves]
             drawn.append((edited, points, tuple(self.level.enemies[edited].color)))
         else:
             drawn = [(None, points, ACCENT)]

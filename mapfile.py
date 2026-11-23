@@ -311,7 +311,9 @@ class Enemy:
                    (character.sheet_names), or "" for the players' own character in a green shirt
     weight         a curve (see curve_at) of round -> how likely each enemy coming in is to be this kind, against the
                    other kinds' weights that round: 0 for none (a tough kind can start at 0 and only rise later)
-    max_per_round  at most this many of it in one round (0: no limit)"""
+    max_per_round  at most this many of it in one round (0: no limit)
+    in_waves       whether the rounds send it (by its weight); if not, it only comes when a trigger sends it
+                   ("Send enemies now"), as a boss or an ambush does"""
     name: str = "Zombie"
     health: float = 100.0
     speed: float = 1.8
@@ -328,6 +330,7 @@ class Enemy:
     sheet: str = DEFAULT_ENEMY_SHEET
     weight: list = field(default_factory=lambda: [[1, 1.0]])
     max_per_round: float = 0.0
+    in_waves: bool = True
 
     def clone(self):
         return replace(self, attacks=[replace(a) for a in self.attacks], color=list(self.color),
@@ -345,6 +348,7 @@ class Enemy:
                    color=[max(0, min(255, int(c))) for c in color] if good_color else list(DEFAULT_ENEMY_COLOR),
                    sheet=str(data.get("sheet", DEFAULT_ENEMY_SHEET))[:MAX_NAME],
                    weight=read_curve(data.get("weight"), [[1, 1.0]], *CURVE_LIMITS["weight"]),
+                   in_waves=bool(data.get("in_waves", True)),
                    **clamped_numbers(cls, data, ENEMY_NUMBERS))
 
 

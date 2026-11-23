@@ -710,6 +710,8 @@ class ZombieRound:
         self.phase = "live"
         self.repaid = {}
         self.to_spawn = round(curve_at(settings.zombie_count, self.number) * self.player_scale())
+        if not any(k.in_waves for k in enemy_kinds(self.game.level)):
+            self.to_spawn = 0                   # (no kind comes with the rounds: only what triggers send)
         self.spawned = {}                       # kind index -> how many of it came in this round
         self.spawn_wait = 0.0
         self.to_spawn += len(self.sent)         # (sent by triggers between rounds)
@@ -801,19 +803,20 @@ class ZombieRound:
         return 1.0 + self.game.level.settings.extra_per_player * max(0, len(self.game.players) - 1)
 
     def pick_kind(self):
-        """The index of the kind the next enemy is: picked by the kinds' weights for this round, leaving out kinds
-        that have come in their max_per_round times already. When every weight is 0, the first kind not at its most;
-        when every kind is, the first."""
+        """The index of the kind the next enemy is: the next a trigger sent, else picked by the weights for this round
+        of the kinds the rounds send (in_waves), leaving out kinds that have come in their max_per_round times
+        already. When every weight is 0, the first of them not at its most; when every one is, the first of them."""
         kinds = enemy_kinds(self.game.level)
         if self.sent:                                   # (those triggers sent come first)
             kind = self.sent.pop(0)
             if kind is not None and kind < len(kinds):
                 return kind
-        open_ = [i for i, k in enumerate(kinds) if k.max_per_round <= 0 or self.spawned.get(i, 0) < k.max_per_round]
+        waves = [i for i, k in enumerate(kinds) if k.in_waves]
+        open_ = [i for i in waves if kinds[i].max_per_round <= 0 or self.spawned.get(i, 0) < kinds[i].max_per_round]
         weights = [(i, curve_at(kinds[i].weight, self.number)) for i in open_]
         total = sum(w for _, w in weights)
         if total <= 0:
-            return open_[0] if open_ else 0
+            return open_[0] if open_ else (waves[0] if waves else 0)
         roll = self.game.rng.random() * total
         for i, w in weights:
             roll -= w
