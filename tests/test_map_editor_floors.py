@@ -579,3 +579,15 @@ def test_floor_2_shows_a_ground_wall_with_no_room_over_it_faded(ed):
     for layer in ("walls", "floor_h", "floor_tex"):
         ed.do(f"layer:{layer}")
         ed.draw(pygame.display.get_surface())                   # (no room on either floor there: drawn, not a crash)
+
+
+def test_a_short_ground_wall_on_a_map_with_two_floors_is_a_block_open_all_the_way_up():
+    from world import World
+    level = Level.blank(10, 10, floors=2)
+    level.grids["ceil_h"] = [[8.0] * 10 for _ in range(10)]
+    level.walls[5][5], level.grids["wall_h"][5][5] = 1, 3.0     # an older map's short wall: a block to stand on
+    world = World(level, 4)
+    assert world.wall_on[:, 5, 5].tolist() == [0, 0]
+    assert world.floor_of(0, 5.5, 5.5) == pytest.approx(3.0)
+    assert world.ceil_of(0, 5.5, 5.5) == pytest.approx(8.0)     # not capped down onto the block's top
+    assert world.span_at(5.5, 5.5, 3.0, current=0) == 0
