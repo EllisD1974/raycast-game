@@ -19,7 +19,7 @@ from respawn import RESPAWN_MODES, Respawns
 from zombies import ZombieRound
 from mapfile import ENEMY_SPAWN, MAX_BUY_ITEMS, MAX_MONEY
 from physics import look, spawn, spawn_at, step
-from projectiles import MUZZLE, Projectiles, muzzle_shift
+from projectiles import MUZZLE, Projectiles, melee_strike, muzzle_shift
 
 
 MAX_STEP_DT = 0.05              # longest time one player's step may cover (main.py caps frames at this too)
@@ -298,7 +298,7 @@ class Game:
 
     def add_player(self, player_id):
         """Put a new player in the game, at the next spawner (or the level's start), on a team if the map's mode
-        has them, with the map's starting money and gun."""
+        has them, with the map's starting money and loadout."""
         team = self.team_for(player_id)
         state = PlayerState(self.spawns.body(self.world, team))
         state.team = team
@@ -325,15 +325,25 @@ class Game:
 
     def respawn(self, state, body=None):
         """Bring a player (back) in, at the next spawner unless `body` is given, with the map's full health and only
-        what a new player carries: the map's starting gun, if it has one. Their score and money stay."""
+        what a new player carries: the map's starting loadout. Their score and money stay."""
         settings = self.level.settings
         state.body = body or self.spawns.body(self.world, state.team)
         state.stats = PlayerStats(score=state.stats.score, health=settings.max_health, max_health=settings.max_health,
                                   money=state.stats.money)
         state.inventory = Inventory()
-        gun = next((g for g in self.level.guns if g.name == settings.start_gun), None) if settings.start_gun else None
-        if gun is not None:
-            state.inventory.give_gun(gun)
+        self.give_start_items(state.inventory)
+
+    def give_start_items(self, inventory):
+        """Hand `inventory` the map's starting loadout, in its order (the first gun ends up in their hands). A gun
+        the map no longer has is skipped."""
+        guns = {g.name: g for g in self.level.guns}
+        for entry in self.level.settings.start_items:
+            if entry.kind == "gun" and entry.name in guns:
+                inventory.give_gun(guns[entry.name])
+            elif entry.kind == "item" and entry.amount >= 1:
+                inventory.add_item(entry.name, int(entry.amount))
+            elif entry.kind == "ammo":
+                inventory.add_ammo(entry.name, int(entry.amount))
 
     def can_hurt(self, attacker, target):
         """Whether `attacker`'s bullets and blasts hurt `target`: always themselves and opponents, teammates only
@@ -405,7 +415,13 @@ class Game:
                   speed_of(self.round, player_id))
         fired = inventory.update(dt, wish.fire, wish.reload)
         for gun in fired:
-            self.projectiles.fire(body, gun, self.level.ammo_for(gun), player_id, state.team)
+            if gun.melee:
+                hit = melee_strike(self.world.for_team(state.team), body, gun, self.level.ammo_for(gun), self.targets(),
+                                   player_id)
+                if hit is not None:
+                    self.strike(hit)
+            else:
+                self.projectiles.fire(body, gun, self.level.ammo_for(gun), player_id, state.team)
             shift = muzzle_shift(gun, body.angle)
             if gun.muzzle:
                 self.fx.append(muzzle_event(gun.muzzle, body, (gun.muzzle_offset_x, gun.muzzle_offset_y, gun.muzzle_offset_z)
@@ -468,6 +484,27 @@ class Game:
         targets = getattr(self.round, "targets", None)
         return targets() if targets is not None else []
 
+    def targets(self):
+        """What a bullet or a swing can strike: (id, x, y, z of the feet, height[, radius]) of every player in the
+        game and of the round's other targets (see projectiles.struck_player)."""
+        targets = [(pid, state.body.x, state.body.y, state.body.z, state.body.height)
+                   for pid, state in self.players.items() if state.alive]
+        return targets + [(tid, body.x, body.y, body.z, body.height, body.radius) for tid, body in self.other_targets()]
+
+    def strike(self, hit):
+        """A bullet or a melee swing struck something: play its effects and lights, and hurt whoever it struck."""
+        for effect in hit.effects:                      # sprays back the way the bullet came
+            self.fx.append((effect, hit.x, hit.y, hit.z, -hit.dx, -hit.dy, -hit.dz))
+        for light in hit.lights:
+            self.flashes.append((light, hit.x, hit.y, hit.z))
+        if hit.target in self.players:
+            if self.can_hurt(hit.owner, hit.target):
+                self.hurt(hit.target, hit.damage, hit.owner)
+        elif hit.target is not None:
+            self.round.hurt_target(hit.target, hit.damage, hit.owner, None)
+        if hit.blast is not None:
+            self.explode(hit)
+
     def take_fx(self):
         """The particle effects to play since the last call (a muzzle flash for each shot fired)."""
         out, self.fx = self.fx, []
@@ -489,21 +526,8 @@ class Game:
         self.clock += dt
         for state in self.players.values():
             state.hit = max(0.0, state.hit - dt)
-        targets = [(pid, state.body.x, state.body.y, state.body.z, state.body.height)
-                   for pid, state in self.players.items() if state.alive]
-        targets += [(tid, body.x, body.y, body.z, body.height, body.radius) for tid, body in self.other_targets()]
-        for hit in self.projectiles.update(self.world, dt, targets):
-            for effect in hit.effects:                  # sprays back the way the bullet came
-                self.fx.append((effect, hit.x, hit.y, hit.z, -hit.dx, -hit.dy, -hit.dz))
-            for light in hit.lights:
-                self.flashes.append((light, hit.x, hit.y, hit.z))
-            if hit.target in self.players:
-                if self.can_hurt(hit.owner, hit.target):
-                    self.hurt(hit.target, hit.damage, hit.owner)
-            elif hit.target is not None:
-                self.round.hurt_target(hit.target, hit.damage, hit.owner, None)
-            if hit.blast is not None:
-                self.explode(hit)
+        for hit in self.projectiles.update(self.world, dt, self.targets()):
+            self.strike(hit)
         self.items.advance(dt)
         if self.round is not None:
             self.round.update(dt)

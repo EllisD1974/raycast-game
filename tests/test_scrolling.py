@@ -13,7 +13,7 @@ import pytest
 
 import details
 import map_editor
-from mapfile import BuyItem, Entity, Level, MapSettings
+from mapfile import BuyItem, Entity, Level, MapSettings, StartItem
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -83,7 +83,7 @@ def test_map_settings_rows_grow_to_fit_a_long_summary_and_the_section_scrolls(ed
     ed.do("mapsettings")
     short_rules = ed.settings_rows()[0]
     ed.level.settings = MapSettings(mode="bomb", friendly_fire=True, start_money=800, kill_money=300, kill_score=1,
-                                    start_gun="Pistol", buy_menu=True, buy_cost="money",
+                                    start_items=[StartItem("gun", "Pistol")], buy_menu=True, buy_cost="money",
                                     buy_items=[BuyItem(kind="health", amount=40, price=20 + i) for i in range(20)])
     rules, buy, rows, add = ed.settings_rows()
     assert rules.h > short_rules.h                                         # (on more lines, not cut off)

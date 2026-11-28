@@ -96,7 +96,7 @@ class GunPreview:
         pull = self.tap > 0.0
         if firing and state is not None:
             pull = pull or state.gun.mode == "auto" or self.frame % 2 == 0     # release every other frame to pull again
-            if state.reserve < state.gun.capacity:
+            if state.reserve < state.gun.capacity and not state.gun.melee:
                 self.session.me.inventory.add_ammo(state.gun.ammo, SPARE_ROUNDS)     # never run out: keep reloading
         self.tap = max(0.0, self.tap - dt)
         events = self.session.step(Inputs(fire=pull), dt)
@@ -120,6 +120,5 @@ class GunPreview:
         state = session.me.inventory.current()
         hud.draw_weapon(picture, tiles, state, self.kick)
         if font is not None and state is not None:
-            text = "reloading" if state.reloading else f"{state.mag}/{state.reserve}"
-            hud.shadowed(picture, font, f"{state.gun.name}  {text}", (8, picture.get_height() - 22), hud.HIGHLIGHT)
+            hud.shadowed(picture, font, f"{state.gun.name}  {hud.ammo_text(state)}".rstrip(), (8, picture.get_height() - 22), hud.HIGHLIGHT)
         return picture

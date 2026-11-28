@@ -15,7 +15,7 @@ import map_editor
 import net
 from bomb import BOMB_TILE, RoundView, bomb_damage, clock_text
 from game import Game, Inputs
-from mapfile import (CT_TEAM, DEFUSE_KIT, T_TEAM, BuyItem, Gun, Level, MapSettings, Spawner, level_text, load_level,
+from mapfile import (CT_TEAM, DEFUSE_KIT, T_TEAM, BuyItem, Gun, Level, MapSettings, Spawner, StartItem, level_text, load_level,
                      parse_level, save_level)
 from session import ClientSession, HostSession
 from test_session import FIRST_CHARACTER, make_world, run
@@ -391,7 +391,7 @@ def test_survivors_start_the_next_round_with_their_guns_full_of_ammo():
     level.guns = [Gun(name="Pistol", mag_size=12, start_ammo=24, ammo="9mm"),
                   Gun(name="Smg", mag_size=30, start_ammo=60, ammo="9mm"),
                   Gun(name="Shotgun", mag_size=8, start_ammo=16, ammo="Shells")]
-    level.settings.start_gun = "Pistol"
+    level.settings.start_items = [StartItem("gun", "Pistol")]
     game = Game(level, World(level, 32), random.Random(1))
     for pid in (0, 1):
         game.add_player(pid)
@@ -419,8 +419,8 @@ def test_buying_is_only_allowed_during_the_freeze_and_the_buy_time():
     assert play(game, DT, {0: Inputs(buy=(0,))})[0][-1] == "The buy time is over"
 
 
-def test_survivors_keep_what_they_carry_and_the_out_come_back_with_only_the_start_gun():
-    game = bomb_game(start_gun="Pistol")
+def test_survivors_keep_what_they_carry_and_the_out_come_back_with_only_the_starting_loadout():
+    game = bomb_game(start_items=[StartItem("gun", "Pistol")])
     t = carrier(game)
     ct = next(p for p, s in game.players.items() if s.team == CT_TEAM)
     game.players[ct].inventory.add_item("Medal")

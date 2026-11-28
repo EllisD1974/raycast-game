@@ -91,8 +91,8 @@ EFFECT_LABELS = {"none": "None", "score": "Score", "health": "Health", "item": "
                  "gun": "Give a gun", "ammo": "Give ammo", "counter": "Add to a counter"}
 GUN_MODES = ("single", "semi", "auto")
 GUN_MODE_LABELS = {"single": "Single shot", "semi": "Semi-auto", "auto": "Full auto"}
-SHOT_TYPES = ("single", "multi", "projectile")
-SHOT_LABELS = {"single": "Single bullet", "multi": "Multi bullet", "projectile": "Projectile"}
+SHOT_TYPES = ("single", "multi", "projectile", "melee")
+SHOT_LABELS = {"single": "Single bullet", "multi": "Multi bullet", "projectile": "Projectile", "melee": "Melee (swing)"}
 MIN_AMBIENT = 0.02                              # the darkest a map can be made
 EFFECT_KINDS = ("burst", "stream")
 EFFECT_COLORS = ("original", "hue", "rgb")
@@ -937,6 +937,10 @@ class Gun:
                 multi       `pellets` bullets at once (a shotgun), each aimed a little differently by the spread
                 projectile  reserved for things that are not simple bullets (rockets, grenades); it fires
                             like a single bullet until that is built
+                melee       no bullet: a swing (a knife, a bat) that strikes the nearest player or enemy within
+                            `reach` and the `arc` in front, if no wall is in between. It needs no ammunition and
+                            never reloads (mag_size, start_ammo, reload_time and spread do not apply); an ammo type
+                            it names only gives its hits their effects, lights, damage multiplier and explosion
     pellets     bullets in a multi shot
     muzzle      name of the Effect played at the muzzle each time it fires ("" for none)
     flash       name of the Light that flashes at the muzzle each time it fires ("" for none)
@@ -946,7 +950,9 @@ class Gun:
                 The bullets still fly along the aim. The muzzle effect and flash come from this point too.
     muzzle_override, muzzle_offset_x, muzzle_offset_y, muzzle_offset_z
                 true: the muzzle effect starts at this offset from the muzzle (x ahead along the aim, y to the
-                right, z up, in cells) instead of the effect's own start offset"""
+                right, z up, in cells) instead of the effect's own start offset
+    reach       melee: how far a swing reaches, in cells from the eye to the target's body
+    arc         melee: how wide a swing is, in degrees across (a target whose body is partly inside it is struck)"""
     name: str = "Pistol"
     tile: int = 16
     size: float = 5.0
@@ -969,11 +975,17 @@ class Gun:
     muzzle_offset_x: float = 0.0
     muzzle_offset_y: float = 0.0
     muzzle_offset_z: float = 0.0
+    reach: float = 1.5
+    arc: float = 60.0
+
+    @property
+    def melee(self):
+        return self.shot == "melee"
 
     @property
     def capacity(self):
-        """Rounds the gun holds ready to fire."""
-        return 1 if self.mode == "single" else max(1, int(self.mag_size))
+        """Rounds the gun holds ready to fire (a melee weapon never runs out: this is just its one swing)."""
+        return 1 if self.mode == "single" or self.melee else max(1, int(self.mag_size))
 
     @classmethod
     def from_dict(cls, data):
@@ -997,7 +1009,8 @@ class Gun:
                    muzzle=str(data.get("muzzle", ""))[:MAX_NAME],
                    flash=str(data.get("flash", ""))[:MAX_NAME], muzzle_override=bool(data.get("muzzle_override", False)),
                    muzzle_offset_x=number("muzzle_offset_x", -10.0, 10.0), muzzle_offset_y=number("muzzle_offset_y", -10.0, 10.0),
-                   muzzle_offset_z=number("muzzle_offset_z", -10.0, 10.0))
+                   muzzle_offset_z=number("muzzle_offset_z", -10.0, 10.0), reach=number("reach", 0.2, 10.0),
+                   arc=number("arc", 0.0, 180.0))
 
 
 @dataclass
@@ -1212,6 +1225,40 @@ class BuyItem:
                    team=data.get("team") if data.get("team") in SPAWN_TEAMS else 0)
 
 
+START_KINDS = ("gun", "item", "ammo")
+START_KIND_LABELS = {"gun": "A gun", "item": "Inventory item", "ammo": "Ammo"}
+MAX_START_ITEMS = 64                            # entries a map's starting loadout may have
+
+
+@dataclass
+class StartItem:
+    """One thing every player starts (and comes back) with (MapSettings.start_items).
+
+    kind     gun: the gun named `name` (with its own spare rounds, as picking it up gives); item: `amount` of the
+             inventory item `name`; ammo: `amount` spare rounds of the ammo type `name` ("" is the default bullet)
+    name     which gun, item or ammo type
+    amount   how many (items and ammo; a gun is one)"""
+    kind: str = "gun"
+    name: str = ""
+    amount: float = 1.0
+
+    def label(self):
+        if self.kind == "gun":
+            return self.name or "(no gun)"
+        if self.kind == "item":
+            return f"{self.amount:g} x {self.name or 'Item'}"
+        return f"{self.amount:g} {self.name or 'default'} rounds"
+
+    @classmethod
+    def from_dict(cls, data):
+        try:
+            amount = max(0.0, min(100000.0, float(data.get("amount", 1.0))))
+        except (TypeError, ValueError):
+            amount = 1.0
+        return cls(kind=data.get("kind") if data.get("kind") in START_KINDS else "gun",
+                   name=str(data.get("name", ""))[:MAX_NAME], amount=amount)
+
+
 @dataclass
 class MapSettings:
     """How a map is played, set in the editor's Map settings section and saved with the map.
@@ -1222,7 +1269,8 @@ class MapSettings:
     max_health     the health every player starts and comes back with
     start_money    money a player has when they first join (money, like score, is kept when knocked out)
     kill_score, kill_money   what knocking out an opponent earns
-    start_gun      the gun every player starts and comes back with ("" for none)
+    start_items    what every player starts and comes back with (StartItem: guns, inventory items, ammo), in order;
+                   the first gun is the one in their hands. A map from before this had one `start_gun`
     buy_menu       whether players can open the buy menu (B in the game)
     buy_cost       free: everything in it is free; money / score: each entry costs its price in that, and is
                    only given when the player has enough (score spent on buying goes down)
@@ -1292,7 +1340,7 @@ class MapSettings:
     start_money: float = 0.0
     kill_score: float = 0.0
     kill_money: float = 0.0
-    start_gun: str = ""
+    start_items: list = field(default_factory=list)
     buy_menu: bool = False
     buy_cost: str = "money"
     buy_items: list = field(default_factory=list)
@@ -1345,7 +1393,7 @@ class MapSettings:
     keep_guns: bool = False
 
     def copy(self):
-        return replace(self, buy_items=[replace(b) for b in self.buy_items],
+        return replace(self, buy_items=[replace(b) for b in self.buy_items], start_items=[replace(i) for i in self.start_items],
                        **{name: [list(p) for p in getattr(self, name)] for name in ZOMBIE_CURVES})
 
     def uses_money(self):
@@ -1379,11 +1427,15 @@ class MapSettings:
             except (TypeError, ValueError):
                 return getattr(base, key)
         items = data.get("buy_items", [])
+        start = data.get("start_items")
+        if not isinstance(start, list):                 # (an older map's one starting gun)
+            gun = str(data.get("start_gun", "") or "")[:MAX_NAME]
+            start = [{"kind": "gun", "name": gun}] if gun else []
         return cls(mode=data.get("mode") if data.get("mode") in GAME_MODES else base.mode,
                    friendly_fire=bool(data.get("friendly_fire", base.friendly_fire)),
                    max_health=number("max_health", 1.0, 10000.0), start_money=number("start_money", 0.0, MAX_MONEY),
                    kill_score=number("kill_score", 0.0, MAX_MONEY), kill_money=number("kill_money", 0.0, MAX_MONEY),
-                   start_gun=str(data.get("start_gun", ""))[:MAX_NAME],
+                   start_items=[StartItem.from_dict(i) for i in start if isinstance(i, dict)][:MAX_START_ITEMS],
                    buy_menu=bool(data.get("buy_menu", base.buy_menu)),
                    buy_cost=data.get("buy_cost") if data.get("buy_cost") in BUY_COSTS else base.buy_cost,
                    buy_items=[BuyItem.from_dict(b) for b in items
