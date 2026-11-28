@@ -236,7 +236,7 @@ class World:
                 floor = level.wall_base(x, y)               # the pane stands on the floor beside it
                 ceiling = max(level.wall_ceiling(x, y), floor + 0.1)
                 top = level.short_wall_top(x, y)       # (a transparent wall is never an upper-floor one)
-                self.wall_on[0, y, x] = 0
+                self.wall_on[:, y, x] = 0                    # (a ground wall: every floor of the cell is open)
                 self.solid[y, x] = self.wall_on[:, y, x].any()
                 self.pane_block[y, x] = 1
                 self.span_on[0, y, x] = 1
@@ -257,7 +257,7 @@ class World:
                 top = level.short_wall_top(x, y)
                 if top is None or level.wall_floor(x, y) or transparent[self.wall_tex[y, x]]:
                     continue
-                self.wall_on[0, y, x] = 0
+                self.wall_on[:, y, x] = 0                    # (a ground wall: every floor of the cell is open)
                 self.solid[y, x] = self.wall_on[:, y, x].any()
                 self.blocked[y, x] = 0
                 self.span_on[0, y, x] = 1
