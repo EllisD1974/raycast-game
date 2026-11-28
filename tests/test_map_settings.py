@@ -17,7 +17,7 @@ import net
 from buymenu import BuyMenu, entry_tile, price_text
 from entities import PlayerStats
 from game import NO_TEAM, Game, Inputs
-from mapfile import BUY_KINDS, BuyItem, Entity, Gun, Level, MapSettings, level_text, load_level, parse_level, save_level
+from mapfile import BUY_KINDS, BuyItem, Entity, Gun, Level, MapSettings, StartItem, level_text, load_level, parse_level, save_level
 from session import ClientSession, HostSession
 from test_session import FIRST_CHARACTER, make_world, run
 from world import World
@@ -57,7 +57,8 @@ def buy(game, pid, *indices):
 
 def test_settings_are_saved_with_the_map_and_read_back(tmp_path):
     level = shop_level(mode="teams", friendly_fire=True, max_health=150, start_money=800, kill_score=1,
-                       kill_money=300, start_gun="Pistol")
+                       kill_money=300, start_items=[StartItem("gun", "Pistol"), StartItem("item", "Key", 2),
+                                                    StartItem("ammo", "", 40)])
     path = tmp_path / "m.json"
     save_level(str(path), level)
     again = load_level(str(path))
@@ -226,10 +227,27 @@ def test_a_joiner_buys_through_the_host_and_sees_the_money_change():
         host.close()
 
 
+def test_an_older_maps_starting_gun_becomes_its_starting_loadout():
+    assert MapSettings.from_dict({"start_gun": "Pistol"}).start_items == [StartItem("gun", "Pistol")]
+    assert MapSettings.from_dict({"start_gun": ""}).start_items == []
+    assert MapSettings.from_dict({"start_gun": "Pistol", "start_items": []}).start_items == []
+    mended = MapSettings.from_dict({"start_items": [{"kind": "laser", "name": 5, "amount": "lots"}, "junk"]})
+    assert mended.start_items == [StartItem("gun", "5", 1.0)]
+
+
+def test_players_start_with_every_gun_item_and_ammo_of_the_loadout_and_the_first_gun_out():
+    level = shop_level(start_items=[StartItem("item", "Key", 2), StartItem("gun", "Shotgun"), StartItem("gun", "Pistol"),
+                                    StartItem("ammo", "", 10), StartItem("gun", "Gone")])
+    me = game_for(level).players[0]
+    assert [g.gun.name for g in me.inventory.guns] == ["Shotgun", "Pistol"] and me.inventory.current().gun.name == "Shotgun"
+    assert me.inventory.count("Key") == 2
+    assert me.inventory.ammo[""] == 8 + Gun().start_ammo + 10      # (both guns use the default bullet)
+
+
 # ------------------------------------------------------------------ rules
 
 def test_players_start_and_come_back_with_the_maps_health_and_gun():
-    game = game_for(shop_level(max_health=150, start_gun="Pistol", start_money=500))
+    game = game_for(shop_level(max_health=150, start_items=[StartItem("gun", "Pistol")], start_money=500))
     me = game.players[0]
     assert me.stats.health == me.stats.max_health == 150
     assert [g.gun.name for g in me.inventory.guns] == ["Pistol"]
@@ -373,10 +391,28 @@ def test_j_opens_the_section_on_the_game_rules(ed):
     choose(ed, "mode", "teams")
     assert ed.level.settings.mode == "teams"
     assert "friendly_fire" in [r.field.key for r in ed.details_rows()]
-    choose(ed, "start_gun", "Rifle")
-    assert ed.level.settings.start_gun == "Rifle"
+    choose(ed, "add_start", "gun:Rifle")
+    assert ed.level.settings.start_items == [StartItem("gun", "Rifle")]
     ed.do("undo")
-    assert ed.level.settings.start_gun == ""
+    assert ed.level.settings.start_items == []
+    ed.draw(pygame.display.get_surface())
+
+
+def test_the_starting_loadout_takes_any_number_of_guns_items_and_ammo(ed):
+    ed.do("mapsettings")
+    for choice in ("gun:Pistol", "gun:Rifle", "item:", "ammo:"):
+        choose(ed, "add_start", choice)
+    items = ed.level.settings.start_items
+    assert [(i.kind, i.name) for i in items] == [("gun", "Pistol"), ("gun", "Rifle"), ("item", "Item"), ("ammo", "")]
+    assert items[3].amount == 30
+    keys = [r.field.key for r in ed.details_rows()]
+    assert {"s0_name", "s2_name", "s2_amount", "s3_amount"} <= set(keys) and "s0_amount" not in keys
+    ed.set_start_item(2, "name", "  Medkit ")
+    ed.set_start_item(1, "kind", "item")
+    assert items[2].name == "Medkit" and (items[1].kind, items[1].name, items[1].amount) == ("item", "Item", 1)
+    ed.remove_start_item(0)
+    assert [i.kind for i in items] == ["item", "item", "ammo"]
+    assert "starts with" in ed.rules_summary()
     ed.draw(pygame.display.get_surface())
 
 
@@ -416,14 +452,15 @@ def test_the_buy_menu_row_adds_any_gun(ed):
 
 
 def test_renaming_or_deleting_a_gun_follows_into_the_settings(ed):
-    ed.level.settings = MapSettings(start_gun="Pistol", buy_items=[BuyItem(kind="gun", gun="Pistol"),
+    ed.level.settings = MapSettings(start_items=[StartItem("gun", "Pistol"), StartItem("item", "Pistol")], buy_items=[BuyItem(kind="gun", gun="Pistol"),
                                                                      BuyItem(kind="gun", gun="Rifle")])
     ed.do("guns")
     ed.gun_selected = 0
     ed.set_gun("name", "Sidearm")
-    assert ed.level.settings.start_gun == "Sidearm" and ed.level.settings.buy_items[0].gun == "Sidearm"
+    assert ed.level.settings.start_items == [StartItem("gun", "Sidearm"), StartItem("item", "Pistol")]
+    assert ed.level.settings.buy_items[0].gun == "Sidearm"
     ed.delete_gun()
-    assert ed.level.settings.start_gun == ""
+    assert ed.level.settings.start_items == [StartItem("item", "Pistol")]      # (an item of the same name stays)
     assert [b.gun for b in ed.level.settings.buy_items] == ["Rifle"]
 
 

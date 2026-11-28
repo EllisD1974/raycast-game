@@ -270,7 +270,7 @@ def test_the_stock_map_loads_and_everything_still_works_with_guns_in_it(tmp_path
 def test_the_shot_type_is_single_bullet_by_default_and_multi_bullet_adds_a_count(ed):
     gun = add_gun(ed)
     assert gun.shot == "single" and "pellets" not in keys(ed)
-    assert row(ed, "shot").field.choices == ("single", "multi", "projectile")
+    assert row(ed, "shot").field.choices == ("single", "multi", "projectile", "melee")
     choose(ed, "shot", "multi")
     assert gun.shot == "multi" and "pellets" in keys(ed)
     assert keys(ed).index("pellets") == keys(ed).index("shot") + 1
@@ -280,6 +280,17 @@ def test_the_shot_type_is_single_bullet_by_default_and_multi_bullet_adds_a_count
     assert gun.shot == "projectile" and "pellets" not in keys(ed)
     ed.draw(pygame.display.get_surface())
     choose(ed, "shot", "multi")
+    ed.draw(pygame.display.get_surface())
+
+
+def test_a_melee_weapon_shows_its_reach_and_arc_instead_of_ammunition(ed):
+    gun = add_gun(ed)
+    assert "reach" not in keys(ed)
+    choose(ed, "shot", "melee")
+    assert gun.melee and "reach" in keys(ed) and "arc" in keys(ed)
+    assert not {"mag_size", "start_ammo", "reload_time", "spread", "pellets"} & set(keys(ed))
+    click(ed, row(ed, "reach").plus.center)
+    assert gun.reach == pytest.approx(1.6)
     ed.draw(pygame.display.get_surface())
 
 

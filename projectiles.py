@@ -3,6 +3,7 @@
 A projectile flies in a straight line, in small steps so it cannot skip through a thin wall, until
 it runs out of range or is no longer in open space (inside a wall, a floor, a ceiling, glass or another
 team's barrier).
+A melee weapon sends no bullet: melee_strike works out at once what its swing strikes.
 A bullet also stops in any player it passes through other than the one who fired it (a player is an
 upright cylinder PLAYER_RADIUS wide and PLAYER_HEIGHT tall). Either way a hit removes the bullet and is
 reported (position, the damage it carries, who fired it and who it struck) for the game to act on.
@@ -77,6 +78,60 @@ class Hit:
     dy: float = 0.0
     dz: float = 0.0
     blast: AmmoType = None      # set when the bullet explodes (see explosions.py)
+
+
+def _clear_between(space, x0, y0, z0, x1, y1, z1):
+    """Whether nothing solid stands on the straight line between the two points."""
+    length = math.sqrt((x1 - x0) ** 2 + (y1 - y0) ** 2 + (z1 - z0) ** 2)
+    steps = max(1, math.ceil(length / (MAX_STEP / 2)))
+    return all(space.point_open(x0 + (x1 - x0) * i / steps, y0 + (y1 - y0) * i / steps, z0 + (z1 - z0) * i / steps)
+               for i in range(1, steps))
+
+
+def melee_strike(space, player, gun, ammo=None, targets=(), owner=None):
+    """What one swing of the melee weapon `gun` by `player` strikes, as a Hit, or None if it strikes nothing.
+    It strikes the nearest target (see struck_player) whose body comes within the gun's reach of the eye and
+    within its arc of where the player is looking (left and right; up and down it reaches the whole body), with
+    no wall in between. Failing that, a wall, floor or ceiling straight ahead within reach. `ammo` gives the
+    hit's damage multiplier, effects, lights and explosion (None: plain, none)."""
+    ammo = ammo or AmmoType()
+    ex, ey, ez = player.x, player.y, player.eye_z
+    best = None
+    for pid, tx, ty, tz, *size in targets:
+        if pid == owner:
+            continue
+        height = size[0] if size else PLAYER_HEIGHT
+        radius = size[1] if len(size) > 1 else PLAYER_RADIUS
+        across = math.hypot(tx - ex, ty - ey)
+        near_z = max(tz, min(tz + height, ez))
+        gap = math.hypot(max(0.0, across - radius), near_z - ez)
+        if gap > gun.reach or (best is not None and gap >= best[0]):
+            continue
+        if across > radius:                                 # (standing inside it: always struck)
+            off = abs((math.atan2(ty - ey, tx - ex) - player.angle + math.pi) % (2 * math.pi) - math.pi)
+            if off - math.asin(radius / across) > math.radians(gun.arc) / 2:
+                continue
+            sx, sy = tx - (tx - ex) / across * radius, ty - (ty - ey) / across * radius     # its near side
+        else:
+            sx, sy = ex, ey
+        if not _clear_between(space, ex, ey, ez, sx, sy, near_z):
+            continue
+        best = (gap, pid, sx, sy, near_z)
+    cp = math.cos(player.pitch)
+    dx, dy, dz = math.cos(player.angle) * cp, math.sin(player.angle) * cp, math.sin(player.pitch)
+    blast = ammo if ammo.explodes else None
+    damage = gun.damage * ammo.damage_mult
+    if best is not None:
+        _, pid, hx, hy, hz = best
+        return Hit(hx, hy, hz, damage, owner, pid, ammo.player_hit_effects, ammo.player_hit_lights, dx, dy, dz, blast)
+    steps = max(1, math.ceil(gun.reach / (MAX_STEP / 2)))
+    px, py, pz = ex, ey, ez
+    for i in range(1, steps + 1):
+        nx, ny, nz = ex + dx * gun.reach * i / steps, ey + dy * gun.reach * i / steps, ez + dz * gun.reach * i / steps
+        if not space.point_open(nx, ny, nz):
+            return Hit(px, py, pz, damage, owner, None, ammo.world_hit_effects, ammo.world_hit_lights, dx, dy, dz, blast)
+        px, py, pz = nx, ny, nz
+    return None
 
 
 class Projectiles:

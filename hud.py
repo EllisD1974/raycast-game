@@ -94,14 +94,26 @@ def weapon_picture(tile, size):
     return pygame.transform.scale(tile.subsurface(box), (max(1, round(box.w * scale)), max(1, round(box.h * scale))))
 
 
+def ammo_text(state):
+    """What the HUD says of a gun's ammunition: rounds ready / spare, or that it is reloading ("" for a melee weapon)."""
+    if state.gun.melee:
+        return ""
+    return "reloading" if state.reloading else f"{state.mag}/{state.reserve}"
+
+
 def draw_weapon(picture, tiles, state, kick=0.0):
     """The equipped gun at the bottom of the picture, kicked back by `kick` (0..1) after a shot and
-    dipped while it reloads."""
+    dipped while it reloads. A melee weapon swings across to the left and up instead of kicking back."""
     if state is None:
         return
     gun = state.gun
     art = weapon_picture(tiles[max(0, min(gun.tile, len(tiles) - 1))], gun.size)
     if art is None:
+        return
+    if gun.melee and kick > 0.0:
+        art = pygame.transform.rotate(art, kick * 50.0)
+        x = WIDTH // 2 + int(WIDTH * (0.1 - 0.25 * kick)) - art.get_width() // 2
+        picture.blit(art, (x, HEIGHT - art.get_height() + 4 - int(kick * art.get_height() * 0.2)))
         return
     dip = art.get_height() * (0.6 if state.reloading else 0.0)
     x = WIDTH // 2 + int(WIDTH * 0.1) - art.get_width() // 2
@@ -139,8 +151,7 @@ def draw_hud(picture, font, stats, message, inventory=None, tiles=None, kick=0.0
         shadowed(picture, font, "Inventory", (8, y - 18), HIGHLIGHT)
     for slot, state in enumerate(inventory.guns):                              # the guns, top right
         out = slot == inventory.equipped
-        ammo = "reloading" if state.reloading else f"{state.mag}/{state.reserve}"
-        text = f"{slot + 1} {state.gun.name}  {ammo}"
+        text = f"{slot + 1} {state.gun.name}  {ammo_text(state)}".rstrip()
         label = font.render(text, True, HIGHLIGHT if out else DIM)
         shadowed(picture, font, text, (picture.get_width() - label.get_width() - 8, 8 + slot * 18),
                  HIGHLIGHT if out else DIM)

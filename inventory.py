@@ -64,18 +64,22 @@ class Inventory:
         spare = {}
         for state in self.guns:
             state.mag, state.reload_left, state.cooldown = state.gun.capacity, 0.0, 0.0
+            if state.gun.melee:
+                continue                             # (a melee weapon takes no ammunition)
             spare[state.gun.ammo] = max(spare.get(state.gun.ammo, 0), state.gun.start_ammo)
         self.ammo.update(spare)
 
     def give_gun(self, gun):
         """Pick up a gun. A new one comes loaded, with its starting spare rounds added to its ammo type's
-        pool, and is equipped if nothing is; one already owned just adds the starting rounds again."""
+        pool, and is equipped if nothing is; one already owned just adds the starting rounds again. A melee weapon
+        brings no rounds."""
+        rounds = 0 if gun.melee else gun.start_ammo
         state = self.find_gun(gun.name)
         if state is not None:
-            self.add_ammo(gun.ammo, gun.start_ammo)
+            self.add_ammo(gun.ammo, rounds)
             return state
         state = GunState(gun, mag=gun.capacity, inventory=self)
-        self.add_ammo(gun.ammo, gun.start_ammo)
+        self.add_ammo(gun.ammo, rounds)
         self.guns.append(state)
         if self.equipped is None:
             self.equipped = len(self.guns) - 1
@@ -120,7 +124,7 @@ class Inventory:
 
     def start_reload(self):
         state = self.current()
-        if state is None or state.reloading:
+        if state is None or state.reloading or state.gun.melee:
             return False
         if state.mag >= state.gun.capacity or state.reserve <= 0:
             return False
@@ -129,7 +133,8 @@ class Inventory:
 
     def update(self, dt, trigger, reload_pressed=False):
         """Advance dt seconds. `trigger` is whether the fire button is held. Returns the list of Gun
-        definitions fired this tick (one per round; usually zero or one)."""
+        definitions fired this tick (one per round or swing; usually zero or one). A melee weapon swings at its
+        fire rate and never runs out."""
         fired = []
         for state in self.guns:                      # guns in the bag still count down their timers
             state.cooldown = max(0.0, state.cooldown - dt)
@@ -153,7 +158,10 @@ class Inventory:
         wants = trigger and (gun.mode == "auto" or not state.trigger_was_down)
         state.trigger_was_down = trigger
         if wants and state.cooldown <= 0.0:
-            if state.mag > 0:
+            if gun.melee:
+                state.cooldown = 1.0 / gun.fire_rate
+                fired.append(gun)
+            elif state.mag > 0:
                 state.mag -= 1
                 state.cooldown = 1.0 / gun.fire_rate
                 fired.append(gun)

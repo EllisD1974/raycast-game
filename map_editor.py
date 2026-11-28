@@ -217,7 +217,7 @@ from mapfile import (ANIMATION_KINDS, ANIMATION_LABELS, DEFAULTS, EDIT_LAYERS, E
                      IMPORT_KINDS, TAKEN_CHOICES, grid_name, import_things, load_level, save_level, split_grid_name,
                      things_named, with_needs, area_rect, clear_area, copy_area, paste_area,
                      BUY_COST_LABELS, BUY_COSTS, BUY_KIND_LABELS, BUY_KINDS, GAME_MODE_LABELS, GAME_MODES, MAX_BUY_ITEMS,
-                     DEATH_CAM_WHO, DEATH_CAM_WHO_LABELS,
+                     DEATH_CAM_WHO, DEATH_CAM_WHO_LABELS, MAX_START_ITEMS, START_KIND_LABELS, START_KINDS, StartItem,
                      BOMB_NUMBERS, SITE_NAMES, SPAWN_TEAMS, SPAWN_TEAM_LABELS, CT_TEAM, T_TEAM,
                      ATTACK_KINDS, ATTACK_KIND_LABELS, ATTACK_NUMBERS, ENEMY_NUMBERS, ENEMY_PATHING,
                      ENEMY_PATHING_LABELS, ENEMY_SPAWN, MAX_ATTACKS, MAX_ENEMIES, SPAWNER_TEAMS, ZOMBIE_NUMBERS,
@@ -384,6 +384,7 @@ AMBIENT_ROW = -1                                # light_selected value for the m
 RULES_ROW, BUY_ROW = -1, -2                     # settings_selected values for the game rules and the buy menu's own
 ENEMY_ROW = -100                                # settings_selected for enemy kind i (zombies) is ENEMY_ROW - i
 BUY_AMOUNTS = {"gun": 1.0, "item": 1.0, "health": 50.0}   # what an entry gives when its kind is chosen
+START_AMOUNTS = {"gun": 1.0, "item": 1.0, "ammo": 30.0}   # what a starting loadout entry gives when its kind is chosen
 
 
 def recolored(picture, matrix):
@@ -1055,18 +1056,23 @@ class Editor(LogicEditor):
         if g.shot == "multi":
             fields.append(field("pellets", "Bullets / shot", "num", int, step=1.0, low=1, high=100))
         fields += [field("damage", "Damage", "num", step=1.0, low=0.0, high=10000.0),
-                   field("fire_rate", "Shots / second", "num", step=0.5, low=0.1, high=100.0, unit="/s")]
-        if g.mode != "single":
-            fields.append(field("mag_size", "Rounds / mag", "num", int, step=1.0, low=1, high=1000))
-        fields += [field("start_ammo", "Spare rounds", "num", int, step=6.0, low=0, high=100000),
-                   field("reload_time", "Reload time", "num", step=0.1, low=0.0, high=60.0, unit="s"),
-                   field("spread", "Spread", "num", step=0.5, low=0.0, high=45.0, unit=" deg"),
-                   field("bullet_offset_x", "Bullets ahead", "num", step=0.05, low=-5.0, high=5.0),
-                   field("bullet_offset_y", "Bullets right", "num", step=0.05, low=-5.0, high=5.0),
-                   field("bullet_offset_z", "Bullets up", "num", step=0.05, low=-5.0, high=5.0)]
+                   field("fire_rate", "Swings / second" if g.melee else "Shots / second", "num", step=0.5, low=0.1,
+                         high=100.0, unit="/s")]
+        if g.melee:
+            fields += [field("reach", "Reach", "num", step=0.1, low=0.2, high=10.0, unit=" cells"),
+                       field("arc", "Swing arc", "num", step=5.0, low=0.0, high=180.0, unit=" deg")]
+        else:
+            if g.mode != "single":
+                fields.append(field("mag_size", "Rounds / mag", "num", int, step=1.0, low=1, high=1000))
+            fields += [field("start_ammo", "Spare rounds", "num", int, step=6.0, low=0, high=100000),
+                       field("reload_time", "Reload time", "num", step=0.1, low=0.0, high=60.0, unit="s"),
+                       field("spread", "Spread", "num", step=0.5, low=0.0, high=45.0, unit=" deg"),
+                       field("bullet_offset_x", "Bullets ahead", "num", step=0.05, low=-5.0, high=5.0),
+                       field("bullet_offset_y", "Bullets right", "num", step=0.05, low=-5.0, high=5.0),
+                       field("bullet_offset_z", "Bullets up", "num", step=0.05, low=-5.0, high=5.0)]
         names = ("",) + tuple(a.name for a in self.level.ammo_types)
-        fields.append(field("ammo", "Ammo type", "enum", choices=names,
-                            labels={"": "(default bullet)", **{n: n for n in names}}))
+        fields.append(field("ammo", "Hits like ammo" if g.melee else "Ammo type", "enum", choices=names,
+                            labels={"": "(none)" if g.melee else "(default bullet)", **{n: n for n in names}}))
         fields.append(field("muzzle", "Muzzle effect", "enum", choices=self.effect_choices(),
                             labels=self.effect_labels()))
         fields += self.offset_fields(field, "muzzle", ("Offset ahead", "Offset right", "Offset up")) if g.muzzle else []
@@ -1207,8 +1213,9 @@ class Editor(LogicEditor):
             for e in self.level.entities + self.level.prefabs + self.level.settings.buy_items:
                 if e.gun == g.name:
                     e.gun = value
-            if self.level.settings.start_gun == g.name:
-                self.level.settings.start_gun = value
+            for entry in self.level.settings.start_items:
+                if entry.kind == "gun" and entry.name == g.name:
+                    entry.name = value
         setattr(g, name, value)
 
     def new_ammo_name(self, base="Ammo", skip=None):
@@ -1247,6 +1254,9 @@ class Editor(LogicEditor):
             for e in self.level.entities + self.level.prefabs:
                 if e.ammo == a.name:
                     e.ammo = value
+            for entry in self.level.settings.start_items:
+                if entry.kind == "ammo" and entry.name == a.name:
+                    entry.name = value
         setattr(a, name, value)
 
     def delete_ammo_type(self):
@@ -1259,6 +1269,8 @@ class Editor(LogicEditor):
             for e in self.level.entities + self.level.prefabs:
                 if e.ammo == a.name:
                     e.ammo = ""
+            settings = self.level.settings              # it is no longer handed out at the start
+            settings.start_items = [i for i in settings.start_items if not (i.kind == "ammo" and i.name == a.name)]
             self.level.ammo_types.remove(a)
             self.ammo_selected = None
 
@@ -1268,8 +1280,7 @@ class Editor(LogicEditor):
             self.begin_edit()
             self.level.guns.remove(g)
             settings = self.level.settings              # it is no longer handed out at the start or sold
-            if settings.start_gun == g.name:
-                settings.start_gun = ""
+            settings.start_items = [i for i in settings.start_items if not (i.kind == "gun" and i.name == g.name)]
             settings.buy_items = [b for b in settings.buy_items if not (b.kind == "gun" and b.gun == g.name)]
             self.gun_selected = None
 
@@ -1634,7 +1645,6 @@ class Editor(LogicEditor):
             return Field(name, label, kind, (lambda n=name: getattr(rules, n)),
                          (lambda v, n=name: self.set_rule(n, v)), **options)
 
-        guns = ("",) + tuple(g.name for g in self.level.guns)
         fields = [field("mode", "Game mode", "enum", choices=GAME_MODES, labels=GAME_MODE_LABELS)]
         if rules.mode != "ffa":
             fields.append(field("friendly_fire", "Friendly fire", "enum", choices=(False, True),
@@ -1659,9 +1669,8 @@ class Editor(LogicEditor):
         fields += [field("max_health", "Max health", "num", step=10.0, low=1.0, high=10000.0),
                    field("start_money", "Start money", "num", step=50.0, low=0.0, high=MAX_MONEY),
                    field("kill_score", "Score / kill", "num", step=1.0, low=0.0, high=MAX_MONEY),
-                   field("kill_money", "Money / kill", "num", step=50.0, low=0.0, high=MAX_MONEY),
-                   field("start_gun", "Starting gun", "enum", choices=guns,
-                         labels={"": "(none)", **{n: n for n in guns if n}})]
+                   field("kill_money", "Money / kill", "num", step=50.0, low=0.0, high=MAX_MONEY)]
+        fields += self.start_item_fields()
         if rules.mode == "bomb":
             for name, label, step in BOMB_FIELDS:
                 low, high = BOMB_NUMBERS[name]
@@ -1685,10 +1694,78 @@ class Editor(LogicEditor):
             fields += [field("downed_can_shoot", "Downed can shoot", "enum", choices=(False, True),
                              labels={False: "No", True: "Yes"}),
                        field("keep_guns", "Back next round with", "enum", choices=(False, True),
-                             labels={False: "Only the start gun", True: "Their guns"})]
+                             labels={False: "Only the starting loadout", True: "Their guns"})]
             if self.curve_shown != "weight":                # (the Waves card's curve, typed exactly)
                 fields += self.curve_point_fields(self.curve_shown)
         return fields
+
+    def start_item_fields(self):
+        """The map's starting loadout (what every player starts and comes back with), for the Details pane in the Map
+        settings section: a header (with a remove button), what it is and how many, for each entry, then a list to
+        add one."""
+        rules = self.level.settings
+        fields = [Field("start_items", "Players start with" + ("" if rules.start_items else " nothing"), "header",
+                        None, None)]
+        guns = tuple(g.name for g in self.level.guns)
+        ammo = ("",) + tuple(a.name for a in self.level.ammo_types)
+        for i, entry in enumerate(rules.start_items):
+            def sfield(name, label, kind, i=i, entry=entry, **options):
+                return Field(f"s{i}_{name}", label, kind, (lambda n=name: getattr(entry, n)),
+                             (lambda v, n=name: self.set_start_item(i, n, v)), **options)
+
+            fields.append(Field(f"s{i}", f"{i + 1}. {entry.label()}", "header", None, None,
+                                action=(lambda i=i: self.remove_start_item(i))))
+            fields.append(sfield("kind", "Kind", "enum", choices=START_KINDS, labels=START_KIND_LABELS))
+            if entry.kind == "gun":
+                names = tuple(dict.fromkeys(guns + (entry.name,))) if entry.name else guns or ("",)
+                fields.append(sfield("name", "Gun", "enum", choices=names,
+                                     labels={"": "(no guns yet)", **{n: n if n in guns else f"{n} (gone)" for n in names if n}}))
+            elif entry.kind == "item":
+                fields += [sfield("name", "Item name", "text"),
+                           sfield("amount", "How many", "num", step=1.0, low=0.0, high=1000.0)]
+            else:
+                names = tuple(dict.fromkeys(ammo + (entry.name,)))
+                fields += [sfield("name", "Ammo type", "enum", choices=names,
+                                  labels={"": "(default bullet)", **{n: n for n in names if n}}),
+                           sfield("amount", "Rounds", "num", step=10.0, low=0.0, high=100000.0)]
+        if len(rules.start_items) < MAX_START_ITEMS:
+            choices = tuple(f"gun:{n}" for n in guns) + ("item:", "ammo:")
+            labels = {c: {"gun": "Gun: ", "item": "Inventory item", "ammo": "Ammo"}[c.split(":")[0]] + c.split(":", 1)[1]
+                      for c in choices}
+            fields.append(Field("add_start", "Add", "menu", None, self.add_start_item, choices=choices, labels=labels,
+                                text_override="+ Add to what players start with"))
+        return fields
+
+    def add_start_item(self, choice):
+        """Add to the starting loadout: "gun:<name>", "item:" or "ammo:" (the default bullet)."""
+        rules = self.level.settings
+        kind, _, name = str(choice).partition(":")
+        if kind not in START_KINDS or len(rules.start_items) >= MAX_START_ITEMS:
+            return
+        self.begin_edit()
+        rules.start_items.append(StartItem(kind, name if kind == "gun" else ("Item" if kind == "item" else ""),
+                                           START_AMOUNTS[kind]))
+
+    def remove_start_item(self, i):
+        rules = self.level.settings
+        if 0 <= i < len(rules.start_items):
+            self.begin_edit()
+            del rules.start_items[i]
+
+    def set_start_item(self, i, name, value):
+        """Change one setting of starting loadout entry `i` (one undo step). Choosing what it gives fills in a sensible
+        amount and the first gun."""
+        items = self.level.settings.start_items
+        if not 0 <= i < len(items) or getattr(items[i], name) == value:
+            return
+        entry = items[i]
+        self.begin_edit()
+        if name == "name" and entry.kind == "item":
+            value = str(value).strip()[:MAX_NAME] or "Item"
+        setattr(entry, name, value)
+        if name == "kind":
+            entry.amount = START_AMOUNTS[value]
+            entry.name = {"gun": self.level.guns[0].name if self.level.guns else "", "item": "Item", "ammo": ""}[value]
 
     def buy_menu_fields(self):
         """Whether the map has a buy menu and what it costs, for the Details pane in the Map settings section, and a
@@ -5120,7 +5197,9 @@ class Editor(LogicEditor):
             self.blit_fitted(screen, self.font, g.name, TEXT, (rect.x + 48, rect.y + 5), rect.right - 8)
             summary = (f"{GUN_MODE_LABELS[g.mode]}   {g.damage:g} dmg   {g.fire_rate:g}/s   {g.capacity} rounds   "
                        f"ammo: {g.ammo or 'default'}")
-            if g.shot != "single":
+            if g.melee:
+                summary = f"Melee   {g.damage:g} dmg   {g.fire_rate:g}/s   reach {g.reach:g}   arc {g.arc:g} deg"
+            elif g.shot != "single":
                 summary += f"   {SHOT_LABELS[g.shot].lower()}" + (f" x{g.pellets}" if g.shot == "multi" else "")
             self.blit_fitted(screen, self.small, summary, TEXT if on else DIM, (rect.x + 48, rect.y + 24), rect.right - 8)
             screen.set_clip(area)
@@ -5355,7 +5434,9 @@ class Editor(LogicEditor):
         box = pygame.Rect(card.x, below + 8, 56, 56)
         self._draw_bullet(screen, box, ammo)
         damage = gun.damage * ammo.damage_mult
-        lines = (f"{damage:g} damage a bullet, {damage * gun.fire_rate:g} a second at full fire rate",
+        lines = (f"{damage:g} damage a swing, {damage * gun.fire_rate:g} a second at full swing rate",
+                 f"reaches {gun.reach:g} cells, {gun.arc:g} degrees across; needs no ammunition",
+                 f"a swing every {1 / gun.fire_rate:.2g} s") if gun.melee else (f"{damage:g} damage a bullet, {damage * gun.fire_rate:g} a second at full fire rate",
                  f"{gun.capacity} round{'s' if gun.capacity != 1 else ''} a magazine, {gun.start_ammo} spare "
                  f"({ammo.name}), {gun.reload_time:g}s to reload",
                  f"a shot every {1 / gun.fire_rate:.2g} s; bullets fly {ammo.speed:g} cells a second for up to "
@@ -6103,7 +6184,8 @@ class Editor(LogicEditor):
             text += f"   start ${rules.start_money:g}"
         if rules.kill_score or rules.kill_money:
             text += f"   kill +{rules.kill_score:g} score +${rules.kill_money:g}"
-        text += f"   starts with {rules.start_gun}" if rules.start_gun else ""
+        if rules.start_items:
+            text += "   starts with " + ", ".join(entry.label() for entry in rules.start_items[:4])                 + (f" +{len(rules.start_items) - 4} more" if len(rules.start_items) > 4 else "")
         if rules.mode == "bomb":
             text += (f"   round {rules.round_time:g}s, bomb {rules.bomb_time:g}s, {rules.max_rounds:g} rounds")
         if rules.mode == "koth":
@@ -6290,7 +6372,8 @@ class Editor(LogicEditor):
             notes = (f"{GUN_MODE_LABELS[gun.mode]}: {how}.",
                      f"At {gun.fire_rate:g} shots a second, one shot every {gap:.2g} s.",
                      {"single": "One bullet a shot.", "multi": f"{gun.pellets} bullets a shot, each with its own spread.",
-                      "projectile": "Projectile: fires as one bullet for now."}[gun.shot],
+                      "projectile": "Projectile: fires as one bullet for now.",
+                      "melee": f"Melee: strikes the nearest target within {gun.reach:g} cells, no ammo."}[gun.shot],
                      "Click a Sprite row, then an atlas tile,",
                      "to set that picture.", "Hand the gun out with an item whose", "effect is Give a gun.")
         elif ammo is not None:

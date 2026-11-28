@@ -13,7 +13,7 @@ import pytest
 import map_editor
 import net
 from game import Game, Inputs, move_body
-from mapfile import BARRIER_SITES, AmmoType, Gun, Level, MapSettings, Spawner, load_level, save_level
+from mapfile import BARRIER_SITES, AmmoType, Gun, Level, MapSettings, Spawner, StartItem, load_level, save_level
 from physics import Player
 from projectiles import Projectiles
 from session import ClientSession, HostSession
@@ -40,7 +40,7 @@ def barrier_level(value=TEAM_1_BARRIER, mode="teams"):
         level.set("site", WALL_X, y, value)
     level.spawners = [Spawner(3.5, 5.5, team=1), Spawner(15.5, 5.5, team=2)]
     level.guns = [Gun(name="Pistol", damage=10, spread=0.0)]
-    level.settings = MapSettings(mode=mode, start_gun="Pistol")
+    level.settings = MapSettings(mode=mode, start_items=[StartItem("gun", "Pistol")])
     return level
 
 

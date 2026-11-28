@@ -190,12 +190,22 @@ the Details pane:
 |---|---|
 | Name, Sprite, Sprite size | the picture drawn in your hands (click the Sprite row, then an atlas tile) |
 | Fire mode | **Single shot**: one round per pull, reloads after every shot; **Semi-auto**: one round per pull; **Full auto**: fires while held |
-| Shot type | **Single bullet**: one bullet per shot; **Multi bullet**: several bullets at once (a shotgun), each aimed a little differently by the spread; **Projectile**: reserved for rockets and the like, fires as a single bullet for now |
+| Shot type | **Single bullet**: one bullet per shot; **Multi bullet**: several bullets at once (a shotgun), each aimed a little differently by the spread; **Projectile**: reserved for rockets and the like, fires as a single bullet for now; **Melee (swing)**: a knife, bat or claws (see below) |
 | Bullets / shot | how many bullets a multi shot sends (one round of ammunition either way) |
 | Damage, Shots / second | per bullet, and shots per second |
 | Ammo type | which kind of ammunition it uses (see below); guns using the same type share one pool of spare rounds |
 | Rounds / mag, Spare rounds, Reload time | magazine size (not used by single shot), spare rounds of its ammo type given with the gun, seconds to reload |
 | Spread | random aim error in degrees |
+| Reach, Swing arc | melee only: how far a swing reaches (cells from the eye to the target's body) and how wide it is (degrees across) |
+
+A **melee** weapon (Shot type *Melee (swing)*) fires no bullet. Each swing strikes the nearest player or enemy whose
+body is within its Reach and Swing arc in front of you (up and down it reaches the whole body), as long as no wall
+stands in between; with nobody there, it plays its wall-hit effects on a wall straight ahead within reach. It needs no
+ammunition and never reloads (Rounds / mag, Spare rounds, Reload time and Spread are hidden). Fire mode still applies:
+Semi-auto swings once per click, Full auto keeps swinging while held, both at Swings / second. The **Hits like ammo**
+row borrows an ammo type's hit effects and lights, damage multiplier and explosion for its strikes, without using any
+of its rounds; the Muzzle effect and light play with every swing. In your hands it sweeps across to the left instead of
+kicking back.
 
 **Ammunition** is defined in the same section (the Ammunition list under the guns). An ammo type has
 the bullet's sprite, size, speed and range and a damage multiplier (an armour-piercing round might be
@@ -231,7 +241,7 @@ The editor's **Map settings** section (`J`) says how a map is played; the settin
 | Max health | the health every player starts and comes back with |
 | Start money | money a player has when they join |
 | Score / kill, Money / kill | what knocking out an opponent earns |
-| Starting gun | a gun every player comes in (and back) with |
+| Players start with | what every player comes in (and back) with: any number of guns, inventory items (with a count) and ammo (spare rounds of an ammo type). Add entries with **+ Add to what players start with**, change each one's kind, name and amount, and remove it with its header's button. Guns come with their own spare rounds as a pickup gives them, and the first gun in the list is the one in their hands. Maps saved with the older single *Starting gun* get it as their one entry |
 
 Score and money are kept when a player is knocked out. The HUD shows money on maps where it means something.
 
@@ -256,7 +266,7 @@ round time runs out without a plant. A player knocked out stays out until the ne
   top). Once the bomb is planted the timer becomes the **bomb timer** (red). When the round is decided its result
   shows for the **round end pause**, then the next round starts: everyone back at their team's spawn points, those
   who lived keeping what they carry (with every gun's magazine full and its spare rounds back to what the gun comes
-  with), the others coming back with the starting gun.
+  with), the others coming back with what players start with.
 - **The bomb**: hold `E` standing in a bomb site to plant it (you cannot move meanwhile; letting go starts over).
   `G` throws it the way you look; it also drops where its carrier is knocked out, and any T walking over it picks it up. A CT holds `E`
   at the planted bomb to defuse it, faster with a **Defuse kit** (an inventory item of that name: sell it in the buy
